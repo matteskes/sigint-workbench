@@ -15,7 +15,7 @@ Real-time multi-SDR signal monitoring, classification, recording, and geospatial
 
 ## Architecture
 
-```
+```text
 ┌──────────────────────────────────────────────────────────────┐
 │  macOS (dev) / Linux (prod)                                  │
 │  ┌────────────────────────────────────────────────────────┐  │
@@ -44,7 +44,7 @@ Real-time multi-SDR signal monitoring, classification, recording, and geospatial
 ### Services
 
 | Service | Language | Description |
-|---|---|---|
+| ------- | -------- | ----------- |
 | `sdr-capture` | Go (cgo) | Reads SDR hardware, streams IQ over UDP |
 | `iq-ingest` | Go | Receives IQ streams, buffers, dispatches |
 | `signal-processor` | Go | FFT, peak detection, band identification |
@@ -60,7 +60,7 @@ Real-time multi-SDR signal monitoring, classification, recording, and geospatial
 ## Technology Stack
 
 | Layer | Technology |
-|---|---|
+| ----- | ---------- |
 | Backend | Go 1.24+ |
 | DSP | gonum (FFT, filtering) + custom Go demodulators |
 | ML | ONNX Runtime (inference), Python/PyTorch (offline) |
@@ -74,18 +74,22 @@ Real-time multi-SDR signal monitoring, classification, recording, and geospatial
 | Orchestration | Docker Compose with profiles |
 | Config | YAML per service |
 | Logging | zerolog (structured JSON) |
+
 ## Prerequisites
 
 ### All Platforms
+
 - **Go** 1.24+
 - **Docker** + **Docker Compose** v2
 - **Node.js** 20+ / npm
 
 ### macOS (Development)
+
 - `brew install librtlsdr`
 - RTL-SDR dongle(s) connected via USB
 
 ### Linux (Production)
+
 - `apt install librtlsdr-dev`
 - RTL-SDR dongle(s) or HackRF One via USB
 
@@ -113,7 +117,7 @@ make deploy
 
 ## Project Structure
 
-```
+```text
 sigint-workbench/
 ├── cmd/                    # One main.go per service (8 binaries)
 ├── internal/
@@ -137,10 +141,11 @@ sigint-workbench/
 ├── Makefile
 └── go.mod
 ```
+
 ## Development
 
 | Make Target | Description |
-|---|---|
+| ----------- | ----------- |
 | `make dev` | Full dev environment (macOS) |
 | `make build-capture` | Build native macOS sdr-capture |
 | `make build-prod` | Build all Docker images |

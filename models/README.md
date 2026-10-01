@@ -30,6 +30,7 @@ torch.onnx.export(
 ## Model Input Format
 
 The model expects a 134-element float32 vector:
+
 - [0]   Center frequency (Hz)
 - [1]   Estimated bandwidth (Hz)
 - [2]   Peak power (dB)
@@ -41,6 +42,7 @@ The model expects a 134-element float32 vector:
 ## Model Output Format
 
 The model outputs a probability distribution over signal classes:
+
 - aviation, land_mobile, marine, broadcast, amateur, gnss, wifi, radar, unknown
 
 ## Adding a New Model
