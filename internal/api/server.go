@@ -3,11 +3,17 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/cors"
+	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog"
 
 	"sigint-workbench/internal/db"
@@ -20,14 +26,23 @@ type Server struct {
 	db     *db.DB
 	hub    *ws.Hub
 	log    zerolog.Logger
+
+	recordingsDir string
+	wsUpgrader    websocket.Upgrader
 }
 
 // NewServer creates a new API server.
 func NewServer(database *db.DB, hub *ws.Hub, log zerolog.Logger) *Server {
+	dir := os.Getenv("RECORDINGS_DIR")
+	if dir == "" {
+		dir = "recordings"
+	}
 	s := &Server{
-		db:  database,
-		hub: hub,
-		log: log,
+		db:              database,
+		hub:             hub,
+		log:             log,
+		recordingsDir:   dir,
+		wsUpgrader:      websocket.Upgrader{ReadBufferSize: 1024, WriteBufferSize: 1024, CheckOrigin: func(*http.Request) bool { return true }},
 	}
 	s.buildRoutes()
 	return s
@@ -84,21 +99,34 @@ func (s *Server) Start(ctx context.Context, addr string) error {
 	return srv.ListenAndServe()
 }
 
+// requireDB responds 503 when the database is unavailable.
+func (s *Server) requireDB(w http.ResponseWriter) bool {
+	if s.db == nil {
+		http.Error(w, "database not available", http.StatusServiceUnavailable)
+		return false
+	}
+	return true
+}
+
 // handleGetSignals returns signals in the given bounding box.
+// Query params: ?minLat=&minLon=&maxLat=&maxLon= (default: whole world).
 func (s *Server) handleGetSignals(w http.ResponseWriter, r *http.Request) {
-	// Parse bounding box from query params: ?minLat=&minLon=&maxLat=&maxLon=
-	minLat := 90.0
-	minLon := 180.0
-	maxLat := -90.0
-	maxLon := -180.0
-	// TODO: parse query params with strconv
+	if !s.requireDB(w) {
+		return
+	}
+	q := r.URL.Query()
+	minLat, _ := strconv.ParseFloat(q.Get("minLat"), 64)
+	minLon, _ := strconv.ParseFloat(q.Get("minLon"), 64)
+	maxLat, _ := strconv.ParseFloat(q.Get("maxLat"), 64)
+	maxLon, _ := strconv.ParseFloat(q.Get("maxLon"), 64)
 
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
 	signals, err := s.db.GetSignals(ctx, minLat, minLon, maxLat, maxLon)
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		s.log.Error().Err(err).Msg("get signals")
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, signals)
@@ -106,42 +134,210 @@ func (s *Server) handleGetSignals(w http.ResponseWriter, r *http.Request) {
 
 // handleGetSignal returns a single signal by ID.
 func (s *Server) handleGetSignal(w http.ResponseWriter, r *http.Request) {
-	// TODO: implement
-	w.Write([]byte(`{"error":"not implemented"}`))
+	if !s.requireDB(w) {
+		return
+	}
+	id := chi.URLParam(r, "id")
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	sig, err := s.db.GetSignal(ctx, id)
+	if err != nil {
+		if err == db.ErrNotFound {
+			http.Error(w, `{"error":"signal not found"}`, http.StatusNotFound)
+			return
+		}
+		s.log.Error().Err(err).Str("id", id).Msg("get signal")
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, sig)
 }
 
-// handleGetRecordings returns recordings, optionally filtered.
+// handleGetRecordings returns recordings, optionally filtered by
+// ?signalId= with ?limit=.
 func (s *Server) handleGetRecordings(w http.ResponseWriter, r *http.Request) {
-	// TODO: implement
-	w.Write([]byte(`[]`))
+	if !s.requireDB(w) {
+		return
+	}
+	q := r.URL.Query()
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	signalID := q.Get("signalId")
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	recs, err := s.db.GetRecordings(ctx, limit, signalID)
+	if err != nil {
+		s.log.Error().Err(err).Msg("get recordings")
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if recs == nil {
+		recs = []db.Recording{}
+	}
+	writeJSON(w, recs)
 }
 
 // handleGetRecordingAudio serves a recorded audio file.
 func (s *Server) handleGetRecordingAudio(w http.ResponseWriter, r *http.Request) {
-	// TODO: implement — serve from RECORDINGS_DIR
-	w.Write([]byte(`{"error":"not implemented"}`))
+	if !s.requireDB(w) {
+		return
+	}
+	id := chi.URLParam(r, "id")
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	rec, err := s.db.GetRecording(ctx, id)
+	if err != nil {
+		if err == db.ErrNotFound {
+			http.Error(w, `{"error":"recording not found"}`, http.StatusNotFound)
+			return
+		}
+		s.log.Error().Err(err).Str("id", id).Msg("get recording")
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Resolve safely inside the recordings directory.
+	base, err := filepath.Abs(s.recordingsDir)
+	if err != nil {
+		http.Error(w, "invalid recordings dir", http.StatusInternalServerError)
+		return
+	}
+	fpath := rec.FilePath
+	if !filepath.IsAbs(fpath) {
+		fpath = filepath.Join(base, fpath)
+	}
+	fpath = filepath.Clean(fpath)
+	if !strings.HasPrefix(fpath, base+string(filepath.Separator)) {
+		http.Error(w, `{"error":"invalid file path"}`, http.StatusNotFound)
+		return
+	}
+	if _, err := os.Stat(fpath); err != nil {
+		http.Error(w, `{"error":"file not found"}`, http.StatusNotFound)
+		return
+	}
+	switch rec.FileFormat {
+	case "wav":
+		w.Header().Set("Content-Type", "audio/wav")
+	case "flac":
+		w.Header().Set("Content-Type", "audio/flac")
+	default:
+		w.Header().Set("Content-Type", "application/octet-stream")
+	}
+	http.ServeFile(w, r, fpath)
 }
 
 // handleGetSDRs returns all registered SDRs.
 func (s *Server) handleGetSDRs(w http.ResponseWriter, r *http.Request) {
-	// TODO: implement
-	w.Write([]byte(`[]`))
+	if !s.requireDB(w) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	sdrs, err := s.db.ListSDRs(ctx)
+	if err != nil {
+		s.log.Error().Err(err).Msg("list sdrs")
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if sdrs == nil {
+		sdrs = []db.SDRDevice{}
+	}
+	writeJSON(w, sdrs)
+}
+
+// sdrUpdate is a partial SDR settings update.
+type sdrUpdate struct {
+	Model  *string  `json:"model"`
+	Serial *string  `json:"serial"`
+	Lat    *float64 `json:"lat"`
+	Lon    *float64 `json:"lon"`
+	GainDB *float64 `json:"gainDb"`
+	FreqHz *uint64  `json:"freqHz"`
+	Active *bool    `json:"active"`
 }
 
 // handleUpdateSDR updates an SDR's settings.
 func (s *Server) handleUpdateSDR(w http.ResponseWriter, r *http.Request) {
-	// TODO: implement
-	w.Write([]byte(`{"error":"not implemented"}`))
+	if !s.requireDB(w) {
+		return
+	}
+	id := chi.URLParam(r, "id")
+
+	var upd sdrUpdate
+	if err := json.NewDecoder(r.Body).Decode(&upd); err != nil {
+		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	// Load the current row and merge the partial update.
+	existing, err := s.db.GetSDR(ctx, id)
+	if err != nil {
+		if err == db.ErrNotFound {
+			http.Error(w, `{"error":"sdr not found"}`, http.StatusNotFound)
+			return
+		}
+		s.log.Error().Err(err).Str("id", id).Msg("get sdr")
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if upd.Model != nil {
+		existing.Model = *upd.Model
+	}
+	if upd.Serial != nil {
+		existing.Serial = *upd.Serial
+	}
+	if upd.Lat != nil {
+		existing.Lat = *upd.Lat
+	}
+	if upd.Lon != nil {
+		existing.Lon = *upd.Lon
+	}
+	if upd.GainDB != nil {
+		existing.GainDB = *upd.GainDB
+	}
+	if upd.FreqHz != nil {
+		existing.FreqHz = *upd.FreqHz
+	}
+	if upd.Active != nil {
+		existing.Active = *upd.Active
+	}
+
+	if err := s.db.UpdateSDR(ctx, existing); err != nil {
+		s.log.Error().Err(err).Str("id", id).Msg("update sdr")
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, existing)
 }
 
 // handleWebSocket upgrades to WebSocket for real-time events.
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
-	// TODO: implement WebSocket upgrade using s.hub
-	w.Write([]byte(`{"error":"websocket not implemented"}`))
+	conn, err := s.wsUpgrader.Upgrade(w, r, nil)
+	if err != nil {
+		return
+	}
+	s.hub.Register(conn)
+	// Read loop (discard client messages for now)
+	go func() {
+		defer s.hub.Unregister(conn)
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}()
 }
 
 func writeJSON(w http.ResponseWriter, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
-	// TODO: use encoding/json
-	_ = v
+	_ = json.NewEncoder(w).Encode(v)
 }
