@@ -31,10 +31,9 @@ func ComputeFFT(samples []float64, sampleRate uint32) (*FFTResult, error) {
 	}
 
 	// Build complex slice
-	cx := make([]complex128, nfft)
-	for i := 0; i < n; i++ {
-		cx[i] = complex(samples[i], 0)
-	}
+	// gonum real FFT: dst has length nfft/2+1, src has length nfft
+	half := nfft / 2
+	cx := make([]complex128, half+1)
 
 	// Perform forward FFT in-place
 	fft := fourier.NewFFT(nfft)
@@ -43,7 +42,6 @@ func ComputeFFT(samples []float64, sampleRate uint32) (*FFTResult, error) {
 	fft.Coefficients(cx, re)
 
 	// Compute one-sided spectrum
-	half := nfft / 2
 	freqs := make([]float64, half)
 	mags := make([]float64, half)
 	powerDB := make([]float64, half)
