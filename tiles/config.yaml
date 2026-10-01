@@ -1,0 +1,15 @@
+# tileserver-gl configuration
+# Docs: https://github.com/maptiler/tileserver-gl
+
+port: 8080
+
+# MBTiles files are auto-detected in /data/
+# The first .mbtiles file found is used as the default source.
+
+debug: false
+
+# Optional: add additional sources
+# sources:
+#   - name: custom
+#     format: pbf
+#     url: /data/custom.mbtiles

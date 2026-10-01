@@ -1,0 +1,19 @@
+# Recorder Configuration
+recordings_dir: /recordings
+
+# Audio encoding
+audio:
+  sample_rate: 48000
+  format: wav          # wav | flac
+  channels: 1
+
+# IQ recording (optional, for later analysis)
+iq:
+  enabled: true
+  format: raw          # raw (int16 interleaved)
+  max_duration_s: 300  # 5 min max per recording
+
+# Retention
+retention:
+  max_age_days: 30
+  max_size_gb: 50

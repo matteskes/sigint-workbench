@@ -1,0 +1,20 @@
+# Signal Processor Configuration
+listen_port: 9010
+
+# Peak detection
+peak_detection:
+  threshold_db: -60
+  min_spacing_bins: 10
+  max_peaks: 20
+
+# FFT settings
+fft:
+  size: 4096          # FFT bin count (power of 2)
+  window: hann        # hann | hamming | blackman | rectangular
+
+# Scan parameters
+scan:
+  step_hz: 100000     # 100 kHz frequency step
+  dwell_ms: 50        # 50 ms dwell per step
+  min_freq_hz: 24000000
+  max_freq_hz: 1700000000

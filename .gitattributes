@@ -1,0 +1,5 @@
+# Track ONNX model files with git-lfs
+models/*.onnx filter=lfs diff=lfs merge=lfs -text
+
+# Shell scripts executable
+*.sh text eol=lf

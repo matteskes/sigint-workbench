@@ -1,0 +1,21 @@
+@import "tailwindcss";
+@import "maplibre-gl/dist/maplibre-gl.css";
+
+:root {
+	--color-bg: #0f172a;
+	--color-surface: #1e293b;
+	--color-border: #334155;
+	--color-text: #e2e8f0;
+	--color-text-muted: #94a3b8;
+	--color-accent: #3b82f6;
+	--color-success: #22c55e;
+	--color-warning: #f59e0b;
+	--color-danger: #ef4444;
+}
+
+body {
+	background-color: var(--color-bg);
+	color: var(--color-text);
+	font-family: 'Inter', system-ui, -apple-system, sans-serif;
+	margin: 0;
+}

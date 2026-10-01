@@ -1,0 +1,182 @@
+# SIGINT Workbench — Docker Compose
+#
+# Dev mode (macOS):
+#   1. Build & run sdr-capture natively:  make build-capture && ./bin/sdr-capture -config config/sdr-capture.yaml
+#   2. Start services:                    docker compose up
+#   3. Start frontend:                    cd frontend && npm run dev
+#
+# Prod mode (Linux):
+#   docker compose --profile prod up -d
+
+services:
+  # ─── SDR Capture (Linux prod only; on macOS run natively) ───
+  sdr-capture:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.sdr-capture
+    profiles: ["prod"]
+    devices:
+      - /dev/bus/usb/001/002:/dev/bus/usb/001/002
+      - /dev/bus/usb/001/003:/dev/bus/usb/001/003
+    volumes:
+      - ./config/sdr-capture.yaml:/config.yaml:ro
+    environment:
+      - UDP_TARGET_HOST=iq-ingest
+      - UDP_TARGET_PORT_0=9000
+      - UDP_TARGET_PORT_1=9001
+    networks: [sdr-net]
+    restart: unless-stopped
+
+  # ─── Core Pipeline ───
+  iq-ingest:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.services
+      args: { SERVICE: iq-ingest }
+    ports:
+      - "${IQ_INGEST_UDP_PORT:-9000}:9000/udp"
+      - "9001:9001/udp"
+    environment:
+      - UDP_PORT=9000
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    networks: [sdr-net]
+    restart: unless-stopped
+
+  signal-processor:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.services
+      args: { SERVICE: signal-processor }
+    volumes:
+      - ./config/signal-processor.yaml:/config.yaml:ro
+    environment:
+      - INGEST_ADDR=iq-ingest:9010
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    networks: [sdr-net]
+    depends_on: [iq-ingest]
+    restart: unless-stopped
+
+  classifier:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.services
+      args: { SERVICE: classifier }
+    volumes:
+      - ./models:/models:ro
+      - ./config/classifier.yaml:/config.yaml:ro
+    environment:
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    networks: [sdr-net]
+    depends_on: [signal-processor]
+    restart: unless-stopped
+
+  recorder:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.services
+      args: { SERVICE: recorder }
+    volumes:
+      - ./recordings:/recordings
+      - ./config/recorder.yaml:/config.yaml:ro
+    environment:
+      - DB_URL=${DB_URL:-postgres://sdr:sdr@db:5432/sdr?sslmode=disable}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    networks: [sdr-net]
+    depends_on: [classifier, db]
+    restart: unless-stopped
+
+  location-service:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.services
+      args: { SERVICE: location-service }
+    environment:
+      - DB_URL=${DB_URL:-postgres://sdr:sdr@db:5432/sdr?sslmode=disable}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    networks: [sdr-net]
+    depends_on: [db]
+    restart: unless-stopped
+
+  # ─── API & Real-Time ───
+  api-gateway:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.services
+      args: { SERVICE: api-gateway }
+    ports:
+      - "${API_GATEWAY_PORT:-8080}:8080"
+    environment:
+      - DB_URL=${DB_URL:-postgres://sdr:sdr@db:5432/sdr?sslmode=disable}
+      - RECORDINGS_DIR=/recordings
+      - WS_HUB_ADDR=ws-hub:8081
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    volumes:
+      - ./recordings:/recordings:ro
+    networks: [sdr-net]
+    depends_on: [db, ws-hub]
+    restart: unless-stopped
+
+  ws-hub:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.services
+      args: { SERVICE: ws-hub }
+    ports:
+      - "${WS_HUB_PORT:-8081}:8081"
+    environment:
+      - DB_URL=${DB_URL:-postgres://sdr:sdr@db:5432/sdr?sslmode=disable}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    networks: [sdr-net]
+    depends_on: [db]
+    restart: unless-stopped
+
+  # ─── Infrastructure ───
+  db:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-sdr}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sdr}
+      POSTGRES_DB: ${POSTGRES_DB:-sdr}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "5432:5432"
+    networks: [sdr-net]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sdr -d sdr"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  tiles:
+    image: maptiler/tileserver-gl:latest
+    ports:
+      - "${TILE_SERVER_PORT:-8082}:8080"
+    volumes:
+      - ./tiles/config.yaml:/config.yaml:ro
+      - ./tiles/data:/data:ro
+    networks: [sdr-net]
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: ../docker/Dockerfile.frontend
+    ports:
+      - "3000:80"
+    environment:
+      - VITE_API_URL=http://api-gateway:8080
+      - VITE_WS_URL=ws://ws-hub:8081
+      - VITE_TILE_URL=http://tiles:8080/data/{z}/{x}/{y}.pbf
+    networks: [sdr-net]
+    depends_on: [api-gateway, tiles]
+    restart: unless-stopped
+
+volumes:
+  db-data:
+
+networks:
+  sdr-net:
+    driver: bridge

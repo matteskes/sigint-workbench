@@ -1,0 +1,18 @@
+# Classifier Configuration
+model_path: models/classifier.onnx
+
+# Rule-based classifier is always active as fallback
+rules:
+  enabled: true
+
+# ONNX ML classifier
+onnx:
+  enabled: true
+  min_confidence: 0.5   # Below this, fall back to rules
+
+# Feature extraction
+features:
+  spectral_bins: 128
+  include_shape: true
+  include_snr: true
+  include_crest: true

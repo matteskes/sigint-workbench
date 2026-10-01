@@ -1,0 +1,21 @@
+# Multi-stage build for sdr-capture (requires cgo + librtlsdr)
+# Only used in Linux prod mode (USB passthrough into container)
+
+FROM golang:1.24-bookworm AS builder
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    librtlsdr-dev \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=1 GOOS=linux go build -ldflags="-s -w" -o /app/sdr-capture ./cmd/sdr-capture
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    librtlsdr0 \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /app/sdr-capture /sdr-capture
+ENTRYPOINT ["/sdr-capture"]

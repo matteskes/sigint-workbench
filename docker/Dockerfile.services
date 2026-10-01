@@ -1,0 +1,17 @@
+# Multi-stage build for Go microservices (no cgo needed)
+# Usage: docker build --build-arg SERVICE=iq-ingest -t iq-ingest .
+
+ARG SERVICE=iq-ingest
+
+FROM golang:1.24-alpine AS builder
+ARG SERVICE
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /app/service ./cmd/${SERVICE}
+
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates tzdata
+COPY --from=builder /app/service /service
+ENTRYPOINT ["/service"]
