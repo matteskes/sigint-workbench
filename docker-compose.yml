@@ -49,9 +49,15 @@ services:
       args: { SERVICE: signal-processor }
     environment:
       - LISTEN_PORT=9010
+      - DB_URL=${DB_URL:-postgres://sdr:sdr@db:5432/sdr?sslmode=disable}
+      - WS_HUB_URL=http://ws-hub:8081
+      - SDR_CONFIG=/config/sdr-capture.yaml
+      - SIGNAL_TTL=30
       - LOG_LEVEL=${LOG_LEVEL:-info}
+    volumes:
+      - ./config/sdr-capture.yaml:/config/sdr-capture.yaml:ro
     networks: [sdr-net]
-    depends_on: [iq-ingest]
+    depends_on: [iq-ingest, ws-hub]
     restart: unless-stopped
 
   classifier:

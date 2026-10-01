@@ -11,6 +11,10 @@ sdrs:
     mode: scanner              # scanner | monitor | both
     stream_host: localhost
     stream_port: 9000
+    # Location (optional) — used by signal-processor to geo-locate
+    # single-receiver signals on the map. Set lat+lon together.
+    # lat: 40.7128
+    # lon: -74.0060
 
   - id: "rtlsdr-1"
     driver: rtlsdr

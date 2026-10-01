@@ -27,6 +27,11 @@ type SDRCaptureConfig struct {
 	// Streaming target
 	StreamHost string `yaml:"stream_host"` // e.g. "localhost" or "iq-ingest"
 	StreamPort int    `yaml:"stream_port"` // e.g. 9000
+
+	// Location (optional) — physical location of the receiver, used
+	// for map placement of signals that cannot be located otherwise.
+	Lat *float64 `yaml:"lat,omitempty"`
+	Lon *float64 `yaml:"lon,omitempty"`
 }
 
 // LoadCaptureConfig reads and parses a YAML config file.
@@ -61,6 +66,9 @@ func LoadCaptureConfig(path string) (*CaptureConfig, error) {
 		}
 		if s.StreamPort == 0 {
 			cfg.SDRs[i].StreamPort = 9000 + i
+		}
+		if (s.Lat == nil) != (s.Lon == nil) {
+			return nil, fmt.Errorf("sdr[%d]: lat and lon must be set together", i)
 		}
 	}
 	return &cfg, nil

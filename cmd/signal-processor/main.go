@@ -4,7 +4,9 @@
 //
 //	IQ int16 -> float64 -> IQ FFT -> peak detect -> band ID -> classify
 //
-// Detected signals are logged to stdout in a structured format.
+// Detected signals are logged to stdout in a structured format,
+// upserted to the PostGIS database (when DB_URL is set), and
+// broadcast as real-time events to ws-hub (when WS_HUB_URL is set).
 //
 // Run:
 //
@@ -12,25 +14,31 @@
 //
 // Or with env vars (Docker):
 //
-//	LISTEN_PORT=9010 ./bin/signal-processor
+//	LISTEN_PORT=9010 DB_URL=... WS_HUB_URL=http://ws-hub:8081 ./bin/signal-processor
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"sort"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
 	"sigint-workbench/internal/classify"
+	"sigint-workbench/internal/db"
 	"sigint-workbench/internal/dsp"
 	"sigint-workbench/internal/sdr"
+	"sigint-workbench/internal/ws"
 )
 
 // signalEvent is a classified signal detected in the spectrum.
@@ -46,10 +54,207 @@ type signalEvent struct {
 	Class      *classify.Result   `json:"class"`
 }
 
+// sdrLocation is a receiver's physical location.
+type sdrLocation struct {
+	Lat float64
+	Lon float64
+}
+
+// publisher persists detected signals to the database and emits
+// real-time events. All methods are safe for concurrent use.
+type publisher struct {
+	db        *db.DB
+	client    *http.Client
+	wsHubURL  string
+	locations map[string]sdrLocation
+	ttl       time.Duration
+
+	events chan ws.Event // async queue of events for ws-hub
+
+	mu        sync.Mutex
+	seen      map[string]time.Time // last activity per published signal ID
+	firstSeen map[string]time.Time
+}
+
+// newPublisher creates a publisher. db, wsHubURL and locations may be
+// nil/empty — the publisher degrades gracefully to log-only mode.
+func newPublisher(database *db.DB, wsHubURL string, locations map[string]sdrLocation, ttl time.Duration) *publisher {
+	p := &publisher{
+		db:        database,
+		client:    &http.Client{Timeout: 2 * time.Second},
+		wsHubURL:  wsHubURL,
+		locations: locations,
+		ttl:       ttl,
+		events:    make(chan ws.Event, 256),
+		seen:      make(map[string]time.Time),
+		firstSeen: make(map[string]time.Time),
+	}
+	if wsHubURL != "" {
+		go p.runEventWorker()
+	}
+	return p
+}
+
+// publish records one detected signal. It upserts to the database and
+// emits a signal.new/signal.update event when the detecting SDR has a
+// known location; otherwise the signal is ignored (no map placement).
+func (p *publisher) publish(ev signalEvent, now time.Time) {
+	loc, ok := p.locations[ev.SDRID]
+	if !ok {
+		return
+	}
+	id := db.SignalID(ev.SDRID, ev.PeakHz)
+
+	p.mu.Lock()
+	isNew := false
+	if _, ok := p.seen[id]; !ok {
+		isNew = true
+		p.firstSeen[id] = now
+	}
+	p.seen[id] = now
+	first := p.firstSeen[id]
+	p.mu.Unlock()
+
+	mod := ""
+	subType := ""
+	class := ""
+	conf := 0.0
+	bw := int32(0)
+	if ev.Class != nil {
+		mod = ev.Class.Modulation
+		subType = ev.Class.SubType
+		class = ev.Class.Source
+		conf = ev.Class.Confidence
+		bw = int32(ev.Bandwidth)
+	}
+	sig := &db.Signal{
+		ID:          id,
+		FreqHz:      ev.PeakHz,
+		BandwidthHz: bw,
+		Modulation:  mod,
+		SubType:     subType,
+		Class:       class,
+		Confidence:  conf,
+		PowerDBM:    ev.PowerDB,
+		Lat:         loc.Lat,
+		Lon:         loc.Lon,
+		FirstSeen:   first,
+		LastSeen:    now,
+		SDRID:       ev.SDRID,
+	}
+
+	if p.db != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		err := p.db.UpsertSignal(ctx, sig)
+		cancel()
+		if err != nil {
+			log.Printf("upsert signal %s: %v", id, err)
+		}
+	}
+
+	typ := "signal.update"
+	if isNew {
+		typ = "signal.new"
+	}
+	p.queue(typ, sig)
+}
+
+// sweep removes signals that have been idle longer than the TTL,
+// deleting their database rows and emitting signal.removed events.
+func (p *publisher) sweep(ctx context.Context) {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-ticker.C:
+			var removed []string
+			p.mu.Lock()
+			for id, last := range p.seen {
+				if now.Sub(last) > p.ttl {
+					removed = append(removed, id)
+					delete(p.seen, id)
+					delete(p.firstSeen, id)
+				}
+			}
+			p.mu.Unlock()
+
+			for _, id := range removed {
+				if p.db != nil {
+					cctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+					if err := p.db.DeleteSignal(cctx, id); err != nil {
+						log.Printf("delete signal %s: %v", id, err)
+					}
+					cancel()
+				}
+				p.queue("signal.removed", map[string]string{"id": id})
+			}
+		}
+	}
+}
+
+// queue enqueues an event for delivery to ws-hub (non-blocking).
+func (p *publisher) queue(typ string, payload interface{}) {
+	if p.wsHubURL == "" {
+		return
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		log.Printf("marshal %s payload: %v", typ, err)
+		return
+	}
+	select {
+	case p.events <- ws.Event{Type: typ, Payload: raw}:
+	default:
+		log.Printf("ws event queue full, dropping %s", typ)
+	}
+}
+
+// runEventWorker delivers queued events to the ws-hub ingest endpoint.
+func (p *publisher) runEventWorker() {
+	for ev := range p.events {
+		body, err := json.Marshal(ev)
+		if err != nil {
+			continue
+		}
+		resp, err := p.client.Post(p.wsHubURL+"/api/events", "application/json", bytes.NewReader(body))
+		if err != nil {
+			log.Printf("ws-hub: %v", err)
+			continue
+		}
+		resp.Body.Close()
+		if resp.StatusCode >= 300 {
+			log.Printf("ws-hub: ingest returned %d", resp.StatusCode)
+		}
+	}
+}
+
+// loadLocations reads SDR lat/lon from the sdr-capture config file.
+func loadLocations(path string) map[string]sdrLocation {
+	locs := make(map[string]sdrLocation)
+	cfg, err := sdr.LoadCaptureConfig(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			log.Printf("SDR config %s not found, signals will not be geo-located", path)
+		} else {
+			log.Printf("load SDR config %s: %v", path, err)
+		}
+		return locs
+	}
+	for _, s := range cfg.SDRs {
+		if s.Lat != nil && s.Lon != nil {
+			locs[s.ID] = sdrLocation{Lat: *s.Lat, Lon: *s.Lon}
+		}
+	}
+	return locs
+}
+
 func main() {
 	listenPort := flag.Int("port", envInt("LISTEN_PORT", 9010), "UDP listen port")
 	thresholdDB := flag.Float64("threshold", -60, "peak threshold dB")
 	maxPeaks := flag.Int("max-peaks", 20, "max peaks per frame")
+	configPath := flag.String("config", envStr("SDR_CONFIG", "config/sdr-capture.yaml"), "sdr-capture config (SDR locations)")
 	flag.Parse()
 
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
@@ -62,6 +267,30 @@ func main() {
 		TopN:        *maxPeaks,
 	}
 	classifier := classify.NewRuleClassifier()
+
+	// Optional database
+	var database *db.DB
+	if dbURL := os.Getenv("DB_URL"); dbURL != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		var err error
+		database, err = db.New(ctx, dbURL)
+		cancel()
+		if err != nil {
+			log.Printf("database not available (%v), continuing without", err)
+			database = nil
+		} else {
+			defer database.Close()
+			log.Printf("connected to database")
+		}
+	}
+
+	// Publisher (DB + ws-hub + SDR locations)
+	wsHubURL := os.Getenv("WS_HUB_URL")
+	ttl := time.Duration(envInt("SIGNAL_TTL", 30)) * time.Second
+	pub := newPublisher(database, wsHubURL, loadLocations(*configPath), ttl)
+	if wsHubURL != "" {
+		log.Printf("emitting events to %s (ttl=%v)", wsHubURL, ttl)
+	}
 
 	// UDP listener
 	udpAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", *listenPort))
@@ -82,16 +311,19 @@ func main() {
 	// Signal handling
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		sig := <-sigCh
 		log.Printf("shutting down (%v)", sig)
+		cancel()
 		conn.Close()
 		time.Sleep(50 * time.Millisecond)
 		os.Exit(0)
 	}()
+	go pub.sweep(ctx)
 
-	// Throttle: log at most once per 2 seconds per SDR+freq
-	lastLog := make(map[string]time.Time)
+	// Throttle: log + emit at most once per 2 seconds per SDR+freq
+	lastEmit := make(map[string]time.Time)
 
 	// Main loop
 	for {
@@ -114,15 +346,16 @@ func main() {
 
 		events := processFrame(frame, peakDetector, classifier)
 
-		// Log events (throttled)
+		// Log + publish events (throttled)
 		now := time.Now()
 		for _, ev := range events {
 			key := fmt.Sprintf("%s:%d", ev.SDRID, ev.PeakHz/1000) // per SDR+freq (kHz)
-			if last, ok := lastLog[key]; ok && now.Sub(last) < 2*time.Second {
+			if last, ok := lastEmit[key]; ok && now.Sub(last) < 2*time.Second {
 				continue
 			}
-			lastLog[key] = now
+			lastEmit[key] = now
 			logSignal(ev)
+			pub.publish(ev, now)
 		}
 	}
 }
@@ -232,4 +465,11 @@ func envInt(key string, def int) int {
 		return def
 	}
 	return n
+}
+
+func envStr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
 }
