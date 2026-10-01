@@ -1,6 +1,7 @@
 # SIGINT Workbench
 
-Real-time multi-SDR signal monitoring, classification, recording, and geospatial visualization.
+Real-time multi-SDR signal monitoring, classification, recording,
+and geospatial visualization.
 
 ## Features
 
@@ -11,7 +12,8 @@ Real-time multi-SDR signal monitoring, classification, recording, and geospatial
 - **PostGIS-backed geospatial database** for signal locations and tracks
 - **Interactive map** with live signal overlay (MapLibre GL + self-hosted OSM tiles)
 - **Spectrum analyzer** and **waterfall display**
-- **Extensible demodulator and classifier framework** — add new modes by implementing one interface
+- **Extensible demodulator and classifier framework** — add new modes
+  by implementing one interface
 
 ## Architecture
 
