@@ -3,10 +3,15 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// ErrNotFound is returned by query methods when the requested row
+// does not exist.
+var ErrNotFound = errors.New("db: not found")
 
 // DB wraps a Postgres connection pool.
 type DB struct {
