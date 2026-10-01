@@ -102,6 +102,7 @@ and geospatial visualization.
 git clone <repo-url> sigint-workbench
 cd sigint-workbench
 make setup
+# → Installs deps, pulls LFS models, creates .env from .env.example
 
 # 2. Configure SDRs — edit config/sdr-capture.yaml
 
@@ -132,16 +133,19 @@ sigint-workbench/
 │   ├── api/                # HTTP server, handlers
 │   ├── ws/                 # WebSocket hub
 │   └── config/             # Shared config loading
-├── frontend/               # SvelteKit + MapLibre + Tailwind
+├── .github/                # GitHub Actions CI workflows
+├── frontend/               # SvelteKit + MapLibre + Tailwind + nginx.conf
 ├── db/init.sql             # PostGIS schema
 ├── config/                 # Per-service YAML configs
-├── docker/                 # Dockerfiles + nginx config
+├── docker/                 # Dockerfiles (frontend, sdr-capture, services)
 ├── tiles/                  # tileserver-gl config + setup script
 ├── models/                 # ONNX models (git-lfs)
 ├── recordings/             # Host-mounted audio/IQ recordings
 ├── docker-compose.yml
 ├── Makefile
-└── go.mod
+├── .env.example            # Template copied to .env by make setup
+├── go.mod
+└── go.sum
 ```
 
 ## Development
@@ -150,11 +154,22 @@ sigint-workbench/
 | ----------- | ----------- |
 | `make dev` | Full dev environment (macOS) |
 | `make build-capture` | Build native macOS sdr-capture |
+| `make build-capture-linux` | Cross-compile sdr-capture for Linux |
 | `make build-prod` | Build all Docker images |
 | `make deploy` | Start production stack (Linux) |
+| `make stop` | Stop all Docker services |
 | `make test` | Run Go tests |
+| `make frontend-test` | Run frontend tests (vitest) |
+| `make db-init` | Initialize PostGIS schema |
 | `make db-shell` | Open psql shell |
-| `make setup` | First-time setup |
+| `make setup` | First-time setup (deps, LFS, .env) |
+| `make tidy` | Tidy Go modules |
+| `make clean` | Remove build artifacts |
+| `make help` | Show all targets |
+
+The Go test suite (40 tests) covers the DSP core (FFT, peak detection,
+AGC, filters) and the SDR package (UDP IQ protocol, simulator). Run it
+with `make test`; the frontend suite runs via `make frontend-test`.
 
 ### Adding a New Demodulator
 
@@ -171,6 +186,18 @@ Install `libhackrf-dev`, implement the `SDR` interface in
 
 Train in Python (PyTorch), export to ONNX, place in `models/`.
 See `models/README.md` for the input/output format.
+
+### Continuous Integration
+
+GitHub Actions (`.github/workflows/ci.yml`) runs four parallel jobs on
+every push and pull request to `main`:
+
+- **Go** — `go vet` + `go test`
+- **Frontend** — dependency install + `svelte-check` type checking
+- **Markdown** — `markdownlint-cli2` on all `.md` files
+- **Docker** — builds the frontend, sdr-capture, and services images and
+  scans them with Trivy (frontend: CRITICAL+HIGH; Go images: CRITICAL;
+  unfixed vulnerabilities ignored)
 
 ## Legal Notice
 
