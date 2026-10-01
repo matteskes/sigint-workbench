@@ -15,8 +15,8 @@ func ButterworthLowpass(samples []float64, cutoffHz, sampleRate float64, order i
 	}
 
 	// Bilinear transform
-	T := 2.0 / sampleRate
 	wn := math.Pi * cutoffHz / (sampleRate / 2) // normalized
+	_ = wn
 	alpha := 1.0 / math.Tan(wn/2.0)
 
 	// Pre-warp

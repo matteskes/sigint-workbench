@@ -2,6 +2,8 @@
 package dsp
 
 import (
+	"math"
+
 	"gonum.org/v1/gonum/dsp/fourier"
 )
 
@@ -28,14 +30,17 @@ func ComputeFFT(samples []float64, sampleRate uint32) (*FFTResult, error) {
 		nfft <<= 1
 	}
 
-	// Allocate complex buffer
-	re := make([]float64, nfft)
-	im := make([]float64, nfft)
-	copy(re, samples)
-	// im is already zeroed
+	// Build complex slice
+	cx := make([]complex128, nfft)
+	for i := 0; i < n; i++ {
+		cx[i] = complex(samples[i], 0)
+	}
 
-	// Perform FFT
-	fourier.FFT(true, re, im) // forward transform in-place
+	// Perform forward FFT in-place
+	fft := fourier.NewFFT(nfft)
+	re := make([]float64, nfft)
+	copy(re, samples)
+	fft.Coefficients(cx, re)
 
 	// Compute one-sided spectrum
 	half := nfft / 2
@@ -46,12 +51,13 @@ func ComputeFFT(samples []float64, sampleRate uint32) (*FFTResult, error) {
 
 	for i := 0; i < half; i++ {
 		freqs[i] = float64(i) * df
-		mag := (re[i]*re[i] + im[i]*im[i])
+		c := cx[i]
+		mag := real(c)*real(c) + imag(c)*imag(c)
 		mags[i] = mag
 		if mag > 0 {
-			powerDB[i] = 10 * log10(mag)
+			powerDB[i] = 10 * math.Log10(mag)
 		} else {
-			powerDB[i] = -300 // floor
+			powerDB[i] = -300
 		}
 	}
 
@@ -75,14 +81,13 @@ func ComputeIQFFT(iq []float64, sampleRate uint32) (*FFTResult, error) {
 		nfft <<= 1
 	}
 
-	re := make([]float64, nfft)
-	im := make([]float64, nfft)
+	cx := make([]complex128, nfft)
 	for i := 0; i < n; i++ {
-		re[i] = iq[i*2]     // I
-		im[i] = iq[i*2+1]   // Q
+		cx[i] = complex(iq[i*2], iq[i*2+1]) // I, Q
 	}
 
-	fourier.FFT(true, re, im)
+	fft := fourier.NewCmplxFFT(nfft)
+	fft.Coefficients(cx, cx)
 
 	half := nfft / 2
 	freqs := make([]float64, half)
@@ -92,10 +97,11 @@ func ComputeIQFFT(iq []float64, sampleRate uint32) (*FFTResult, error) {
 
 	for i := 0; i < half; i++ {
 		freqs[i] = float64(i) * df
-		mag := re[i]*re[i] + im[i]*im[i]
+		c := cx[i]
+		mag := real(c)*real(c) + imag(c)*imag(c)
 		mags[i] = mag
 		if mag > 0 {
-			powerDB[i] = 10 * log10(mag)
+			powerDB[i] = 10 * math.Log10(mag)
 		} else {
 			powerDB[i] = -300
 		}

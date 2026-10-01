@@ -35,9 +35,9 @@ services:
       args: { SERVICE: iq-ingest }
     ports:
       - "${IQ_INGEST_UDP_PORT:-9000}:9000/udp"
-      - "9001:9001/udp"
     environment:
-      - UDP_PORT=9000
+      - LISTEN_PORT=9000
+      - CONSUMERS=signal-processor:9010
       - LOG_LEVEL=${LOG_LEVEL:-info}
     networks: [sdr-net]
     restart: unless-stopped
@@ -47,10 +47,8 @@ services:
       context: .
       dockerfile: docker/Dockerfile.services
       args: { SERVICE: signal-processor }
-    volumes:
-      - ./config/signal-processor.yaml:/config.yaml:ro
     environment:
-      - INGEST_ADDR=iq-ingest:9010
+      - LISTEN_PORT=9010
       - LOG_LEVEL=${LOG_LEVEL:-info}
     networks: [sdr-net]
     depends_on: [iq-ingest]

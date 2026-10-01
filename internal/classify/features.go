@@ -2,6 +2,8 @@
 package classify
 
 import (
+	"math"
+
 	"sigint-workbench/internal/dsp"
 )
 
@@ -67,7 +69,7 @@ func ExtractFeatures(result *dsp.FFTResult, centerFreqHz uint64) *SpectralFeatur
 	entropy := 0.0
 	for _, p := range spectrum {
 		if p > 0 {
-			entropy -= float64(p) * float64(64.0) * (float32(1.0) / float32(64.0)) // simplified
+			entropy -= float64(p) * (1.0 / 64.0) * math.Log2(float64(p) * 64.0) // simplified
 		}
 	}
 	_ = entropy

@@ -1,0 +1,19 @@
+# IQ Ingest Configuration
+# Used by: iq-ingest service
+
+listen_port: 9000
+buffer_size: 256
+
+# Fan-out targets (Docker service names)
+consumers:
+  - name: signal-processor
+    host: signal-processor
+    port: 9010
+
+  # Enable when recorder is ready:
+  # - name: recorder
+  #   host: recorder
+  #   port: 9011
+
+stats:
+  interval_s: 5

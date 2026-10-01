@@ -17,3 +17,11 @@ type HackRF struct{}
 func NewHackRF(id string, serial string) (*HackRF, error) {
 	return nil, fmt.Errorf("hackrf: not yet implemented (use -tags hackrf when available)")
 }
+
+func (h *HackRF) Open() error                   { return fmt.Errorf("hackrf: not available") }
+func (h *HackRF) Close() error                  { return nil }
+func (h *HackRF) SetFrequency(hz uint64) error  { return fmt.Errorf("hackrf: not available") }
+func (h *HackRF) SetSampleRate(hz uint32) error { return fmt.Errorf("hackrf: not available") }
+func (h *HackRF) SetGain(db float64) error      { return fmt.Errorf("hackrf: not available") }
+func (h *HackRF) ReadIQ(buf []int16) (int, error) { return 0, fmt.Errorf("hackrf: not available") }
+func (h *HackRF) Metadata() SDRMetadata         { return SDRMetadata{ID: "hackrf", Model: "N/A"} }

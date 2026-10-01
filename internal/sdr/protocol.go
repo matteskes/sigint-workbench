@@ -26,7 +26,9 @@ const (
 	IQHeaderSize = 40
 
 	// MaxIQSamplesPerFrame is the max IQ pairs per UDP frame.
-	MaxIQSamplesPerFrame = 4096
+	// Kept at 1024 to stay well under macOS's ~9 KB UDP socket buffer
+	// (1024 pairs * 4 bytes + 40 header = 4136 bytes).
+	MaxIQSamplesPerFrame = 1024
 )
 
 // IQFrame represents one UDP packet of IQ data.
@@ -48,14 +50,16 @@ func (f *IQFrame) Encode() ([]byte, error) {
 		return nil, fmt.Errorf("sdr: too many samples (%d > %d)", pairs, MaxIQSamplesPerFrame)
 	}
 
-	buf := make([]byte, IQHeaderSize+len(f.Samples))
+	buf := make([]byte, IQHeaderSize+len(f.Samples)*2)
 	binary.LittleEndian.PutUint32(buf[0:4], IQMagic)
 	copy(buf[4:20], f.SDRID)
 	binary.LittleEndian.PutUint64(buf[20:28], f.FreqHz)
 	binary.LittleEndian.PutUint32(buf[28:32], f.SampleRate)
 	binary.LittleEndian.PutUint32(buf[32:36], uint32(pairs))
 	binary.LittleEndian.PutUint32(buf[36:40], uint32(f.Timestamp.Unix()))
-	copy(buf[IQHeaderSize:], f.Samples)
+	for i, s := range f.Samples {
+		binary.LittleEndian.PutUint16(buf[IQHeaderSize+i*2:], uint16(s))
+	}
 	return buf, nil
 }
 
@@ -82,7 +86,7 @@ func DecodeIQFrame(buf []byte) (*IQFrame, error) {
 	pairs := binary.LittleEndian.Uint32(buf[32:36])
 	ts := binary.LittleEndian.Uint32(buf[36:40])
 
-	expected := IQHeaderSize + int(pairs)*2
+	expected := IQHeaderSize + int(pairs)*4
 	if len(buf) < expected {
 		return nil, fmt.Errorf("sdr: frame truncated")
 	}

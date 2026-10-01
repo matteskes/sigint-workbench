@@ -71,7 +71,7 @@ func NewIQReceiver(port int, bufSize int) (*IQReceiver, <-chan *IQFrame, error) 
 }
 
 func (r *IQReceiver) listen() {
-	buf := make([]byte, IQHeaderSize+MaxIQSamplesPerFrame*2)
+	buf := make([]byte, IQHeaderSize+MaxIQSamplesPerFrame*4)
 	for {
 		select {
 		case <-r.done:
