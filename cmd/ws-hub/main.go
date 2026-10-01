@@ -1,7 +1,11 @@
 // ws-hub — WebSocket hub for real-time signal event broadcasting.
+//
+// Pipeline services POST JSON events to /api/events; the hub
+// broadcasts them to all WebSocket clients connected at /ws.
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"net/http"
@@ -20,15 +24,18 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin:     func(r *http.Request) bool { return true },
 }
 
-func main() {
-	port := flag.Int("port", 8081, "WebSocket port")
-	flag.Parse()
+// eventTypes is the set of event types the hub accepts.
+var eventTypes = map[string]bool{
+	"signal.new":     true,
+	"signal.update":  true,
+	"signal.removed": true,
+	"sdr.status":     true,
+	"audio.level":    true,
+}
 
-	hub := ws.NewHub()
-	go hub.Run()
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+// handleWS upgrades an HTTP connection to a WebSocket client.
+func handleWS(hub *ws.Hub) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			return
@@ -43,7 +50,43 @@ func main() {
 				}
 			}
 		}()
-	})
+	}
+}
+
+// handleIngest accepts JSON events from pipeline services and
+// broadcasts them to connected WebSocket clients.
+func handleIngest(hub *ws.Hub) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+			return
+		}
+		var ev ws.Event
+		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+		if err := dec.Decode(&ev); err != nil {
+			http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+			return
+		}
+		if !eventTypes[ev.Type] {
+			http.Error(w, `{"error":"unknown event type"}`, http.StatusBadRequest)
+			return
+		}
+		hub.Broadcast(ev)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"status":"accepted"}`))
+	}
+}
+
+func main() {
+	port := flag.Int("port", 8081, "WebSocket port")
+	flag.Parse()
+
+	hub := ws.NewHub()
+	go hub.Run()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws", handleWS(hub))
+	mux.HandleFunc("/api/events", handleIngest(hub))
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"status":"ok","clients":` + fmt.Sprintf("%d", hub.ClientCount()) + `}`))
 	})
