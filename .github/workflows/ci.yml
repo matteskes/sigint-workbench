@@ -83,17 +83,17 @@ jobs:
       - name: Scan frontend image (CRITICAL + HIGH)
         run: |
           trivy image --exit-code 1 --severity CRITICAL,HIGH \
-            --vuln-type os,library --ignore-unfixed --format table \
+            --pkg-types os,library --ignore-unfixed --format table \
             sigint-frontend:scan
 
       - name: Scan sdr-capture image (CRITICAL)
         run: |
           trivy image --exit-code 1 --severity CRITICAL \
-            --vuln-type os,library --ignore-unfixed --format table \
+            --pkg-types os,library --ignore-unfixed --format table \
             sigint-sdr-capture:scan
 
       - name: Scan services image (CRITICAL)
         run: |
           trivy image --exit-code 1 --severity CRITICAL \
-            --vuln-type os,library --ignore-unfixed --format table \
+            --pkg-types os,library --ignore-unfixed --format table \
             sigint-services:scan
