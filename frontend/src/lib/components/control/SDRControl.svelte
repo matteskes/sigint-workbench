@@ -33,8 +33,8 @@
 				class="w-full px-2 py-1 text-xs bg-slate-900 border border-slate-700 rounded
 					text-slate-100 focus:outline-none focus:border-blue-500"
 				onblur={(e) => tune(sdr.id, parseFloat(e.currentTarget.value))}
+				aria-label="Frequency (MHz) for {sdr.id}"
 			/>
-			<label class="text-[10px] text-slate-500">Frequency (MHz)</label>
 		</div>
 	{:else}
 		<div class="text-xs text-slate-500">No SDRs connected</div>

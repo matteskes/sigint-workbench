@@ -87,8 +87,8 @@
 		// Update markers when signals change
 		const unsub = signals.subscribe(($signals) => {
 			const features = $signals.map((s) => ({
-				type: 'Feature',
-				geometry: { type: 'Point', coordinates: [s.lon, s.lat] },
+				type: 'Feature' as const,
+				geometry: { type: 'Point' as const, coordinates: [s.lon, s.lat] },
 				properties: {
 					id: s.id,
 					color: classColors[s.class] ?? '#64748b',

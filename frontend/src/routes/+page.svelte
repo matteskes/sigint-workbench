@@ -4,9 +4,7 @@
 	import SignalDetail from '$lib/components/signals/SignalDetail.svelte';
 	import SpectrumAnalyzer from '$lib/components/spectrum/SpectrumAnalyzer.svelte';
 	import SDRControl from '$lib/components/control/SDRControl.svelte';
-	import { signals, selectedSignal } from '$lib/stores/signals';
-
-	let showDetail = $derived($selectedSignal !== null);
+	import { selectedSignal } from '$lib/stores/signals';
 </script>
 
 <div class="flex h-full">
@@ -29,7 +27,7 @@
 	</section>
 
 	<!-- Right sidebar: Signal detail -->
-	{#if showDetail}
+	{#if $selectedSignal}
 		<aside class="w-80 border-l border-slate-700 overflow-y-auto shrink-0">
 			<SignalDetail signal={$selectedSignal} />
 		</aside>

@@ -26,34 +26,22 @@ export const mapStyle: StyleSpecification = {
 		{
 			id: 'water',
 			type: 'fill',
-			source: {
-				id: 'composite',
-				type: 'vector',
-				url: TILE_URL,
-				'layer-id': 'water'
-			},
+			source: 'osm',
+			'source-layer': 'water',
 			paint: { 'fill-color': '#1e3a5f' }
 		},
 		{
 			id: 'land',
 			type: 'fill',
-			source: {
-				id: 'composite',
-				type: 'vector',
-				url: TILE_URL,
-				'layer-id': 'landcover'
-			},
+			source: 'osm',
+			'source-layer': 'landcover',
 			paint: { 'fill-color': '#1a2332' }
 		},
 		{
 			id: 'roads',
 			type: 'line',
-			source: {
-				id: 'composite',
-				type: 'vector',
-				url: TILE_URL,
-				'layer-id': 'transportation'
-			},
+			source: 'osm',
+			'source-layer': 'transportation',
 			paint: {
 				'line-color': '#334155',
 				'line-width': 1
@@ -62,12 +50,8 @@ export const mapStyle: StyleSpecification = {
 		{
 			id: 'labels',
 			type: 'symbol',
-			source: {
-				id: 'composite',
-				type: 'vector',
-				url: TILE_URL,
-				'layer-id': 'place'
-			},
+			source: 'osm',
+			'source-layer': 'place',
 			layout: {
 				'text-field': ['get', 'name'],
 				'text-size': 12

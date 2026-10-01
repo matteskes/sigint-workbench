@@ -2,7 +2,7 @@
 	import { onMount } from 'svelte';
 
 	let canvasEl: HTMLCanvasElement;
-	let ctx: CanvasRenderingContext2D | undefined;
+	let ctx: CanvasRenderingContext2D | null;
 	let animFrame = 0;
 	let row = 0;
 	const ROWS = 128;

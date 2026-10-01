@@ -1,4 +1,4 @@
-import { writable } from 'svelte/store';
+import { writable, derived } from 'svelte/store';
 
 export interface AudioState {
 	playing: boolean;
@@ -14,5 +14,4 @@ export const audioState = writable<AudioState>({
 	signalId: null
 });
 
-export const isPlaying = audioState
-	.then ? audioState : undefined; // placeholder, Svelte 5 runes will handle this
+export const isPlaying = derived(audioState, ($s) => $s.playing);
