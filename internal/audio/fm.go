@@ -70,7 +70,7 @@ func (f *FMDemodulator) Demodulate(iq []complex64, sampleRate uint32) ([]float32
 		// Cross-product phase difference (avoids atan2 for speed)
 		cross := im2*re1-re2*im1
 		dot := re2*re1 + im2*im1
-		dPhase := math.Atan2(cross, dot)
+		dPhase := math.Atan2(float64(cross), float64(dot))
 
 		// Unwrap: phase difference should be small
 		if dPhase > math.Pi {

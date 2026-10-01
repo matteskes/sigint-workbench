@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/gorilla/websocket"
 
@@ -61,13 +60,10 @@ func main() {
 
 	go func() {
 		<-sigCh
-		ctx := srv.Context()
-		_ = ctx
 		fmt.Println("ws-hub: shutting down")
 		os.Exit(0)
 	}()
 
-	_ = time.Second
 	if err := srv.ListenAndServe(); err != nil {
 		fmt.Fprintf(os.Stderr, "ws-hub: %v\n", err)
 	}

@@ -68,7 +68,7 @@ func (a *AMDemodulator) Demodulate(iq []complex64, sampleRate uint32) ([]float32
 	for i := range iq {
 		re := real(iq[i])
 		im := imag(iq[i])
-		envelope[i] = math.Sqrt(re*re + im*im)
+		envelope[i] = math.Sqrt(float64(re)*float64(re) + float64(im)*float64(im))
 	}
 
 	// Step 2: Remove DC offset (carrier)

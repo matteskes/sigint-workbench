@@ -2,6 +2,7 @@
 package location
 
 import (
+	"math"
 	"time"
 )
 
@@ -68,7 +69,7 @@ func (t *Track) updateMovement() {
 	distanceKm := 6371 * c // Earth radius in km
 
 	t.SpeedKmh = distanceKm / dt * 3600
-	t.HeadingDeg = (atan2(dLon, dLat) * 180 / 3.14159265 + 360) % 360
+	t.HeadingDeg = math.Mod(atan2(dLon, dLat)*180/3.14159265+360, 360)
 	t.IsMoving = t.SpeedKmh > 1.0 // threshold: 1 km/h
 }
 
