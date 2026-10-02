@@ -43,28 +43,33 @@ services:
     restart: unless-stopped
 
   signal-processor:
+    # ONNX-enabled build (cgo + ONNX Runtime on debian:bookworm-slim)
     build:
       context: .
-      dockerfile: docker/Dockerfile.services
-      args: { SERVICE: signal-processor }
+      dockerfile: docker/Dockerfile.classifier
     environment:
       - LISTEN_PORT=9010
       - DB_URL=${DB_URL:-postgres://sdr:sdr@db:5432/sdr?sslmode=disable}
       - WS_HUB_URL=http://ws-hub:8081
       - SDR_CONFIG=/config/sdr-capture.yaml
       - SIGNAL_TTL=30
+      - MODEL_PATH=/models/classifier.onnx
       - LOG_LEVEL=${LOG_LEVEL:-info}
     volumes:
       - ./config/sdr-capture.yaml:/config/sdr-capture.yaml:ro
+      - ./models:/models:ro
     networks: [sdr-net]
     depends_on: [iq-ingest, ws-hub]
     restart: unless-stopped
 
   classifier:
+    # Same ONNX-enabled image; entrypoint overridden to the
+    # standalone classifier binary.
     build:
       context: .
-      dockerfile: docker/Dockerfile.services
-      args: { SERVICE: classifier }
+      dockerfile: docker/Dockerfile.classifier
+    entrypoint: ["/classifier"]
+    command: ["-model", "/models/classifier.onnx"]
     volumes:
       - ./models:/models:ro
       - ./config/classifier.yaml:/config.yaml:ro

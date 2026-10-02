@@ -24,6 +24,16 @@ jobs:
       - name: go test
         run: go test ./... -count=1
 
+      - name: go build + vet + test (onnx tag)
+        # The onnx build tag compiles the ONNX classifier. The ONNX
+        # Runtime is loaded via dlopen at runtime, so no
+        # libonnxruntime is needed to compile or test here — the
+        # classify tests only exercise clean failure paths.
+        run: |
+          go build -tags onnx ./...
+          go vet -tags onnx ./...
+          go test -tags onnx ./internal/classify/ -count=1
+
   # ─── Frontend: svelte-check ───
   frontend:
     name: Frontend (svelte-check)
@@ -75,6 +85,7 @@ jobs:
           docker build -f docker/Dockerfile.frontend -t sigint-frontend:scan ./frontend
           docker build -f docker/Dockerfile.sdr-capture -t sigint-sdr-capture:scan .
           docker build -f docker/Dockerfile.services --build-arg SERVICE=iq-ingest -t sigint-services:scan .
+          docker build -f docker/Dockerfile.classifier -t sigint-classifier:scan .
 
       - name: Install Trivy
         run: |
@@ -97,3 +108,9 @@ jobs:
           trivy image --exit-code 1 --severity CRITICAL \
             --pkg-types os,library --ignore-unfixed --format table \
             sigint-services:scan
+
+      - name: Scan classifier image (CRITICAL)
+        run: |
+          trivy image --exit-code 1 --severity CRITICAL \
+            --pkg-types os,library --ignore-unfixed --format table \
+            sigint-classifier:scan

@@ -1,0 +1,36 @@
+# ONNX-enabled pipeline services.
+#
+# Unlike Dockerfile.services (CGO_ENABLED=0, alpine), this image
+# builds with `-tags onnx` (cgo required), so the builder is Debian.
+# Both signal-processor and the classifier service run in-process
+# ONNX inference; the runtime stage is debian:bookworm-slim with the
+# ONNX Runtime shared library from the official release. The
+# classifier loads it at runtime via dlopen (ORT_LIBRARY_PATH), so
+# there is no link dependency.
+#
+# Usage:
+#   docker build -f docker/Dockerfile.classifier -t signal-processor .
+#   # classifier service: same image, override entrypoint to /classifier
+
+ARG ORT_VERSION=1.19.2
+
+FROM golang:1.24-bookworm AS builder
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=1 go build -tags onnx -ldflags="-s -w" -o /app/signal-processor ./cmd/signal-processor \
+    && CGO_ENABLED=1 go build -tags onnx -ldflags="-s -w" -o /app/classifier ./cmd/classifier
+
+FROM debian:bookworm-slim
+ARG ORT_VERSION
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates wget libgomp1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && wget -q "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz" \
+    && tar -xzf "onnxruntime-linux-x64-${ORT_VERSION}.tgz" -C /opt \
+    && cp -a "/opt/onnxruntime-linux-x64-${ORT_VERSION}/lib64/libonnxruntime.so"* /usr/local/lib/ \
+    && rm -rf "onnxruntime-linux-x64-${ORT_VERSION}.tgz" "/opt/onnxruntime-linux-x64-${ORT_VERSION}"
+ENV ORT_LIBRARY_PATH=/usr/local/lib/libonnxruntime.so
+COPY --from=builder /app/signal-processor /app/classifier /
+ENTRYPOINT ["/signal-processor"]
