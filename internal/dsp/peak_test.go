@@ -76,9 +76,39 @@ func TestPeakDetector_FindsSinglePeak(t *testing.T) {
 		t.Errorf("peak freq = %.1f Hz, expected ~%.1f Hz", best.FreqHz, expectedFreq)
 	}
 
-	// Bandwidth should be positive
-	if best.Bandwidth <= 0 {
-		t.Errorf("bandwidth should be positive, got %f", best.Bandwidth)
+	// Bandwidth: a steep triangular peak drops below -3 dB within one
+	// bin, so the (train.py-mirrored) walk may legitimately yield 0;
+	// flat-top widths are covered in TestPeakDetector_Bandwidth.
+	if best.Bandwidth < 0 {
+		t.Errorf("bandwidth should be non-negative, got %f", best.Bandwidth)
+	}
+}
+
+// TestPeakDetector_Bandwidth checks the -3 dB walk on a flat-top peak:
+// 11 bins at 20 dB with a 21 dB center bin. The walk must span the full
+// flat top (10 bins) and stop at the edges.
+func TestPeakDetector_Bandwidth(t *testing.T) {
+	nfft := 1024
+	sr := uint32(48000)
+	result := makeSpectrum(nfft, sr, 100, 20.0, -40.0)
+	for i := 95; i <= 105; i++ {
+		result.PowerDB[i] = 20.0
+	}
+	result.PowerDB[100] = 21.0 // strict local maximum on the flat top
+
+	pd := NewPeakDetector()
+	peaks := pd.Detect(result)
+	if len(peaks) == 0 {
+		t.Fatal("expected a peak, got 0")
+	}
+	best := peaks[0]
+	if best.Index != 100 {
+		t.Fatalf("peak at bin %d, expected 100", best.Index)
+	}
+	df := float64(sr) / float64(nfft)
+	want := 10 * df // bins 95..105 inclusive
+	if math.Abs(best.Bandwidth-want) > 1e-9 {
+		t.Errorf("bandwidth = %f Hz, expected %f Hz", best.Bandwidth, want)
 	}
 }
 
@@ -143,6 +173,40 @@ func TestPeakDetector_MinSpacing(t *testing.T) {
 	// Only one peak should be detected since they're within MinSpacing
 	if len(peaks) > 1 {
 		t.Errorf("expected 1 peak (min spacing enforced), got %d", len(peaks))
+	}
+}
+
+// TestPeakDetector_StrongPeakNotCrowdedOut guards against the classic
+// scan-in-bin-order truncation: with many low-bin noise peaks above the
+// threshold, a strong signal at a high bin must still be returned (and
+// ranked first) instead of being cut off by TopN.
+func TestPeakDetector_StrongPeakNotCrowdedOut(t *testing.T) {
+	nfft := 1024
+	sr := uint32(48000)
+	half := nfft / 2
+	power := make([]float64, half)
+	freqs := make([]float64, half)
+	df := float64(sr) / float64(nfft)
+	for i := range power {
+		freqs[i] = float64(i) * df
+		power[i] = -70
+	}
+	// 20 low-bin noise peaks above the -60 dB default threshold.
+	for i := 10; i < 400; i += 20 {
+		power[i-1], power[i], power[i+1] = -65, -55, -65
+	}
+	// One strong signal far above them, at a high bin offset.
+	power[479], power[480], power[481] = -10, 10, -10
+	result := &FFTResult{Frequencies: freqs, Magnitudes: make([]float64, half), PowerDB: power, SampleRate: sr}
+
+	pd := NewPeakDetector()
+	pd.TopN = 20
+	peaks := pd.Detect(result)
+	if len(peaks) == 0 {
+		t.Fatal("expected peaks, got 0")
+	}
+	if peaks[0].Index != 480 {
+		t.Errorf("strongest peak at bin %d, expected 480 (strong signal must not be crowded out)", peaks[0].Index)
 	}
 }
 

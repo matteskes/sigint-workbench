@@ -129,9 +129,18 @@ func spectralEntropy(powerDB []float64) float64 {
 }
 
 // ToVector flattens the features into a single float32 slice for ONNX input.
+//
+// Dim 0 is log2(FreqHz / 1kHz), NOT raw hertz: the sweep range spans
+// 500 kHz .. 1.7 GHz and a raw value is effectively unlearnable after
+// global standardization. Must stay in sync with models/train.py
+// (extract_features).
 func (sf *SpectralFeatures) ToVector() []float32 {
 	vec := make([]float32, 0, FeatureVectorLength+6)
-	vec = append(vec, float32(sf.FreqHz))
+	freqKHz := sf.FreqHz / 1000.0
+	if freqKHz < 1 {
+		freqKHz = 1
+	}
+	vec = append(vec, float32(math.Log2(freqKHz)))
 	vec = append(vec, float32(sf.BandwidthHz))
 	vec = append(vec, float32(sf.PeakPowerDB))
 	vec = append(vec, float32(sf.NoiseFloorDB))

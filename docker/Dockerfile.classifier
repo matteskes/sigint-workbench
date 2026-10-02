@@ -12,7 +12,9 @@
 #   docker build -f docker/Dockerfile.classifier -t signal-processor .
 #   # classifier service: same image, override entrypoint to /classifier
 
-ARG ORT_VERSION=1.19.2
+# onnxruntime_go v1.36.0 is compiled against ORT C API v29, so the
+# runtime must be >= 1.29 (the module's own test dylib is 1.29.0).
+ARG ORT_VERSION=1.29.0
 
 FROM golang:1.24-bookworm AS builder
 WORKDIR /app

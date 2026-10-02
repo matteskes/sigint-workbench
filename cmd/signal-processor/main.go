@@ -14,7 +14,7 @@
 //
 // Or with env vars (Docker):
 //
-//	LISTEN_PORT=9010 DB_URL=... WS_HUB_URL=http://ws-hub:8081 ./bin/signal-processor
+//	LISTEN_PORT=9010 DB_URL=... WS_HUB_URL=http://ws-hub:8081 MODEL_PATH=/models/classifier.onnx ./bin/signal-processor
 package main
 
 import (
@@ -250,11 +250,36 @@ func loadLocations(path string) map[string]sdrLocation {
 	return locs
 }
 
+// frameClassifier classifies one detected peak. RuleClassifier is the
+// default; onnxFrameClassifier wraps the ML model with a per-peak
+// rules fallback so a bad frame never costs a detection.
+type frameClassifier interface {
+	Classify(freqHz uint64, bandwidthHz float64, spectrum *dsp.FFTResult) *classify.Result
+}
+
+// onnxFrameClassifier runs the ONNX model on the peak's extracted
+// features; any failure (or missing features) falls back to rules.
+type onnxFrameClassifier struct {
+	onnx  *classify.ONNXClassifier
+	rules *classify.RuleClassifier
+}
+
+func (c *onnxFrameClassifier) Classify(freqHz uint64, bandwidthHz float64, spectrum *dsp.FFTResult) *classify.Result {
+	if f := classify.ExtractFeatures(spectrum, freqHz); f != nil {
+		if res, err := c.onnx.Classify(f.ToVector(), freqHz); err == nil && res != nil {
+			res.Bandwidth = bandwidthHz
+			return res
+		}
+	}
+	return c.rules.Classify(freqHz, bandwidthHz, spectrum)
+}
+
 func main() {
 	listenPort := flag.Int("port", envInt("LISTEN_PORT", 9010), "UDP listen port")
 	thresholdDB := flag.Float64("threshold", -60, "peak threshold dB")
 	maxPeaks := flag.Int("max-peaks", 20, "max peaks per frame")
 	configPath := flag.String("config", envStr("SDR_CONFIG", "config/sdr-capture.yaml"), "sdr-capture config (SDR locations)")
+	modelPath := flag.String("model", envStr("MODEL_PATH", ""), "ONNX classifier model path (empty = rules only)")
 	flag.Parse()
 
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
@@ -266,7 +291,18 @@ func main() {
 		MinSpacing:  10,
 		TopN:        *maxPeaks,
 	}
-	classifier := classify.NewRuleClassifier()
+	ruleClassifier := classify.NewRuleClassifier()
+	var classifier frameClassifier = ruleClassifier
+	if *modelPath != "" {
+		onnxClassifier := classify.NewONNXClassifier(*modelPath)
+		if err := onnxClassifier.Load(); err != nil {
+			log.Printf("ONNX classifier unavailable (%v); using rules", err)
+		} else {
+			defer onnxClassifier.Close()
+			classifier = &onnxFrameClassifier{onnx: onnxClassifier, rules: ruleClassifier}
+			log.Printf("loaded ONNX classifier %s", *modelPath)
+		}
+	}
 
 	// Optional database
 	var database *db.DB
@@ -361,7 +397,7 @@ func main() {
 }
 
 // processFrame runs the DSP pipeline on one IQ frame.
-func processFrame(frame *sdr.IQFrame, pd *dsp.PeakDetector, rc *classify.RuleClassifier) []signalEvent {
+func processFrame(frame *sdr.IQFrame, pd *dsp.PeakDetector, classifier frameClassifier) []signalEvent {
 	pairs := len(frame.Samples) / 2
 	if pairs < 64 {
 		return nil
@@ -404,7 +440,7 @@ func processFrame(frame *sdr.IQFrame, pd *dsp.PeakDetector, rc *classify.RuleCla
 		}
 
 		// Classification
-		result := rc.Classify(peakHz, p.Bandwidth, result)
+		result := classifier.Classify(peakHz, p.Bandwidth, result)
 
 		events = append(events, signalEvent{
 			SDRID:     frame.SDRID,

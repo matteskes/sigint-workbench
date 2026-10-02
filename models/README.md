@@ -15,7 +15,7 @@ must satisfy:
 
 ### Input vector (134 floats, from `SpectralFeatures.ToVector()`)
 
-- `[0]`  Center frequency (Hz, raw — normalize inside the model)
+- `[0]`  Peak frequency as log2(FreqHz / 1kHz) — the sweep spans 500 kHz–1.7 GHz, raw hertz is unlearnable after standardization (Go `ToVector()` applies the same transform)
 - `[1]`  Estimated bandwidth (Hz, raw — normalize inside the model)
 - `[2]`  Peak power (dB relative to noise floor scale)
 - `[3]`  Noise floor (dB)
