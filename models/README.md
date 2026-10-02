@@ -8,14 +8,16 @@ tracked via git-lfs.
 The Go classifier (`internal/classify`) defines the contract the model
 must satisfy:
 
-| | Tensor name | Shape | Notes |
-|---|---|---|---|
+| Name | Tensor name | Shape | Notes |
+| --- | --- | --- | --- |
 | Input | `features` | `(1, 134)` float32 | one frame per inference |
-| Output | `classification` | `(1, 5)` float32 | probability per class (softmax) |
+| Output | `classification` | `(1, 5)` float32 | probability per class |
 
 ### Input vector (134 floats, from `SpectralFeatures.ToVector()`)
 
-- `[0]`  Peak frequency as log2(FreqHz / 1kHz) — the sweep spans 500 kHz–1.7 GHz, raw hertz is unlearnable after standardization (Go `ToVector()` applies the same transform)
+- `[0]`  Peak frequency as log2(FreqHz / 1kHz). The sweep spans
+  500 kHz-1.7 GHz and raw hertz is unlearnable after standardization,
+  so Go `ToVector()` applies the same transform before inference.
 - `[1]`  Estimated bandwidth (Hz, raw — normalize inside the model)
 - `[2]`  Peak power (dB relative to noise floor scale)
 - `[3]`  Noise floor (dB)
@@ -33,7 +35,7 @@ the Go side sends raw `ToVector()` output and does no preprocessing.
 ### Output classes (index order, must match `classify.ModulationClasses`)
 
 | Index | Label | Display |
-|---|---|---|
+| --- | --- | --- |
 | 0 | `am` | AM |
 | 1 | `cw` | CW |
 | 2 | `fm_narrow` | FM / NFM |
