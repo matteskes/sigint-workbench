@@ -41,49 +41,91 @@ func ExtractFeatures(result *dsp.FFTResult, centerFreqHz uint64) *SpectralFeatur
 	peakPower := result.PowerDB[peakIdx]
 	snr := peakPower - noiseFloor
 
-	// Estimate bandwidth
-	peak := dsp.Peak{
-		FreqHz:  result.Frequencies[peakIdx],
-		PowerDB: peakPower,
-		Index:   peakIdx,
-	}
-	_ = peak
+	bandwidth := estimateBandwidthHz(result, peakIdx)
+	crest := crestFactor(result.PowerDB)
+	entropy := spectralEntropy(result.PowerDB)
 
 	// Normalize spectrum to fixed length
 	spectrum := normalizeSpectrum(result.PowerDB, noiseFloor, FeatureVectorLength)
 
-	// Crest factor
-	rms := 0.0
-	for _, p := range result.PowerDB {
-		lin := 10.0 / (p / 10.0) // approximate
-		rms += lin * lin
-	}
-	rms = rms / float64(len(result.PowerDB))
-	rms = 0.1 // placeholder until proper computation
-	crest := 0.0
-	if rms > 0 {
-		crest = (10.0 / (peakPower / 10.0)) / rms
-	}
-
-	// Spectral entropy
-	entropy := 0.0
-	for _, p := range spectrum {
-		if p > 0 {
-			entropy -= float64(p) * (1.0 / 64.0) * math.Log2(float64(p) * 64.0) // simplified
-		}
-	}
-	_ = entropy
-
 	return &SpectralFeatures{
 		FreqHz:          float64(centerFreqHz),
-		BandwidthHz:     0, // TODO: proper bandwidth estimation
+		BandwidthHz:     bandwidth,
 		PeakPowerDB:     peakPower,
 		NoiseFloorDB:    noiseFloor,
 		SNRdB:           snr,
 		SpectralShape:   spectrum,
 		CrestFactor:     crest,
-		SpectralEntropy: 0, // TODO
+		SpectralEntropy: entropy,
 	}
+}
+
+// estimateBandwidthHz returns the -3 dB bandwidth in Hz measured around
+// the peak bin.
+func estimateBandwidthHz(result *dsp.FFTResult, peakIdx int) float64 {
+	pow := result.PowerDB
+	n := len(pow)
+	if n < 3 || peakIdx < 0 || peakIdx >= n {
+		return 0
+	}
+	threshold := pow[peakIdx] - 3.0
+	lo, hi := peakIdx, peakIdx
+	for lo > 0 && pow[lo-1] >= threshold {
+		lo--
+	}
+	for hi < n-1 && pow[hi+1] >= threshold {
+		hi++
+	}
+	if hi <= lo || len(result.Frequencies) <= hi {
+		return 0
+	}
+	return result.Frequencies[hi] - result.Frequencies[lo]
+}
+
+// crestFactor computes the peak-to-RMS ratio of the linear power
+// spectrum.
+func crestFactor(powerDB []float64) float64 {
+	peak := 0.0
+	sumSq := 0.0
+	for _, p := range powerDB {
+		lin := math.Pow(10, p/10)
+		if lin > peak {
+			peak = lin
+		}
+		sumSq += lin * lin
+	}
+	rms := math.Sqrt(sumSq / float64(len(powerDB)))
+	if rms <= 0 {
+		return 0
+	}
+	return peak / rms
+}
+
+// spectralEntropy returns the Shannon entropy of the normalized linear
+// power spectrum, scaled to [0, 1] (1 = uniform, 0 = single bin).
+func spectralEntropy(powerDB []float64) float64 {
+	total := 0.0
+	lins := make([]float64, len(powerDB))
+	for i, p := range powerDB {
+		lins[i] = math.Pow(10, p/10)
+		total += lins[i]
+	}
+	if total <= 0 {
+		return 0
+	}
+	h := 0.0
+	for _, lin := range lins {
+		if lin <= 0 {
+			continue
+		}
+		p := lin / total
+		h -= p * math.Log2(p)
+	}
+	maxH := math.Log2(float64(len(powerDB)))
+	if maxH <= 0 {
+		return 0
+	}
+	return h / maxH
 }
 
 // ToVector flattens the features into a single float32 slice for ONNX input.
