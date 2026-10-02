@@ -24,15 +24,45 @@ jobs:
       - name: go test
         run: go test ./... -count=1
 
-      - name: go build + vet + test (onnx tag)
-        # The onnx build tag compiles the ONNX classifier. The ONNX
-        # Runtime is loaded via dlopen at runtime, so no
-        # libonnxruntime is needed to compile or test here — the
-        # classify tests only exercise clean failure paths.
+      - name: Download ONNX Runtime (linux-x64)
+        # 3c: give the onnx-tag tests a real runtime so they exercise the
+        # full inference path (not just clean-failure paths). Same release
+        # and lib/ layout as docker/Dockerfile.classifier.
+        env:
+          ORT_VERSION: "1.29.0"
+        run: |
+          curl -sfL -o ort.tgz \
+            "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz"
+          tar -xzf ort.tgz
+          echo "ORT_LIBRARY_PATH=$(pwd)/onnxruntime-linux-x64-${ORT_VERSION}/lib/libonnxruntime.so" >> "$GITHUB_ENV"
+
+      - name: Fetch ONNX model (git-lfs)
+        # The E2E inference tests need the real model bytes. actions/checkout
+        # fetches LFS by default; this is a cheap explicit guard so the tests
+        # below cannot run against an unfetched LFS pointer.
+        run: git lfs pull models/
+
+      - name: go build + vet + test (onnx tag, real inference)
+        # With ORT_LIBRARY_PATH + CLASSIFIER_ONNX_PATH set, the onnx build
+        # tag runs the REAL CW + WFM E2E tests. go test alone exits 0 even
+        # when those tests SKIP, so the grep guards below fail the job if the
+        # inference tests did not actually run (e.g. model is an LFS pointer
+        # or ORT failed to load) instead of silently passing.
+        env:
+          CLASSIFIER_ONNX_PATH: "${{ github.workspace }}/models/classifier.onnx"
         run: |
           go build -tags onnx ./...
           go vet -tags onnx ./...
-          go test -tags onnx ./internal/classify/ -count=1
+          out="$(go test -tags onnx -v -count=1 ./internal/classify/ ./cmd/signal-processor/ 2>&1)" || test_rc=$?
+          printf '%s\n' "$out"
+          if [ "${test_rc:-0}" -ne 0 ]; then
+            echo "FAIL: onnx-tag go test failed (rc=${test_rc})"
+            exit 1
+          fi
+          printf '%s\n' "$out" | grep -qF 'CW frame'   || { echo "FAIL: internal/classify ONNX E2E skipped (ORT_LIBRARY_PATH/model?)"; exit 1; }
+          printf '%s\n' "$out" | grep -qF 'WFM frame'  || { echo "FAIL: internal/classify ONNX WFM E2E skipped (ORT_LIBRARY_PATH/model?)"; exit 1; }
+          printf '%s\n' "$out" | grep -qF -e '-> peak' || { echo "FAIL: signal-processor ONNX E2E skipped (ORT_LIBRARY_PATH/model?)"; exit 1; }
+          echo "OK: onnx real-inference E2E passed (CW + WFM)"
 
   # ─── Frontend: svelte-check ───
   frontend:

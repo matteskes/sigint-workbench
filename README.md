@@ -151,6 +151,7 @@ sigint-workbench/
 ## Development
 
 | Make Target | Description |
+smoke-onnx: E2E ONNX smoke test — real binary detects CW + WFM over UDP (auto-downloads ORT; needs the git-lfs model)
 | ----------- | ----------- |
 | `make dev` | Full dev environment (macOS) |
 | `make build-capture` | Build native macOS sdr-capture |

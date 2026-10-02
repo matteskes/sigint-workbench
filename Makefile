@@ -48,6 +48,8 @@ test: ## Run all Go tests
 frontend-test: ## Run frontend tests
 	cd frontend && npm test
 
+smoke-onnx: ## E2E: real binary detects CW+WFM over UDP (auto-downloads ORT; needs git-lfs model)
+	./scripts/smoke-test.sh
 # ─── Utilities ───
 
 tidy: ## Tidy Go modules
