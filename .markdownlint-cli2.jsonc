@@ -1,4 +1,12 @@
 {
   "globs": ["**/*.md"],
-  "ignores": ["**/node_modules/**", "frontend/node_modules/**"]
+  "ignores": ["**/node_modules/**", "frontend/node_modules/**"],
+  "config": {
+    "default": true,
+    // Keep prose at 80 cols, but exempt data tables and code blocks
+    // (both are inherently wider in technical specs; README still passes).
+    "MD013": { "line_length": 80, "code_blocks": false, "tables": false },
+    // Compact table style: single-space pipes, no column alignment.
+    "MD060": { "style": "compact" }
+  }
 }
