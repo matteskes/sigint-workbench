@@ -3,14 +3,22 @@
 Real-time multi-SDR signal monitoring, classification, recording,
 and geospatial visualization.
 
+> **Status:** the core pipeline (capture → ingest → DSP →
+> classification → persistence → events) is implemented; items
+> marked *(planned)* below are locked in [`docs/SPEC.md`](docs/SPEC.md)
+> — see its roadmap (§17.4).
+
 ## Features
 
-- **Dual-SDR wideband scanning** with cross-verification
-- **Real-time signal detection**, classification, and tracking
-- **FM/AM voice demodulation** with live audio streaming (Opus over WebSocket)
-- **Signal recording** — raw IQ + decoded audio (WAV/FLAC)
-- **PostGIS-backed geospatial database** for signal locations and tracks
-- **Interactive map** with live signal overlay (MapLibre GL + self-hosted OSM tiles)
+- **Dual-SDR wideband scanning** with cross-verification *(planned)*
+- **Real-time signal detection** and classification; tracking *(planned)*
+- **FM/AM voice demodulation** with live audio streaming (Opus over
+  WebSocket) *(planned)*
+- **Signal recording** — raw IQ + decoded audio (WAV) *(planned)*
+- **PostGIS-backed geospatial database** for signal locations and
+  movement tracks *(planned)*
+- **Interactive map** (MapLibre GL + self-hosted OSM tiles) with
+  live signal overlay *(planned)*
 - **Spectrum analyzer** and **waterfall display**
 - **Extensible demodulator and classifier framework** — add new modes
   by implementing one interface
@@ -29,16 +37,15 @@ and geospatial visualization.
 │  ┌────────────────────────▼──────────────────────────────┐   │
 │  │  Docker Compose Network                                │   │
 │  │                                                        │   │
-│  │  iq-ingest → signal-processor → classifier → recorder  │   │
-│  │                           │            │               │   │
-│  │                           ▼            ▼               │   │
-│  │                    location-svc    PostGIS DB          │   │
-│  │                           │                            │   │
-│  │                           ▼                            │   │
-│  │  api-gateway (REST) ←→ ws-hub (WebSocket)             │   │
-│  │        │                     │                         │   │
-│  │        ▼                     ▼                         │   │
-│  │  tileserver-gl          Frontend (SvelteKit)           │   │
+│  │   iq-ingest ──┬─→ signal-processor ─┬─→ db (PostGIS)   │   │
+│  │               │                     └─→ ws-hub         │   │
+│  │               └─→ recorder (audio demod, Opus live)     │   │
+│  │                                                        │   │
+│  │   api-gateway :8080 — single client ingress           │   │
+│  │     REST • /ws (→ ws-hub) • /ws/audio (→ recorder)     │   │
+│  │          │                                             │   │
+│  │          ▼                                             │   │
+│  │   Frontend (SvelteKit) ←── tileserver-gl (OSM tiles)  │   │
 │  └────────────────────────────────────────────────────────┘   │
 └──────────────────────────────────────────────────────────────┘
 ```
@@ -47,17 +54,19 @@ and geospatial visualization.
 
 | Service | Language | Description |
 | ------- | -------- | ----------- |
-| `sdr-capture` | Go (cgo) | Reads SDR hardware, streams IQ over UDP |
-| `iq-ingest` | Go | Receives IQ streams, buffers, dispatches |
-| `signal-processor` | Go | FFT, peak detection, band identification |
-| `classifier` | Go + ONNX | Rule-based + ML signal classification |
-| `recorder` | Go | Raw IQ + decoded audio recording |
-| `location-service` | Go | Signal location, tracking, 2-SDR verification |
-| `api-gateway` | Go | REST API, audio file serving |
-| `ws-hub` | Go | WebSocket real-time event broadcasting |
-| `db` | PostGIS 16 | Spatial database (PostgreSQL 16) |
+| `sdr-capture` | Go (cgo) | Reads SDR hardware, streams IQ over UDP; scan loop and control API *(planned)* |
+| `iq-ingest` | Go | Receives IQ streams, validates frames, fans out to consumers |
+| `signal-processor` | Go | DSP, classification (rules + ONNX), per-SDR location, persistence, event publishing; 2-SDR verification *(planned)* |
+| `recorder` | Go | Audio demodulation (FM/AM), WAV + raw-IQ recording, live Opus audio *(planned)* |
+| `api-gateway` | Go | Single client ingress: REST API and recording file serving; `/ws` + `/ws/audio` relays *(planned)* |
+| `ws-hub` | Go | Internal WebSocket event fan-out (not client-facing) |
+| `db` | PostGIS | Spatial database (PostgreSQL 16): signals, recordings, tracks |
 | `tiles` | tileserver-gl | Self-hosted OSM vector tiles |
-| `frontend` | SvelteKit | Interactive map, signal list, audio player |
+| `frontend` | SvelteKit | Interactive map + signal list; live data and audio player *(planned)* |
+
+> `cmd/classifier` and `cmd/location-service` are legacy stubs: their
+> logic is merged into `signal-processor` (D2) and they are scheduled
+> for removal.
 
 ## Technology Stack
 
@@ -66,12 +75,12 @@ and geospatial visualization.
 | Backend | Go 1.25+ |
 | DSP | gonum (FFT, filtering) + custom Go demodulators |
 | ML | ONNX Runtime (inference), Python/PyTorch (offline) |
-| Database | PostGIS 16 (PostgreSQL 16) |
+| Database | PostGIS (PostgreSQL 16) |
 | Frontend | SvelteKit 2 + Svelte 5 + TypeScript + Vite |
 | Map | MapLibre GL JS (svelte-maplibre) |
 | Tiles | tileserver-gl (self-hosted OSM MBTiles) |
 | Styling | Tailwind CSS 4 |
-| Audio | Go demodulation (FM, AM) → PCM/Opus → WebSocket |
+| Audio | Go demodulation (FM, AM) → PCM → WAV; Opus live streaming *(planned)* |
 | Real-time | WebSocket (Go hub, native browser client) |
 | Orchestration | Docker Compose with profiles |
 | Config | YAML per service |
@@ -122,7 +131,8 @@ make deploy
 
 ```text
 sigint-workbench/
-├── cmd/                    # One main.go per service (8 binaries)
+├── cmd/                    # One main.go per service (8 binaries; classifier
+│                           # + location-service are legacy stubs, see D2)
 ├── internal/
 │   ├── sdr/                # SDR interface, drivers, UDP protocol
 │   ├── dsp/                # FFT, peak detection, filters, AGC
