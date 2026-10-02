@@ -63,7 +63,7 @@ and geospatial visualization.
 
 | Layer | Technology |
 | ----- | ---------- |
-| Backend | Go 1.24+ |
+| Backend | Go 1.25+ |
 | DSP | gonum (FFT, filtering) + custom Go demodulators |
 | ML | ONNX Runtime (inference), Python/PyTorch (offline) |
 | Database | PostGIS 16 (PostgreSQL 16) |
@@ -81,7 +81,7 @@ and geospatial visualization.
 
 ### All Platforms
 
-- **Go** 1.24+
+- **Go** 1.25+
 - **Docker** + **Docker Compose** v2
 - **Node.js** 20+ / npm
 
