@@ -46,7 +46,8 @@ dashboard, and (planned) records decoded audio.
 - Multi-host deployments and PTP/NTP-based time synchronization
   (deferred; see §15.4, Phase 4).
 - Precise geolocation beyond single-receiver placement plus 2-SDR
-  verification (no TDOA/AOA engine).
+  verification (no TDOA/AOA engine in v1; TDOA multilateration is
+  deferred to Phase 4, §17.4).
 - Decoding of digital payload modes (digital modes report only their
   modulation class; payloads are not demodulated in v1).
 
@@ -602,7 +603,7 @@ flag is stored per row, and both rows are updated on success.
 
 **Status: identity `[implemented]`; single-SDR placement
 `[implemented]`; unlocated-signal handling in §9.3 is `[implemented]`
-(A1); tracking is `[planned]`.**
+(A1); tracking is `[planned]`; TDOA multilateration is Phase 4.**
 
 ### 9.1 Signal ID — deterministic UUIDv5
 
@@ -631,6 +632,10 @@ accuracy = 0     // means "exactly at the SDR" in v1
 The UI renders an accuracy circle from a client-side default when
 `accuracy == 0` (current default: 1000 m circle radius fallback in
 `MapView`).
+
+Multi-receiver geolocation (TDOA multilateration) is out of scope in
+v1; it is deferred to Phase 4 (§17.4) and will use the `tdoa` value
+already reserved in `Location.Method`.
 
 ### 9.3 Unlocated signals (A1) — `[implemented]`
 
@@ -1296,7 +1301,7 @@ stores and the API client; `svelte-check` for types.
 | **1 — Correctness** | D4 negative offsets; A1 unlocated signals; §6.5 class enum; dead `/ws` hub removal; FLAC-claim cleanup (code + README); CORS/origin tightening | new tests per §17.3 green; docs match behavior |
 | **2 — Features** | D3 scan loop; §8 verification in processor; recorder (D1 in-band + D6 retention); Opus live streaming (D1b) + gateway relays (§2.2); frontend data wiring; control-API proxy + `sdr.status` events | §17.3 feature obligations all green; dashboard live end-to-end |
 | **3 — Hardware & fidelity** | RTL-SDR defect fixes (§15.3) + on-hardware validation; HackRF driver (H1/H2); power calibration contract (§5.6); SSB Hilbert (§10.1); `min_confidence` enforcement (§16.1) | 2 real SDRs verified end-to-end; calibration documented |
-| **4 — Deferred** | multi-host + NTP/PTP; tracking (`tracks`, §9.4); annotations UI; `audio.level` feed | scoped separately |
+| **4 — Deferred** | multi-host + NTP/PTP; TDOA multilateration; tracking (`tracks`, §9.4); annotations UI; `audio.level` feed | scoped separately |
 
 ## Appendix A — Decision Register
 

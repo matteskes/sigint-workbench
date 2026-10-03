@@ -12,6 +12,9 @@ and geospatial visualization.
 
 - **Dual-SDR wideband scanning** with cross-verification *(planned)*
 - **Real-time signal detection** and classification; tracking *(planned)*
+- **Multilateration (TDOA)** — geolocate a craft by passively
+  receiving its radio emissions (e.g., ADS-B/Mode S or ACARS)
+  and comparing arrival times across the SDR network *(planned)*
 - **FM/AM voice demodulation** with live audio streaming (Opus over
   WebSocket) *(planned)*
 - **Signal recording** — raw IQ + decoded audio (WAV) *(planned)*
@@ -56,7 +59,7 @@ and geospatial visualization.
 | ------- | -------- | ----------- |
 | `sdr-capture` | Go (cgo) | Reads SDR hardware, streams IQ over UDP; scan loop and control API *(planned)* |
 | `iq-ingest` | Go | Receives IQ streams, validates frames, fans out to consumers |
-| `signal-processor` | Go | DSP, classification (rules + ONNX), per-SDR location, persistence, event publishing; 2-SDR verification *(planned)* |
+| `signal-processor` | Go | DSP, classification (rules + ONNX), per-SDR location, persistence, event publishing; 2-SDR verification and TDOA multilateration *(planned)* |
 | `recorder` | Go | Audio demodulation (FM/AM), WAV + raw-IQ recording, live Opus audio *(planned)* |
 | `api-gateway` | Go | Single client ingress: REST API and recording file serving; `/ws` + `/ws/audio` relays *(planned)* |
 | `ws-hub` | Go | Internal WebSocket event fan-out (not client-facing) |
