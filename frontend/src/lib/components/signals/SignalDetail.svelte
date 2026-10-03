@@ -55,10 +55,14 @@
 	<!-- Location -->
 	<div>
 		<div class="text-xs text-slate-500">Location</div>
-		<div class="text-sm font-mono">
-			{signal.lat.toFixed(4)}, {signal.lon.toFixed(4)}
-		</div>
-		<div class="text-xs text-slate-500">±{signal.accuracyM.toFixed(0)} m</div>
+		{#if signal.lat != null && signal.lon != null}
+			<div class="text-sm font-mono">
+				{signal.lat.toFixed(4)}, {signal.lon.toFixed(4)}
+			</div>
+			<div class="text-xs text-slate-500">±{signal.accuracyM.toFixed(0)} m</div>
+		{:else}
+			<div class="text-sm text-slate-500">Unlocated</div>
+		{/if}
 	</div>
 
 	<!-- Timing -->

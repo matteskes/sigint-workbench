@@ -86,16 +86,20 @@
 
 		// Update markers when signals change
 		const unsub = signals.subscribe(($signals) => {
-			const features = $signals.map((s) => ({
-				type: 'Feature' as const,
-				geometry: { type: 'Point' as const, coordinates: [s.lon, s.lat] },
-				properties: {
-					id: s.id,
-					color: classColors[s.class] ?? '#64748b',
-					accuracy: s.accuracyM || 1000,
-					label: `${(s.freqHz / 1e6).toFixed(1)} MHz`
-				}
-			}));
+			const features = $signals.flatMap((s) => {
+				// A1 (§9.3): unlocated signals (null lat/lon) are omitted from the map
+				if (s.lat == null || s.lon == null) return [];
+				return [{
+					type: 'Feature' as const,
+					geometry: { type: 'Point' as const, coordinates: [s.lon, s.lat] },
+					properties: {
+						id: s.id,
+						color: classColors[s.class] ?? '#64748b',
+						accuracy: s.accuracyM || 1000,
+						label: `${(s.freqHz / 1e6).toFixed(1)} MHz`
+					}
+				}];
+			});
 
 			const source = map.getSource('signals') as maplibregl.GeoJSONSource;
 			if (source) {

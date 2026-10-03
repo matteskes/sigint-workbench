@@ -9,8 +9,8 @@ export interface Signal {
 	class: string;
 	confidence: number;
 	powerDbm: number;
-	lat: number;
-	lon: number;
+	lat: number | null;
+	lon: number | null;
 	accuracyM: number;
 	firstSeen: string;
 	lastSeen: string;
