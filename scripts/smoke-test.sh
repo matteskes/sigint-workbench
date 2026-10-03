@@ -8,6 +8,7 @@
 #
 #   CW  -> 16.0000 MHz  (1.5 MHz offset on a 14.5 MHz frame)
 #   WFM -> ~100.8 MHz   (800 kHz offset on a 100 MHz frame)
+#   CW-blk -> 13.0000 MHz  (−1.5 MHz offset on a 14.5 MHz frame; D4 §5.3 below-center)
 #
 # Preconditions: Go + cgo, and the trained model (models/classifier.onnx,
 # fetched via git-lfs). The ONNX Runtime shared library is auto-downloaded for
@@ -107,6 +108,8 @@ echo "smoke-test: sending CW frames..."
 "$WORKDIR/smoke-frames" -mod cw -addr "127.0.0.1:$port" -count 5
 echo "smoke-test: sending WFM frames..."
 "$WORKDIR/smoke-frames" -mod wfm -addr "127.0.0.1:$port" -count 5
+echo "smoke-test: sending below-center CW frames (D4 §5.3)..."
+"$WORKDIR/smoke-frames" -mod cw -offset -1500000 -addr "127.0.0.1:$port" -count 5
 sleep 1.5
 
 # ── Verify: strongest detected peak in each expected region ──
@@ -119,6 +122,12 @@ cw="$(awk -v lo=15.95 -v hi=16.05 \
   "$log")"
 wfm="$(awk -v lo=100.7 -v hi=100.9 \
   'BEGIN { best = -1e9 } $3=="SIGNAL" && $8 ~ /^FM\// && $5+0>=lo && $5+0<=hi { if ($10+0>best) { best=$10+0; line=$0 } } END { if (line!="") print line }' \
+  "$log")"
+# D4 §5.3: a tone BELOW the center MUST be detected at center + (negative
+# offset). No modulation constraint — the point is the wrapped negative-bin
+# frequency, which pre-fix uint64 center+offset arithmetic would corrupt.
+cwbelow="$(awk -v lo=12.95 -v hi=13.05 \
+  'BEGIN { best = -1e9 } $3=="SIGNAL" && $5+0>=lo && $5+0<=hi { if ($10+0>best) { best=$10+0; line=$0 } } END { if (line!="") print line }' \
   "$log")"
 
 fail=0
@@ -134,6 +143,12 @@ if [ -z "$wfm" ]; then
 else
   echo "smoke-test: OK  WFM -> $(printf '%s' "$wfm" | sed -E 's/.*SIGNAL[[:space:]]+//')"
 fi
+if [ -z "$cwbelow" ]; then
+  echo "smoke-test: FAIL - no below-center peak detected near 13.0000 MHz (D4 §5.3)" >&2
+  fail=1
+else
+  echo "smoke-test: OK  CW-below -> $(printf '%s' "$cwbelow" | sed -E 's/.*SIGNAL[[:space:]]+//')"
+fi
 
 # §6.5: class must carry a source enum, never method:label (onnx:*/rules:*).
 check_class() {
@@ -146,10 +161,11 @@ check_class() {
 }
 if [ -n "$cw" ]; then check_class "$cw"; fi
 if [ -n "$wfm" ]; then check_class "$wfm"; fi
+if [ -n "$cwbelow" ]; then check_class "$cwbelow"; fi
 
 if [ "$fail" -ne 0 ]; then
   echo "smoke-test: signal-processor log:" >&2
   cat "$log" >&2
   exit 1
 fi
-echo "smoke-test: PASS - CW + WFM detected end-to-end through the real binary"
+echo "smoke-test: PASS - CW + WFM + below-center (D4) detected end-to-end through the real binary"

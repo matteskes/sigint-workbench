@@ -237,9 +237,8 @@ sequence number exists in v1; `timestamp` is the only ordering hint.
 
 ## 5. DSP Pipeline
 
-**Status: `[implemented]` except §5.3 (D4 negative-offset fix,
-`[planned]`), §5.6 (calibration, `[planned]`), §5.7 (FFT config,
-`[gap]`).**
+**Status: `[implemented]` except §5.6 (calibration, `[planned]`),
+§5.7 (FFT config, `[gap]`).**
 
 ### 5.1 Per-frame processing (`signal-processor`)
 
@@ -258,22 +257,26 @@ For every validated IQ frame:
 
 ### 5.2 Spectrum representation
 
-- Output is a **one-sided** spectrum of `nfft/2` bins:
+- Real-input `ComputeFFT` is **one-sided** with `nfft/2` bins:
   `Frequencies[i] = i * df`, `PowerDB[i] = 10*log10(|X[i]|²)`,
   floored at **−300 dB** for zero-magnitude bins.
+- The IQ pipeline (§5.1 step 3; §5.3) uses `ComputeIQFFT`, which
+  returns the **full `nfft`-bin wrapped spectrum** with a signed
+  `peak_to_freq()` mapping. `PositiveHalf()` projects that wrapped
+  spectrum onto the one-sided `0 … +fs/2` view used by one-sided
+  consumers and the train.py-compatible feature vector.
 - `Magnitudes[i]` is the squared magnitude (`|X[i]|²`), not the
   linear amplitude.
 
-### 5.3 Negative-frequency coverage (D4) — `[planned]`
+### 5.3 Negative-frequency coverage (D4) — `[implemented]`
 
-**Gap today:** `ComputeIQFFT` returns only bins `0 … nfft/2−1`, i.e.
-offsets `0 … +fs/2`. Bins `nfft/2 … nfft−1` — which represent
-**negative offsets** `−fs/2 … 0` relative to the tuning center — are
-silently dropped. A signal arriving **below** the center frequency is
-invisible until the scanner steps to a lower center. This is the
-below-center blind spot.
+**Implemented:** `ComputeIQFFT` returns the full `nfft`-bin wrapped
+spectrum, so bins `nfft/2 … nfft−1` — which represent **negative
+offsets** `−fs/2 … 0` relative to the tuning center — are no longer
+dropped. A signal arriving **below** the center frequency is detected,
+and its absolute frequency (`center + offset`) is correct.
 
-**Target contract:** the spectrum MUST cover the full range
+**Contract:** the spectrum MUST cover the full range
 `[−fs/2, +fs/2)`. Bins `i >= nfft/2` are wrapped:
 
 ```textoffset(i) = i*df                      if 0 <= i < nfft/2
@@ -281,11 +284,15 @@ offset(i) = (i - nfft)*df             if nfft/2 <= i < nfft
 peak_hz  = frame.freq_hz + offset(i)  (may be below center)
 ```
 
-Peak detection, noise floor, and feature extraction run on the
-wrapped spectrum. `peak_hz < 0` MUST clamp to 0 (and be reported).
-The smoke-test and E2E fixtures in `cmd/smoke-frames` (CW at +1.5 MHz,
-WFM at +800 kHz) stay above center; the D4 work MUST add a below-
-center fixture.
+Peak detection and noise-floor estimation run on the wrapped full
+spectrum; feature extraction runs on `PositiveHalf()`, which stays
+byte-compatible with `models/train.py`. `peak_hz < 0` clamps to 0 (and
+is reported). Below-center coverage is pinned at two levels: a
+`cmd/signal-processor` unit test (`center = 10 MHz, offset = −2 MHz →
+8.0000 MHz`) and a `smoke-test.sh` E2E fixture (`smoke-frames -mod cw
+-offset -1500000` → a `13.0000 MHz` `SIGNAL` line), guarding the
+wrapped upper-half bin → negative offset → `int64` center+offset
+arithmetic.
 
 ### 5.4 Peak detector
 
@@ -367,7 +374,7 @@ bounds the event rate to ≈ 20 events/s regardless of peak count.
 ## 6. Signal Classification
 
 **Status: rules `[implemented]`; ONNX `[implemented]` (optional build
-tag); the `class`-field contract in §6.5 is a `[gap]` fix.**
+tag); the `class`-field contract in §6.5 is `[implemented]`.**
 
 ### 6.1 Result shape
 
@@ -449,14 +456,15 @@ Notes:
   This bin-count mismatch is a known model-fidelity limitation, not
   a protocol issue.
 
-### 6.5 `signals.class` contract — `[gap]` fix
+### 6.5 `signals.class` contract — `[implemented]`
 
-**Gap today:** the ONNX path sets `source = "onnx:<label>"` (e.g.
-`"onnx:cw"`), which lands in the database `class` column and in every
-`signal.new`/`signal.update` event — leaking an internal method tag
-into a user-facing field.
+**Implemented:** the ONNX path sets `source = rules.Source` (never
+`"onnx:<label>"`), so `signals.class` and every `signal.new`/
+`signal.update` event carry a **source category** — the `onnx:` prefix
+is never persisted or streamed, and the `SIGNAL` log line reports the
+method separately.
 
-**Target contract:** `signals.class` MUST always be a **source
+**Contract:** `signals.class` MUST always be a **source
 category** from the fixed enum:
 
 ```textaviation, marine, land_mobile, amateur, broadcast,
@@ -593,7 +601,7 @@ flag is stored per row, and both rows are updated on success.
 ## 9. Location & Signal Identity
 
 **Status: identity `[implemented]`; single-SDR placement
-`[implemented]`; unlocated-signal handling in §9.3 is a `[gap]` fix
+`[implemented]`; unlocated-signal handling in §9.3 is `[implemented]`
 (A1); tracking is `[planned]`.**
 
 ### 9.1 Signal ID — deterministic UUIDv5
@@ -624,13 +632,15 @@ The UI renders an accuracy circle from a client-side default when
 `accuracy == 0` (current default: 1000 m circle radius fallback in
 `MapView`).
 
-### 9.3 Unlocated signals (A1) — `[gap]` fix
+### 9.3 Unlocated signals (A1) — `[implemented]`
 
-**Gap today:** in `cmd/signal-processor`, signals from an SDR **without**
-configured `lat`/`lon` are silently dropped before publish — they are
-detected and classified, then disappear.
+**Implemented:** in `cmd/signal-processor`, signals from an SDR
+**without** configured `lat`/`lon` are no longer dropped. `lat`/`lon`
+are nullable (`*float64`), the query matches on `location IS NULL`,
+and there is no early-return for unknown SDRs, so an unlocated signal
+flows through detect → classify → persist → publish → list.
 
-**Target contract:** an unlocated signal MUST be:
+**Contract:** an unlocated signal MUST be:
 
 - **detected and classified** as usual,
 - **persisted** with `location NULL`,
