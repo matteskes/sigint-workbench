@@ -132,3 +132,57 @@ func TestComputeIQFFT_EmptyInput(t *testing.T) {
 		t.Errorf("expected nil for empty input")
 	}
 }
+
+func TestComputeIQFFT_NegativeOffset(t *testing.T) {
+	// D4 (§5.3): a tone below the tuning center must appear in the wrapped
+	// (upper) half with its signed negative offset, and the result must carry
+	// the full nfft-bin spectrum plus the bin spacing.
+	sampleRate := uint32(4_800_000)
+	const n = 4096
+	df := float64(sampleRate) / float64(n) // 1000 Hz
+	const tone = -100_000.0 // exactly on bin 3996 (nfft - 100)
+
+	iq := make([]float64, n*2)
+	for i := 0; i < n; i++ {
+		angle := 2 * math.Pi * tone * float64(i) / float64(sampleRate)
+		iq[i*2] = math.Cos(angle)
+		iq[i*2+1] = math.Sin(angle)
+	}
+
+	result, err := ComputeIQFFT(iq, sampleRate)
+	if err != nil {
+		t.Fatalf("ComputeIQFFT: %v", err)
+	}
+	if len(result.Frequencies) != n {
+		t.Fatalf("Frequencies len = %d, want full wrapped %d", len(result.Frequencies), n)
+	}
+	if result.BinSpacing != df {
+		t.Fatalf("BinSpacing = %v, want %v", result.BinSpacing, df)
+	}
+
+	// The negative tone lands in the negative (upper) half; the strongest
+	// bin must carry the signed offset -100 kHz.
+	maxIdx := 0
+	for i := 1; i < len(result.PowerDB); i++ {
+		if result.PowerDB[i] > result.PowerDB[maxIdx] {
+			maxIdx = i
+		}
+	}
+	if math.Abs(result.Frequencies[maxIdx]-tone) > df {
+		t.Fatalf("max bin %d freq = %v, want ~%v", maxIdx, result.Frequencies[maxIdx], tone)
+	}
+	if result.Frequencies[maxIdx] >= 0 {
+		t.Errorf("max bin %d freq = %v, want negative offset", maxIdx, result.Frequencies[maxIdx])
+	}
+
+	// PositiveHalf returns the one-sided positive view (train-compatible).
+	pos := result.PositiveHalf()
+	if len(pos.Frequencies) != n/2 {
+		t.Fatalf("PositiveHalf len = %d, want %d", len(pos.Frequencies), n/2)
+	}
+	for i, f := range pos.Frequencies {
+		if f < 0 {
+			t.Fatalf("PositiveHalf[%d] = %v, want non-negative", i, f)
+		}
+	}
+}

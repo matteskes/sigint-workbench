@@ -110,13 +110,15 @@ echo "smoke-test: sending WFM frames..."
 sleep 1.5
 
 # ── Verify: strongest detected peak in each expected region ──
-# logSignal format:  ... SIGNAL  <id>  <MHz>  <band>  <mod>/<src>  <db> dB  BW:...  conf:<x>
-# awk fields: $3=SIGNAL $4=id $5=MHz $6='MHz' $7=band $8=mod/src $9=<db>
+# logSignal format:  ... SIGNAL  <id>  <MHz>  <band>  <mod>/<src>  <method>  <db> dB  BW:...  conf:<x>
+# awk fields: $3=SIGNAL $4=id $5=MHz $6='MHz' $7=band $8=mod/src $9=method $10=<db>
+# §6.5: class (src, the part of $8 after '/') must be a source enum, not a
+# method:label like onnx:cw. So we match the modulation prefix only.
 cw="$(awk -v lo=15.95 -v hi=16.05 \
-  'BEGIN { best = -1e9 } $3=="SIGNAL" && $8 ~ /^CW\/onnx:cw$/ && $5+0>=lo && $5+0<=hi { if ($9+0>best) { best=$9+0; line=$0 } } END { if (line!="") print line }' \
+  'BEGIN { best = -1e9 } $3=="SIGNAL" && $8 ~ /^CW\// && $5+0>=lo && $5+0<=hi { if ($10+0>best) { best=$10+0; line=$0 } } END { if (line!="") print line }' \
   "$log")"
 wfm="$(awk -v lo=100.7 -v hi=100.9 \
-  'BEGIN { best = -1e9 } $3=="SIGNAL" && $8 ~ /^FM\/onnx:fm_wide$/ && $5+0>=lo && $5+0<=hi { if ($9+0>best) { best=$9+0; line=$0 } } END { if (line!="") print line }' \
+  'BEGIN { best = -1e9 } $3=="SIGNAL" && $8 ~ /^FM\// && $5+0>=lo && $5+0<=hi { if ($10+0>best) { best=$10+0; line=$0 } } END { if (line!="") print line }' \
   "$log")"
 
 fail=0
@@ -132,6 +134,18 @@ if [ -z "$wfm" ]; then
 else
   echo "smoke-test: OK  WFM -> $(printf '%s' "$wfm" | sed -E 's/.*SIGNAL[[:space:]]+//')"
 fi
+
+# §6.5: class must carry a source enum, never method:label (onnx:*/rules:*).
+check_class() {
+  local line="$1" src
+  src=$(printf '%s' "$line" | awk '{split($8,a,"/"); print a[2]}')
+  case "$src" in
+    aviation|land_mobile|marine|amateur|broadcast|gnss|wifi|unknown) ;;
+    *) echo "smoke-test: FAIL - class source '$src' is not a valid enum: $line" >&2; fail=1 ;;
+  esac
+}
+if [ -n "$cw" ]; then check_class "$cw"; fi
+if [ -n "$wfm" ]; then check_class "$wfm"; fi
 
 if [ "$fail" -ne 0 ]; then
   echo "smoke-test: signal-processor log:" >&2

@@ -103,7 +103,7 @@ func TestONNXInferenceEndToEnd(t *testing.T) {
 	if err != nil || res == nil {
 		t.Fatalf("ComputeIQFFT(cw): %v", err)
 	}
-	f := ExtractFeatures(res, 14_500_000)
+	f := ExtractFeatures(res.PositiveHalf(), 14_500_000)
 	if f == nil {
 		t.Fatal("ExtractFeatures(cw) = nil")
 	}
@@ -129,7 +129,7 @@ func TestONNXInferenceEndToEnd(t *testing.T) {
 	if err != nil || res == nil {
 		t.Fatalf("ComputeIQFFT(wfm): %v", err)
 	}
-	f = ExtractFeatures(res, 100_000_000)
+	f = ExtractFeatures(res.PositiveHalf(), 100_000_000)
 	if f == nil {
 		t.Fatal("ExtractFeatures(wfm) = nil")
 	}

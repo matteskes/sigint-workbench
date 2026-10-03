@@ -13,8 +13,8 @@ type Signal struct {
 	Class       string    `json:"class" db:"class"`
 	Confidence  float64   `json:"confidence" db:"confidence"`
 	PowerDBM    float64   `json:"powerDbm" db:"power_dbm"`
-	Lat         float64   `json:"lat" db:"lat"`
-	Lon         float64   `json:"lon" db:"lon"`
+	Lat         *float64  `json:"lat" db:"lat"`
+	Lon         *float64  `json:"lon" db:"lon"`
 	AccuracyM   float64   `json:"accuracyM" db:"accuracy_m"`
 	FirstSeen   time.Time `json:"firstSeen" db:"first_seen"`
 	LastSeen    time.Time `json:"lastSeen" db:"last_seen"`

@@ -95,13 +95,16 @@ func newPublisher(database *db.DB, wsHubURL string, locations map[string]sdrLoca
 	return p
 }
 
-// publish records one detected signal. It upserts to the database and
-// emits a signal.new/signal.update event when the detecting SDR has a
-// known location; otherwise the signal is ignored (no map placement).
+// publish records one detected signal. It always upserts to the database
+// and emits a signal.new/signal.update event (§9.3). When the detecting
+// SDR has a known location it is attached to the row; otherwise the signal
+// is persisted unlocated (lat/lon NULL) and the map layer omits it.
 func (p *publisher) publish(ev signalEvent, now time.Time) {
-	loc, ok := p.locations[ev.SDRID]
-	if !ok {
-		return
+	// A1 (§9.3): unlocated SDRs are still tracked. loc stays nil so the
+	// signal is persisted with a NULL location instead of being dropped.
+	var loc *sdrLocation
+	if l, ok := p.locations[ev.SDRID]; ok {
+		loc = &l
 	}
 	id := db.SignalID(ev.SDRID, ev.PeakHz)
 
@@ -127,6 +130,11 @@ func (p *publisher) publish(ev signalEvent, now time.Time) {
 		conf = ev.Class.Confidence
 		bw = int32(ev.Bandwidth)
 	}
+	// Unlocated SDR -> NULL lat/lon (A1, §9.3).
+	var lat, lon *float64
+	if loc != nil {
+		lat, lon = &loc.Lat, &loc.Lon
+	}
 	sig := &db.Signal{
 		ID:          id,
 		FreqHz:      ev.PeakHz,
@@ -136,8 +144,8 @@ func (p *publisher) publish(ev signalEvent, now time.Time) {
 		Class:       class,
 		Confidence:  conf,
 		PowerDBM:    ev.PowerDB,
-		Lat:         loc.Lat,
-		Lon:         loc.Lon,
+		Lat:         lat,
+		Lon:         lon,
 		FirstSeen:   first,
 		LastSeen:    now,
 		SDRID:       ev.SDRID,
@@ -265,13 +273,18 @@ type onnxFrameClassifier struct {
 }
 
 func (c *onnxFrameClassifier) Classify(freqHz uint64, bandwidthHz float64, spectrum *dsp.FFTResult) *classify.Result {
+	// §6.5: signals.class must carry a source-enum value, never the method.
+	// The frequency-rule classification is authoritative for the source; the
+	// ONNX model refines modulation/subType but never overrides the source.
+	rules := c.rules.Classify(freqHz, bandwidthHz, spectrum)
 	if f := classify.ExtractFeatures(spectrum, freqHz); f != nil {
 		if res, err := c.onnx.Classify(f.ToVector(), freqHz); err == nil && res != nil {
 			res.Bandwidth = bandwidthHz
+			res.Source = rules.Source
 			return res
 		}
 	}
-	return c.rules.Classify(freqHz, bandwidthHz, spectrum)
+	return rules
 }
 
 func main() {
@@ -425,28 +438,37 @@ func processFrame(frame *sdr.IQFrame, pd *dsp.PeakDetector, classifier frameClas
 	noiseFloor := dsp.DetectNoiseFloor(result.PowerDB)
 
 	// Build events
+	// ONNX features must stay byte-compatible with the one-sided positive
+	// spectrum models/train.py was trained on, so the classifier sees the
+	// positive half even though peak detection ran on the full wrapped
+	// spectrum (D4, §5.3).
+	posSpectrum := result.PositiveHalf()
 	var events []signalEvent
 	for _, p := range peaks {
-		// Map FFT bin frequency to absolute frequency
-		// IQ FFT: bin freq is offset from center (0 to fs/2)
+		// Map FFT bin frequency to absolute frequency. The wrapped IQ FFT
+		// reports a signed baseband offset (-fs/2..fs/2); add it to the
+		// center and clamp at 0 (D4, §5.3).
 		offsetHz := p.FreqHz
-		peakHz := frame.FreqHz + uint64(offsetHz)
+		peakHz := int64(frame.FreqHz) + int64(offsetHz)
+		if peakHz < 0 {
+			peakHz = 0
+		}
 
 		// Band identification
-		band := dsp.IdentifyBand(peakHz)
+		band := dsp.IdentifyBand(uint64(peakHz))
 		bandName := "Unknown"
 		if band != nil {
 			bandName = band.Name
 		}
 
 		// Classification
-		result := classifier.Classify(peakHz, p.Bandwidth, result)
+		result := classifier.Classify(uint64(peakHz), p.Bandwidth, posSpectrum)
 
 		events = append(events, signalEvent{
 			SDRID:     frame.SDRID,
 			Timestamp: frame.Timestamp,
 			CenterHz:  frame.FreqHz,
-			PeakHz:    peakHz,
+			PeakHz:    uint64(peakHz),
 			OffsetHz:  offsetHz,
 			PowerDB:   p.PowerDB,
 			Bandwidth: p.Bandwidth,
@@ -468,19 +490,23 @@ func processFrame(frame *sdr.IQFrame, pd *dsp.PeakDetector, classifier frameClas
 func logSignal(ev signalEvent) {
 	mod := "?"
 	src := "?"
+	method := "?"
 	conf := 0.0
 	bw := ev.Bandwidth
 	if ev.Class != nil {
 		mod = ev.Class.Modulation
 		src = ev.Class.Source
+		method = ev.Class.Method
 		conf = ev.Class.Confidence
 		bw = ev.Class.Bandwidth
 	}
-	log.Printf("SIGNAL  %s  %.4f MHz  %s  %s/%s  %.1f dB  BW:%.0f kHz  conf:%.2f",
+	// §6.5: class carries the source enum; method (rules|onnx) is recorded
+	// separately, never folded into the class string.
+	log.Printf("SIGNAL  %s  %.4f MHz  %s  %s/%s  %s  %.1f dB  BW:%.0f kHz  conf:%.2f",
 		ev.SDRID,
 		float64(ev.PeakHz)/1e6,
 		ev.BandName,
-		mod, src,
+		mod, src, method,
 		ev.PowerDB,
 		bw/1000,
 		conf,

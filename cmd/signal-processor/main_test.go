@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"sigint-workbench/internal/classify"
+	"sigint-workbench/internal/dsp"
 	"sigint-workbench/internal/ws"
 )
 
@@ -116,7 +118,9 @@ func TestPublishNewThenUpdate(t *testing.T) {
 	}
 }
 
-func TestPublishIgnoresUnknownSDR(t *testing.T) {
+func TestPublishUnlocatedSDREmits(t *testing.T) {
+	// A1 (§9.3): a signal from an SDR with no known location must still be
+	// published (no map placement), with a NULL location rather than dropped.
 	hub := &fakeHub{}
 	srv := hub.serve()
 	defer srv.Close()
@@ -124,9 +128,28 @@ func TestPublishIgnoresUnknownSDR(t *testing.T) {
 	p := newPublisher(nil, srv.URL, map[string]sdrLocation{}, time.Minute)
 	p.publish(testEvent(), time.Now())
 
-	time.Sleep(50 * time.Millisecond)
-	if hub.waitCount(1) != 0 {
-		t.Fatal("expected no events for SDR without location, got some")
+	if n := hub.waitCount(1); n < 1 {
+		t.Fatalf("expected an event for the unlocated SDR, got %d", n)
+	}
+	hub.mu.Lock()
+	defer hub.mu.Unlock()
+	if hub.events[0].Type != "signal.new" {
+		t.Fatalf("first event type = %q, want signal.new", hub.events[0].Type)
+	}
+	var sig struct {
+		ID    string   `json:"id"`
+		Lat   *float64 `json:"lat"`
+		Lon   *float64 `json:"lon"`
+		SDRID string   `json:"sdrId"`
+	}
+	if err := json.Unmarshal(hub.events[0].Payload, &sig); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if sig.Lat != nil || sig.Lon != nil {
+		t.Fatalf("expected NULL lat/lon for unlocated SDR, got lat=%v lon=%v", sig.Lat, sig.Lon)
+	}
+	if sig.SDRID != "rtlsdr-0" {
+		t.Fatalf("sdrId = %q, want rtlsdr-0", sig.SDRID)
 	}
 }
 
@@ -175,4 +198,47 @@ func TestQueueDropWhenFull(t *testing.T) {
 		p.queue("signal.update", map[string]string{"i": "x"})
 	}
 	// Must not block or panic.
+}
+
+func TestProcessFrameBelowCenterOffset(t *testing.T) {
+	// D4 (§5.3): a tone BELOW the tuning center is detected and reported at
+	// center + (negative offset). Before the fix the negative offset overflowed
+	// the uint64 add and the signal got a garbage frequency (or was missed).
+	pd := &dsp.PeakDetector{ThresholdDB: -60, MinSpacing: 10, TopN: 20}
+	rules := classify.NewRuleClassifier()
+	const (
+		center = uint64(10_000_000)
+		offset = -2_000_000.0 // below center, within (-fs/2, 0) at 4.096 Msps
+	)
+	events := processFrame(pipelineFrame(t, center, offset, 0), pd, rules)
+	if len(events) == 0 {
+		t.Fatal("no events for below-center tone")
+	}
+	// events are sorted strongest-first; the tone is the strongest peak.
+	got := int64(events[0].PeakHz)
+	want := int64(center) + int64(offset)
+	if math.Abs(float64(got-want)) > 2000 {
+		t.Fatalf("below-center peak = %d Hz, want ~%d Hz", got, want)
+	}
+	if events[0].OffsetHz >= 0 {
+		t.Errorf("OffsetHz = %v, want negative (below center)", events[0].OffsetHz)
+	}
+}
+
+func TestProcessFrameClampsBelowZero(t *testing.T) {
+	// D4 (§5.3): when center + negative offset < 0, the absolute frequency is
+	// clamped to 0 rather than wrapping to a huge value.
+	pd := &dsp.PeakDetector{ThresholdDB: -60, MinSpacing: 10, TopN: 20}
+	rules := classify.NewRuleClassifier()
+	const (
+		center = uint64(500_000)
+		offset = -2_000_000.0 // center+offset < 0 -> must clamp to 0
+	)
+	events := processFrame(pipelineFrame(t, center, offset, 0), pd, rules)
+	if len(events) == 0 {
+		t.Fatal("no events")
+	}
+	if events[0].PeakHz != 0 {
+		t.Fatalf("PeakHz = %d, want 0 (clamped)", events[0].PeakHz)
+	}
 }

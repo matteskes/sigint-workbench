@@ -31,6 +31,8 @@ func (d *DB) UpsertSignal(ctx context.Context, s *Signal) error {
 }
 
 // GetSignals returns all active signals, optionally filtered by bounding box.
+// Signals with a NULL location (unlocated SDRs, §9.3) are always included;
+// only located signals are additionally bounded by the envelope.
 func (d *DB) GetSignals(ctx context.Context, minLat, minLon, maxLat, maxLon float64) ([]Signal, error) {
 	query := `
 		SELECT id, frequency_hz, bandwidth_hz, COALESCE(modulation,''), COALESCE(sub_type,''),
@@ -38,7 +40,7 @@ func (d *DB) GetSignals(ctx context.Context, minLat, minLon, maxLat, maxLon floa
 			ST_Y(location), ST_X(location), COALESCE(accuracy_m,0),
 			first_seen, last_seen, sdr_id, verified
 		FROM signals
-		WHERE location && ST_MakeEnvelope($1, $2, $3, $4, 4326)
+		WHERE location IS NULL OR location && ST_MakeEnvelope($1, $2, $3, $4, 4326)
 		ORDER BY last_seen DESC
 		LIMIT 500
 	`

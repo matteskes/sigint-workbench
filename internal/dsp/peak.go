@@ -32,8 +32,8 @@ func NewPeakDetector() *PeakDetector {
 
 // Detect finds the strongest spectral peaks above the threshold.
 //
-// It scans the full one-sided spectrum, collects every local maximum
-// that clears ThresholdDB, then returns up to TopN of them, strongest
+// It scans the full (one-sided or wrapped) spectrum, collects every local
+// maximum that clears ThresholdDB, then returns up to TopN of them, strongest
 // first, with at least MinSpacing bins between any two returned peaks.
 // Collecting candidates across the whole band before truncating means a
 // strong signal at a high bin offset can never be crowded out by
@@ -44,7 +44,14 @@ func (pd *PeakDetector) Detect(result *FFTResult) []Peak {
 	}
 
 	n := len(result.PowerDB)
-	df := float64(result.SampleRate) / float64(n*2) // one-sided: total bins = n/2, but df = fs/nfft
+	// Bin spacing is fs/nfft. ComputeIQFFT returns the full wrapped spectrum
+	// (n == nfft) and ComputeFFT the one-sided view (n == nfft/2); both set
+	// BinSpacing, so prefer it. Fall back to the legacy one-sided formula for
+	// hand-built test spectra that do not set BinSpacing.
+	df := result.BinSpacing
+	if df <= 0 {
+		df = float64(result.SampleRate) / float64(n*2)
+	}
 
 	// Pass 1: every local maximum above the threshold.
 	candidates := make([]Peak, 0, 32)

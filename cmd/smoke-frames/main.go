@@ -43,6 +43,7 @@ func main() {
 	count := flag.Int("count", 5, "number of frames to send")
 	nfft := flag.Int("nfft", 1024, "IQ pairs per frame (<= 1024, the UDP wire limit)")
 	id := flag.String("id", "smoke", "SDR id written into the frame header")
+	offsetFlag := flag.Float64("offset", 0, "override tone offset in Hz (negative = below center; 0 = mod default)")
 	flag.Parse()
 
 	var (
@@ -63,6 +64,9 @@ func main() {
 		fmt.Fprintf(os.Stderr, "unknown -mod %q (want cw or wfm)\n", *mod)
 		flag.Usage()
 		os.Exit(2)
+	}
+	if *offsetFlag != 0 {
+		offsetHz = *offsetFlag // §17.3: allow a below-center (negative) tone
 	}
 
 	frame, err := buildFrame(centerHz, offsetHz, devHz, *nfft, *id)
@@ -96,8 +100,12 @@ func main() {
 		time.Sleep(50 * time.Millisecond)
 	}
 
+	peakHz := int64(centerHz) + int64(offsetHz)
+	if peakHz < 0 {
+		peakHz = 0
+	}
 	fmt.Printf("sent %d %s frame(s) -> %s (expect peak ~%.4f MHz)\n",
-		*count, *mod, *addr, float64(centerHz+uint64(offsetHz))/1e6)
+		*count, *mod, *addr, float64(peakHz)/1e6)
 }
 
 // buildFrame builds a synthetic IQFrame (tone + 1e-6 per-sample noise power),
