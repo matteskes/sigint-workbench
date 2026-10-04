@@ -1,8 +1,48 @@
 <script lang="ts">
+	import { fetchAnnotations, addAnnotation } from '$lib/api/client';
+	import type { Annotation } from '$lib/api/client';
 	import type { Signal } from '$lib/stores/signals';
 	import AudioPlayer from '../audio/AudioPlayer.svelte';
 
 	let { signal }: { signal: Signal } = $props();
+
+	// Signal notes (§12.5 annotations). Reloaded whenever another
+	// signal is selected; the cancellation guard drops stale responses.
+	let notes = $state<Annotation[]>([]);
+	let noteText = $state('');
+	let saving = $state(false);
+
+	$effect(() => {
+		const id = signal.id;
+		let cancelled = false;
+		notes = [];
+		noteText = '';
+		fetchAnnotations(id)
+			.then((list) => {
+				if (!cancelled) notes = list;
+			})
+			.catch(() => {
+				if (!cancelled) notes = [];
+			});
+		return () => {
+			cancelled = true;
+		};
+	});
+
+	async function submitNote(): Promise<void> {
+		const text = noteText.trim();
+		if (!text || saving) return;
+		saving = true;
+		try {
+			const created = await addAnnotation(signal.id, text);
+			notes = [created, ...notes];
+			noteText = '';
+		} catch {
+			// Keep the text so the note can be retried.
+		} finally {
+			saving = false;
+		}
+	}
 
 	function freqMHz(hz: number): string {
 		if (hz >= 1e9) return `${(hz / 1e9).toFixed(3)} GHz`;
@@ -105,5 +145,42 @@
 	<!-- Audio -->
 	<div class="border-t border-slate-700 pt-3">
 		<AudioPlayer signal={signal} />
+	</div>
+
+	<!-- Notes (§12.5 annotations) -->
+	<div class="border-t border-slate-700 pt-3">
+		<div class="text-xs text-slate-500">Notes</div>
+		{#if notes.length === 0}
+			<div class="text-sm text-slate-500">No notes yet</div>
+		{:else}
+			<ul class="mt-1 space-y-2">
+				{#each notes as note (note.id)}
+					<li>
+						<div class="text-sm text-slate-200">{note.userNote}</div>
+						<div class="text-xs text-slate-500">{new Date(note.createdAt).toLocaleString()}</div>
+					</li>
+				{/each}
+			</ul>
+		{/if}
+		<form
+			class="mt-3 flex gap-2"
+			onsubmit={(e) => {
+				e.preventDefault();
+				submitNote();
+			}}
+		>
+			<input
+				class="flex-1 rounded bg-slate-800 px-2 py-1 text-sm text-slate-200 placeholder-slate-500 outline-none focus:ring-1 focus:ring-sky-500"
+				placeholder="Add a note…"
+				bind:value={noteText}
+			/>
+			<button
+				type="submit"
+				class="rounded bg-sky-700 px-2 py-1 text-sm text-white disabled:opacity-40"
+				disabled={!noteText.trim() || saving}
+			>
+				{saving ? '…' : 'Add'}
+			</button>
+		</form>
 	</div>
 </div>

@@ -110,3 +110,28 @@ export function connectWebSocket(onEvent: (event: WSEvent) => void, onOpen?: () 
 	};
 	return ws;
 }
+
+export interface Annotation {
+	id: string;
+	signalId: string;
+	userNote: string;
+	createdAt: string;
+}
+
+/** Lists a signal's user notes, newest first (§12.5). */
+export async function fetchAnnotations(signalId: string): Promise<Annotation[]> {
+	const res = await fetch(`${API_URL}/api/signals/${signalId}/annotations`);
+	if (!res.ok) throw new Error(`API error: ${res.status}`);
+	return res.json();
+}
+
+/** Appends a user note to a signal; returns the created row (§12.5). */
+export async function addAnnotation(signalId: string, userNote: string): Promise<Annotation> {
+	const res = await fetch(`${API_URL}/api/signals/${signalId}/annotations`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ userNote })
+	});
+	if (!res.ok) throw new Error(`API error: ${res.status}`);
+	return res.json();
+}

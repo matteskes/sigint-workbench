@@ -65,3 +65,11 @@ type Verification struct {
 	Confidence float64   `json:"confidence" db:"confidence"`
 	CreatedAt  time.Time `json:"createdAt" db:"created_at"`
 }
+
+// Annotation represents a user note attached to a signal (§12.5).
+type Annotation struct {
+	ID        string    `json:"id" db:"id"`
+	SignalID  string    `json:"signalId" db:"signal_id"`
+	UserNote  string    `json:"userNote" db:"user_note"`
+	CreatedAt time.Time `json:"createdAt" db:"created_at"`
+}

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { fetchSignals, fetchSignal, fetchSDRs, connectWebSocket } from './client';
+import { fetchSignals, fetchSignal, fetchSDRs, fetchAnnotations, addAnnotation, connectWebSocket } from './client';
 
 // Minimal WebSocket double: records the URL and lets tests emit messages.
 class FakeWebSocket {
@@ -27,6 +27,47 @@ beforeEach(() => {
 
 afterEach(() => {
 	vi.unstubAllGlobals();
+});
+
+describe('annotations (§12.5)', () => {
+	it('fetches notes from the annotations endpoint', async () => {
+		const fetchMock = vi.fn().mockResolvedValue(
+			okJSON([{ id: 'a-1', signalId: 'sig-1', userNote: 'part 90 traffic', createdAt: '2026-10-04T12:00:00Z' }])
+		);
+		vi.stubGlobal('fetch', fetchMock);
+
+		const notes = await fetchAnnotations('sig-1');
+
+		expect(notes).toHaveLength(1);
+		expect(notes[0].userNote).toBe('part 90 traffic');
+		const url = new URL(fetchMock.mock.calls[0][0] as string);
+		expect(url.pathname).toBe('/api/signals/sig-1/annotations');
+	});
+
+	it('posts a note with a JSON body and returns the created row', async () => {
+		const fetchMock = vi.fn().mockResolvedValue(
+			okJSON({ id: 'a-2', signalId: 'sig-1', userNote: 'monitor', createdAt: '2026-10-04T12:01:00Z' })
+		);
+		vi.stubGlobal('fetch', fetchMock);
+
+		const created = await addAnnotation('sig-1', 'monitor');
+
+		expect(created.id).toBe('a-2');
+		const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+		expect(url).toContain('/api/signals/sig-1/annotations');
+		expect(init.method).toBe('POST');
+		expect(init.headers).toEqual({ 'Content-Type': 'application/json' });
+		expect(JSON.parse(init.body as string)).toEqual({ userNote: 'monitor' });
+	});
+
+	it('throws on non-OK response', async () => {
+		vi.stubGlobal(
+			'fetch',
+			vi.fn().mockResolvedValue({ ok: false, status: 404, json: async () => ({}) } as Response)
+		);
+		await expect(fetchAnnotations('sig-1')).rejects.toThrow('API error: 404');
+		await expect(addAnnotation('sig-1', 'x')).rejects.toThrow('API error: 404');
+	});
 });
 
 describe('fetchSignals', () => {

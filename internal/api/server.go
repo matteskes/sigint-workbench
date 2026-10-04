@@ -92,6 +92,8 @@ func (s *Server) buildRoutes() {
 	// Signals
 	s.router.Get("/api/signals", s.handleGetSignals)
 	s.router.Get("/api/signals/{id}", s.handleGetSignal)
+	s.router.Get("/api/signals/{id}/annotations", s.handleGetAnnotations)
+	s.router.Post("/api/signals/{id}/annotations", s.handleAddAnnotation)
 
 	// Recordings
 	s.router.Get("/api/recordings", s.handleGetRecordings)
@@ -183,6 +185,74 @@ func (s *Server) handleGetSignal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, sig)
+}
+
+// handleGetAnnotations lists a signal's user notes, newest first
+// (§12.5). Unknown signals and known ones both answer the same way —
+// an empty list — because the query filters by signal_id directly.
+func (s *Server) handleGetAnnotations(w http.ResponseWriter, r *http.Request) {
+	if !s.requireDB(w) {
+		return
+	}
+	id := chi.URLParam(r, "id")
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	notes, err := s.db.GetAnnotations(ctx, id)
+	if err != nil {
+		s.log.Error().Err(err).Str("id", id).Msg("get annotations")
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if notes == nil {
+		notes = []db.Annotation{}
+	}
+	writeJSON(w, notes)
+}
+
+// annotationRequest is the POST /api/signals/{id}/annotations body.
+type annotationRequest struct {
+	UserNote *string `json:"userNote"`
+}
+
+// handleAddAnnotation appends a user note to a signal (§12.5). The
+// body is validated before requireDB so malformed requests answer 400
+// even when the database is down; unknown signals ⇒ 404.
+func (s *Server) handleAddAnnotation(w http.ResponseWriter, r *http.Request) {
+	var req annotationRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4<<10)).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid JSON body"}`, http.StatusBadRequest)
+		return
+	}
+	var note string
+	if req.UserNote != nil {
+		note = strings.TrimSpace(*req.UserNote)
+	}
+	if note == "" {
+		http.Error(w, `{"error":"userNote required"}`, http.StatusBadRequest)
+		return
+	}
+	if !s.requireDB(w) {
+		return
+	}
+	id := chi.URLParam(r, "id")
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	a, err := s.db.AddAnnotation(ctx, id, note)
+	if err != nil {
+		if err == db.ErrNotFound {
+			http.Error(w, `{"error":"signal not found"}`, http.StatusNotFound)
+			return
+		}
+		s.log.Error().Err(err).Str("id", id).Msg("add annotation")
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusCreated)
+	writeJSON(w, a)
 }
 
 // handleGetRecordings returns recordings, optionally filtered by

@@ -110,6 +110,61 @@ func TestWSRelayHubUnreachable(t *testing.T) {
 	}
 }
 
+func TestAnnotationsGetRequiresDatabase(t *testing.T) {
+	// DB-down gateway: every /api/* route answers 503 (§13 contract).
+	ts := newTestServer()
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/signals/00000000-0000-0000-0000-000000000000/annotations")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", resp.StatusCode)
+	}
+}
+
+func TestAnnotationsPostValidation(t *testing.T) {
+	// The body is validated before the database is consulted, so a
+	// nil-DB server can exercise the 400 paths.
+	ts := newTestServer()
+	defer ts.Close()
+	url := ts.URL + "/api/signals/00000000-0000-0000-0000-000000000000/annotations"
+
+	for _, body := range []string{`{}`, `{"userNote":""}`, `{"userNote":"   "}`} {
+		resp, err := http.Post(url, "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatalf("post %q: %v", body, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("post %q: status = %d, want 400", body, resp.StatusCode)
+		}
+	}
+
+	// Malformed JSON → 400.
+	resp, err := http.Post(url, "application/json", strings.NewReader(`{not json`))
+	if err != nil {
+		t.Fatalf("post malformed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("malformed body: status = %d, want 400", resp.StatusCode)
+	}
+
+	// A well-formed body passes validation and reaches the (absent)
+	// database → 503.
+	resp, err = http.Post(url, "application/json", strings.NewReader(`{"userNote":"bench note"}`))
+	if err != nil {
+		t.Fatalf("post valid: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("valid body: status = %d, want 503 (validation passed, DB down)", resp.StatusCode)
+	}
+}
+
 func TestWSRelayRejectsForeignOrigin(t *testing.T) {
 	hubTS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)

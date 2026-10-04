@@ -101,6 +101,49 @@ func (d *DB) GetSignal(ctx context.Context, id string) (*Signal, error) {
 	return &s, nil
 }
 
+// GetAnnotations returns a signal's user notes, newest first (§12.5).
+func (d *DB) GetAnnotations(ctx context.Context, signalID string) ([]Annotation, error) {
+	query := `
+		SELECT id, signal_id, COALESCE(user_note, ''), created_at
+		FROM annotations
+		WHERE signal_id = $1
+		ORDER BY created_at DESC, id DESC
+	`
+	rows, err := d.Pool.Query(ctx, query, signalID)
+	if err != nil {
+		return nil, fmt.Errorf("db: get annotations: %w", err)
+	}
+	defer rows.Close()
+
+	var notes []Annotation
+	for rows.Next() {
+		var a Annotation
+		if err := rows.Scan(&a.ID, &a.SignalID, &a.UserNote, &a.CreatedAt); err != nil {
+			return nil, err
+		}
+		notes = append(notes, a)
+	}
+	return notes, rows.Err()
+}
+
+// AddAnnotation appends a user note to a signal (§12.5). The signal
+// must exist — unknown IDs yield ErrNotFound (⇒ 404 at the API).
+func (d *DB) AddAnnotation(ctx context.Context, signalID, note string) (*Annotation, error) {
+	var a Annotation
+	err := d.Pool.QueryRow(ctx, `
+		INSERT INTO annotations (signal_id, user_note)
+		SELECT $1, $2 WHERE EXISTS (SELECT 1 FROM signals WHERE id = $1)
+		RETURNING id, signal_id, user_note, created_at
+	`, signalID, note).Scan(&a.ID, &a.SignalID, &a.UserNote, &a.CreatedAt)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("db: add annotation: %w", err)
+	}
+	return &a, nil
+}
+
 // GetRecording returns a single recording by ID.
 func (d *DB) GetRecording(ctx context.Context, id string) (*Recording, error) {
 	query := `

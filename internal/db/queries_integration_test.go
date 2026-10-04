@@ -63,6 +63,58 @@ func integrationSignal(id string, method string) *Signal {
 	}
 }
 
+// TestIntegrationAnnotations covers the §12.5 annotation queries:
+// round-trip, newest-first ordering, unknown-signal ErrNotFound, and
+// the empty-list case.
+func TestIntegrationAnnotations(t *testing.T) {
+	d := integrationPool(t)
+	ctx := context.Background()
+	id := "22222222-2222-2222-2222-222222222222"
+
+	if err := d.UpsertSignal(ctx, integrationSignal(id, "rules")); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	a1, err := d.AddAnnotation(ctx, id, "first note")
+	if err != nil {
+		t.Fatalf("add annotation 1: %v", err)
+	}
+	if a1.ID == "" || a1.SignalID != id || a1.UserNote != "first note" {
+		t.Fatalf("returned annotation = %+v", a1)
+	}
+
+	// Ensure created_at differs so the DESC ordering is meaningful.
+	time.Sleep(10 * time.Millisecond)
+	if _, err := d.AddAnnotation(ctx, id, "second note"); err != nil {
+		t.Fatalf("add annotation 2: %v", err)
+	}
+
+	notes, err := d.GetAnnotations(ctx, id)
+	if err != nil {
+		t.Fatalf("get annotations: %v", err)
+	}
+	if len(notes) != 2 {
+		t.Fatalf("want 2 annotations, got %d", len(notes))
+	}
+	if notes[0].UserNote != "second note" || notes[1].UserNote != "first note" {
+		t.Fatalf("newest-first ordering violated: %+v", notes)
+	}
+
+	// Unknown signal ⇒ ErrNotFound (⇒ 404 at the API).
+	if _, err := d.AddAnnotation(ctx, "99999999-9999-9999-9999-999999999999", "ghost"); err != ErrNotFound {
+		t.Fatalf("unknown signal: err = %v, want ErrNotFound", err)
+	}
+
+	// A known-shaped but note-less signal yields an empty list.
+	empty, err := d.GetAnnotations(ctx, "88888888-8888-8888-8888-888888888888")
+	if err != nil {
+		t.Fatalf("get annotations (empty): %v", err)
+	}
+	if len(empty) != 0 {
+		t.Fatalf("want 0 annotations, got %d", len(empty))
+	}
+}
+
 func TestIntegrationSignalActiveLifecycle(t *testing.T) {
 	d := integrationPool(t)
 	ctx := context.Background()

@@ -955,8 +955,10 @@ GIST on `path`. Populated in Phase 4 (§9.4).
 ### 12.5 `annotations`
 
 `id` UUID PK; `signal_id` → signals **ON DELETE CASCADE**;
-`user_note` TEXT; `created_at`. No REST surface in v1
-(`[gap]` — planned endpoint, §13.1).
+`user_note` TEXT; `created_at`. REST surface `[implemented]`
+(Phase 4): `GET/POST /api/signals/{id}/annotations` (§13.1) — lists
+are newest-first, POST returns `201` with the created row, unknown
+signal ⇒ `404`, blank/missing `userNote` ⇒ `400`.
 
 ### 12.6 `verifications`
 
@@ -979,7 +981,9 @@ whether `powerDbm` is an absolute level — false means relative dB.
 the `GET /ws` and `GET /ws/audio` relays (A3, §2.2) and the
 control-API proxy — `PUT /api/sdrs/{id}` forwards `freqHz`/`gainDb`
 and `GET /api/sdrs/{id}/status` proxies live state (§7.4); §13.2 gap
-fixes — all 4 closed (item 3 closed with the control-API proxy).**
+fixes — all 4 closed (item 3 closed with the control-API proxy).
+Signal annotations (`GET/POST /api/signals/{id}/annotations`) were
+the last `[planned]` row — `[implemented]` in Phase 4.**
 
 All routes are served by `api-gateway` on `:8080` (chi router).
 General contract:
@@ -1012,7 +1016,7 @@ General contract:
 | `GET /ws` | `[implemented]` | Transparent bidirectional relay to `ws-hub:8081/ws` (§2.2, Phase 2); the hub is dialed before the client upgrade — hub down ⇒ `502` JSON `{"error":"ws-hub unreachable"}`; foreign origins ⇒ `403` (`ALLOWED_ORIGINS`, §17.2) |
 | `GET /ws/audio` | `[implemented]` | Transparent relay to recorder `:9012/ws/audio?signal=<id>` (§10.4, Phase 2): one text `audio.meta` hello, then binary Opus packets pass untouched; recorder down ⇒ `502` JSON; foreign origins ⇒ `403` |
 | `GET /api/sdrs/{id}/status` | `[implemented]` | Proxy of capture control `GET /api/v1/status` filtered to the device (§7.4); capture down ⇒ `502`, unknown id ⇒ `404` |
-| `GET/POST /api/signals/{id}/annotations` | `[planned]` | List / add notes (§12.5) |
+| `GET/POST /api/signals/{id}/annotations` | `[implemented]` | List a signal's user notes (newest first) / add one — POST body `{"userNote"}` ⇒ `201` + created row; unknown signal ⇒ `404`; blank or missing note ⇒ `400` (§12.5) |
 
 ### 13.2 Gap fixes to existing endpoints
 
@@ -1497,7 +1501,7 @@ stores and the API client; `svelte-check` for types.
 | **1 — Correctness** | D4 negative offsets; A1 unlocated signals; §6.5 class enum; dead `/ws` hub removal; FLAC-claim cleanup (code + README); CORS/origin tightening — all **done** | new tests per §17.3 green; docs match behavior |
 | **2 — Features** | §15.3 RTL-SDR defect fixes; §10.1 real SSB + pair-aware registry; §11.2 active/TTL lifecycle; `sdr.status` producer (§14.4.3); `GET /ws` gateway relay (§2.2, A3); frontend data wiring (§14.4.2); YAML config loading + `min_confidence` enforcement (§16.1); **slices 1–3:** D3 scan loop + §7.4 control status; §8 dual-SDR verification with verified latch; recorder (D1 in-band WAV + §11.3 retention); first live `TEST_DATABASE_URL` integration run (§17.3); **slice 4:** Opus live streaming recorder side (D1b, §10.3–§10.4: per-signal mux + `/ws/audio` server + `Dockerfile.recorder`); **slice 5:** `/ws/audio` gateway relay (§2.2, §10.4); control-API proxy — `PUT /api/sdrs/{id}` retune forwarding + `GET /api/sdrs/{id}/status` (§7.4, §13.1, §13.2.3) — **all delivered** | §17.3 obligations green; dashboard live end-to-end |
 | **3 — Hardware & fidelity** | RTL-SDR on-hardware validation (§15.3 defect fixes delivered in Phase 2); HackRF driver (H1/H2) — **delivered, compile-validated** (§15.4); power calibration contract (§5.6) — **delivered** (contract + mechanism + honesty flag; measuring each SDR's physical offset → docs/HARDWARE.md runbook, slice 3); **slice 0:** multi-SDR sim enablement — `driver: simulator` accepted via YAML + two-device shared-ingest-port rehearsal (§16.1, §16.4) — **delivered**; `min_confidence` enforcement (§16.1) — **delivered in Phase 2**; **slice 3:** RTL-SDR on-hardware validation runbook + calibration tooling — docs/HARDWARE.md, cmd/rtl-list, cmd/rtl-calibrate (§15.3, §5.6) — **delivered and executed 2026-10-04** (V1–V8 pass, offsets applied); **fft fidelity:** §5.7 `fft.size`/`fft.window` wired end-to-end — signal-processor assembles 4096-pair records, rtl-calibrate `-fft-size`, ONNX inference reachable on the native bench (`make ort-lib`, `-tags onnx`) — **delivered 2026-10-04** (offsets recalibrated at the 4096 geometry per §6.3; §8 session 2) | 2 real SDRs verified end-to-end; calibration documented — **met 2026-10-04** (RTL-SDR half; HackRF deferred, no hardware) |
-| **4 — Deferred** | **in progress** — **slice 0:** D2 stub removal (`cmd/classifier`, `cmd/location-service`, compose entries; `Dockerfile.classifier` builds signal-processor only) — **delivered**; **slice 1:** annotations — `GET/POST /api/signals/{id}/annotations` + frontend UI (§12.5, §13.1); **slice 2:** `audio.level` coarse feed recorder → hub → frontend (§10.6, §14.2); **slice 3:** tracking — populate `tracks` from consecutive placements (§9.4, §12.4); **slice 4:** TDOA design — normative §9.5 + §4 frame v2 sample-accurate timing (design review gate); **slice 5:** TDOA engine — simulator first (injected offsets), then 3-SDR on-air fix; **slice 6:** multi-host + NTP/PTP — remote capture hosts, sync-quality reporting (§16) | per-slice; slices 4–5: TDOA fix on a known on-air transmitter; slice 6: second capture host with NTP/PTP sync-quality reporting |
+| **4 — Deferred** | **in progress** — **slice 0:** D2 stub removal (`cmd/classifier`, `cmd/location-service`, compose entries; `Dockerfile.classifier` builds signal-processor only) — **delivered**; **slice 1:** annotations — `GET/POST /api/signals/{id}/annotations` + SignalDetail notes UI — **delivered**; **slice 2:** `audio.level` coarse feed recorder → hub → frontend (§10.6, §14.2); **slice 3:** tracking — populate `tracks` from consecutive placements (§9.4, §12.4); **slice 4:** TDOA design — normative §9.5 + §4 frame v2 sample-accurate timing (design review gate); **slice 5:** TDOA engine — simulator first (injected offsets), then 3-SDR on-air fix; **slice 6:** multi-host + NTP/PTP — remote capture hosts, sync-quality reporting (§16) | per-slice; slices 4–5: TDOA fix on a known on-air transmitter; slice 6: second capture host with NTP/PTP sync-quality reporting |
 
 ## Appendix A — Decision Register
 
