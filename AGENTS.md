@@ -66,6 +66,13 @@ geospatial visualization.
 
 ## Commit / PR guidelines
 
+- **Every commit goes through a message file:** write the message
+  to a file inside `.git/` (e.g. `.git/COMMIT_MSG.txt`), commit
+  with `git commit -F .git/COMMIT_MSG.txt`, then delete the file.
+  Rationale: inline `git commit -m` strings — especially multiline
+  ones — get mangled by the shell integration layer on this
+  terminal. Parking the file under `.git/` keeps it out of
+  `git add -A` so it can never be swept into the commit itself.
 - Conventional Commits with a scope: `feat(recorder):`, `fix(lint):`,
   `docs(spec):`, `chore:`. Cite SPEC refs, e.g.
   `feat(recorder): ... (D1, §10.3-§10.4)`.
