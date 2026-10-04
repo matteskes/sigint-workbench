@@ -1,6 +1,6 @@
 {
   "globs": ["**/*.md"],
-  "ignores": ["**/node_modules/**", "frontend/node_modules/**"],
+  "ignores": ["**/node_modules/**", "frontend/node_modules/**", "**/.venv/**"],
   "config": {
     "default": true,
     // Keep prose at 80 cols, but exempt data tables and code blocks
