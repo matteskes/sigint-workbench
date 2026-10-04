@@ -26,6 +26,7 @@ import (
 	"syscall"
 	"time"
 
+	"sigint-workbench/internal/config"
 	"sigint-workbench/internal/sdr"
 )
 
@@ -66,18 +67,39 @@ func envInt(key string, def int) int {
 	return n
 }
 
+// joinConsumerAddrs renders the YAML consumer list as a
+// host:port,host:port CSV (the same shape as the CONSUMERS env).
+func joinConsumerAddrs(cs []config.ConsumerConfig) string {
+	addrs := make([]string, 0, len(cs))
+	for _, c := range cs {
+		if a := c.Addr(); a != "" {
+			addrs = append(addrs, a)
+		}
+	}
+	return strings.Join(addrs, ",")
+}
+
 func main() {
-	listenPort := flag.Int("port", envInt("LISTEN_PORT", 9000), "UDP listen port")
-	consumersCSV := flag.String("consumers", envStr("CONSUMERS", ""), "consumer list (host:port,host:port)")
+	configPath := flag.String("config", config.GetEnv("CONFIG", "config/iq-ingest.yaml"), "YAML config file")
+	port := flag.Int("port", 0, "UDP listen port (overrides env/config)")
+	consumersFlag := flag.String("consumers", "", "consumer list host:port,... (overrides env/config)")
 	flag.Parse()
 
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
 	log.SetPrefix("iq-ingest: ")
 
+	// YAML is the source of truth (§16.1); env and flags override.
+	var fileCfg config.IQIngestConfig
+	if err := config.Load(*configPath, &fileCfg); err != nil {
+		log.Printf("%v; using defaults/env", err)
+	}
+	listenPort := config.ResolveInt(*port, envInt("LISTEN_PORT", 0), fileCfg.ListenPort, 9000)
+	consumersCSV := config.ResolveString(*consumersFlag, os.Getenv("CONSUMERS"), joinConsumerAddrs(fileCfg.Consumers))
+
 	// Parse consumer list
 	var consumers []*consumer
-	if *consumersCSV != "" {
-		for _, part := range strings.Split(*consumersCSV, ",") {
+	if consumersCSV != "" {
+		for _, part := range strings.Split(consumersCSV, ",") {
 			part = strings.TrimSpace(part)
 			if part == "" {
 				continue
@@ -95,7 +117,7 @@ func main() {
 	}
 
 	// Create UDP listener
-	udpAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", *listenPort))
+	udpAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", listenPort))
 	if err != nil {
 		log.Fatalf("resolve: %v", err)
 	}
@@ -104,7 +126,7 @@ func main() {
 		log.Fatalf("listen: %v", err)
 	}
 	defer conn.Close()
-	log.Printf("listening on UDP :%d", *listenPort)
+	log.Printf("listening on UDP :%d", listenPort)
 
 	// Stats counters
 	var packetsRecv, packetsSent, bytesRecv, dropped atomic.Int64

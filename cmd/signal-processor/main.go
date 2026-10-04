@@ -35,6 +35,7 @@ import (
 	"time"
 
 	"sigint-workbench/internal/classify"
+	"sigint-workbench/internal/config"
 	"sigint-workbench/internal/db"
 	"sigint-workbench/internal/dsp"
 	"sigint-workbench/internal/sdr"
@@ -454,8 +455,24 @@ type frameClassifier interface {
 // onnxFrameClassifier runs the ONNX model on the peak's extracted
 // features; any failure (or missing features) falls back to rules.
 type onnxFrameClassifier struct {
-	onnx  *classify.ONNXClassifier
-	rules *classify.RuleClassifier
+	onnx          *classify.ONNXClassifier
+	rules         *classify.RuleClassifier
+	minConfidence float64 // §16.1: below this, the rules result wins
+}
+
+// resolveClassification merges an ONNX result with the rules result:
+// the frequency rules stay authoritative for the source enum (§6.5)
+// and the bandwidth comes from the frame measurement. An ONNX result
+// below min_confidence falls back to the rules classification
+// entirely (its method stays "rules"), enforcing
+// classifier.yaml onnx.min_confidence (§16.1).
+func resolveClassification(res, rules *classify.Result, bandwidthHz, minConfidence float64) *classify.Result {
+	if res.Confidence < minConfidence {
+		return rules
+	}
+	res.Bandwidth = bandwidthHz
+	res.Source = rules.Source
+	return res
 }
 
 func (c *onnxFrameClassifier) Classify(freqHz uint64, bandwidthHz float64, spectrum *dsp.FFTResult) *classify.Result {
@@ -465,41 +482,60 @@ func (c *onnxFrameClassifier) Classify(freqHz uint64, bandwidthHz float64, spect
 	rules := c.rules.Classify(freqHz, bandwidthHz, spectrum)
 	if f := classify.ExtractFeatures(spectrum, freqHz); f != nil {
 		if res, err := c.onnx.Classify(f.ToVector(), freqHz); err == nil && res != nil {
-			res.Bandwidth = bandwidthHz
-			res.Source = rules.Source
-			return res
+			return resolveClassification(res, rules, bandwidthHz, c.minConfidence)
 		}
 	}
 	return rules
 }
 
 func main() {
-	listenPort := flag.Int("port", envInt("LISTEN_PORT", 9010), "UDP listen port")
-	thresholdDB := flag.Float64("threshold", -60, "peak threshold dB")
-	maxPeaks := flag.Int("max-peaks", 20, "max peaks per frame")
-	configPath := flag.String("config", envStr("SDR_CONFIG", "config/sdr-capture.yaml"), "sdr-capture config (SDR locations)")
-	modelPath := flag.String("model", envStr("MODEL_PATH", ""), "ONNX classifier model path (empty = rules only)")
+	procCfgPath := flag.String("processor-config", config.GetEnv("PROCESSOR_CONFIG", "config/signal-processor.yaml"), "signal-processor YAML config file")
+	clsCfgPath := flag.String("classifier-config", config.GetEnv("CLASSIFIER_CONFIG", "config/classifier.yaml"), "classifier YAML config file (min_confidence, model_path)")
+	configPath := flag.String("config", config.GetEnv("SDR_CONFIG", "config/sdr-capture.yaml"), "sdr-capture config (SDR locations)")
+	listenPortFlag := flag.Int("port", 0, "UDP listen port (overrides env/config)")
+	thresholdFlag := flag.Float64("threshold", 0, "peak threshold dB (overrides env/config)")
+	maxPeaksFlag := flag.Int("max-peaks", 0, "max peaks per frame (overrides env/config)")
+	modelPathFlag := flag.String("model", "", "ONNX classifier model path (overrides env/config; empty = rules only)")
 	flag.Parse()
 
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
 	log.SetPrefix("signal-processor: ")
 
+	// YAML files are the source of truth (§16.1); env and flags override.
+	var procCfg config.SignalProcessorConfig
+	if err := config.Load(*procCfgPath, &procCfg); err != nil {
+		log.Printf("%v; using defaults/env", err)
+	}
+	var clsCfg config.ClassifierConfig
+	if err := config.Load(*clsCfgPath, &clsCfg); err != nil {
+		log.Printf("%v; using built-in classifier defaults", err)
+	}
+
+	listenPort := config.ResolveInt(*listenPortFlag, envInt("LISTEN_PORT", 0), procCfg.ListenPort, 9010)
+	thresholdDB := config.ResolveFloat(*thresholdFlag, procCfg.PeakDetection.ThresholdDB, -60)
+	maxPeaks := config.ResolveInt(*maxPeaksFlag, procCfg.PeakDetection.MaxPeaks, 20)
+	modelPath := config.ResolveString(*modelPathFlag, os.Getenv("MODEL_PATH"), clsCfg.ModelPath)
+	minConfidence := clsCfg.ONNX.MinConfidence
+	if minConfidence <= 0 {
+		minConfidence = 0.5 // classifier.yaml documents 0.5 as the default
+	}
+
 	// DSP components
 	peakDetector := &dsp.PeakDetector{
-		ThresholdDB: *thresholdDB,
-		MinSpacing:  10,
-		TopN:        *maxPeaks,
+		ThresholdDB: thresholdDB,
+		MinSpacing:  config.ResolveInt(procCfg.PeakDetection.MinSpacingBins, 10),
+		TopN:        maxPeaks,
 	}
 	ruleClassifier := classify.NewRuleClassifier()
 	var classifier frameClassifier = ruleClassifier
-	if *modelPath != "" {
-		onnxClassifier := classify.NewONNXClassifier(*modelPath)
+	if modelPath != "" {
+		onnxClassifier := classify.NewONNXClassifier(modelPath)
 		if err := onnxClassifier.Load(); err != nil {
 			log.Printf("ONNX classifier unavailable (%v); using rules", err)
 		} else {
 			defer onnxClassifier.Close()
-			classifier = &onnxFrameClassifier{onnx: onnxClassifier, rules: ruleClassifier}
-			log.Printf("loaded ONNX classifier %s", *modelPath)
+			classifier = &onnxFrameClassifier{onnx: onnxClassifier, rules: ruleClassifier, minConfidence: minConfidence}
+			log.Printf("loaded ONNX classifier %s (min_confidence=%.2f)", modelPath, minConfidence)
 		}
 	}
 
@@ -541,7 +577,7 @@ func main() {
 	}
 
 	// UDP listener
-	udpAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", *listenPort))
+	udpAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", listenPort))
 	if err != nil {
 		log.Fatalf("resolve: %v", err)
 	}
@@ -551,7 +587,7 @@ func main() {
 	}
 	defer conn.Close()
 	log.Printf("listening on UDP :%d  threshold=%.0f dB  max_peaks=%d",
-		*listenPort, *thresholdDB, *maxPeaks)
+		listenPort, thresholdDB, maxPeaks)
 
 	// Buffer
 	buf := make([]byte, sdr.IQHeaderSize+sdr.MaxIQSamplesPerFrame*4)

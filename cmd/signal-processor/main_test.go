@@ -280,6 +280,31 @@ func TestSDRSilenceDeactivates(t *testing.T) {
 	t.Fatal("expected sdr.status deactivation after silence")
 }
 
+func TestResolveClassification(t *testing.T) {
+	onnx := &classify.Result{Modulation: "CW", Confidence: 0.9, Method: "onnx", Bandwidth: 0, Source: "wrong"}
+	rules := &classify.Result{Modulation: "AM", Source: "aviation", Confidence: 0.7, Method: "rules", Bandwidth: 12_000}
+
+	// Above threshold: ONNX wins, source comes from rules, bandwidth
+	// from the frame measurement.
+	got := resolveClassification(onnx, rules, 25_000, 0.5)
+	if got != onnx {
+		t.Fatalf("expected the onnx result to be returned in place, got %+v", got)
+	}
+	if got.Source != "aviation" || got.Bandwidth != 25_000 || got.Method != "onnx" {
+		t.Fatalf("merged result = %+v, want source=aviation bandwidth=25000 method=onnx", got)
+	}
+
+	// Below threshold: rules fallback (method stays "rules", §16.1).
+	low := &classify.Result{Modulation: "CW", Confidence: 0.3, Method: "onnx"}
+	got = resolveClassification(low, rules, 25_000, 0.5)
+	if got != rules {
+		t.Fatalf("expected rules fallback below min_confidence, got %+v", got)
+	}
+	if got.Method != "rules" {
+		t.Errorf("fallback method = %q, want rules", got.Method)
+	}
+}
+
 func TestQueueDropWhenFull(t *testing.T) {
 	// Silence expected drop noise.
 	log.SetOutput(io.Discard)

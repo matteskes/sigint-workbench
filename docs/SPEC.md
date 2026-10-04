@@ -1126,34 +1126,37 @@ gate.
 
 ## 16. Configuration Reference
 
-**Status: the YAML reference is normative; the gap is that most
-binaries do not load it yet (§16.1).**
+**Status: the YAML reference is normative and loaded — iq-ingest and
+signal-processor read their files with flag/env overrides (§16.1);
+the recorder (stub) and `fft.*` wiring (§5.7) remain `[planned]`.**
 
-### 16.1 Config surface — `[gap]`
+### 16.1 Config surface — `[implemented]` (recorder + `fft.*` remain)
 
-Runtime configuration today is a **mixed surface**:
+Runtime configuration is a **layered surface** (flag > env > YAML >
+built-in default):
 
-| Service | Reads | Does NOT read |
-| --------- | ------- | --------------- |
-| sdr-capture | `config/sdr-capture.yaml` (via `-config`), flags `-sim/-freq/-gain/-listen` | — |
-| iq-ingest | env `LISTEN_PORT`, `CONSUMERS` (csv `host:port,...`) | `config/iq-ingest.yaml` |
-| signal-processor | flags `-port/-threshold/-max-peaks/-config/-model`, env `SIGNAL_TTL`, `SDR_CONFIG`, `MODEL_PATH`, `WS_HUB_URL` | `config/signal-processor.yaml`, `config/classifier.yaml` |
-| recorder | (stub — nothing) | `config/recorder.yaml` |
-| api-gateway | env `RECORDINGS_DIR`, `ALLOWED_ORIGINS` (CORS allowlist, §17.2) | — |
+| Service | Reads |
+| --------- | ------- |
+| sdr-capture | `config/sdr-capture.yaml` (via `-config`), flags `-sim/-freq/-gain/-listen` |
+| iq-ingest | `config/iq-ingest.yaml` (`-config`/`CONFIG`); env `LISTEN_PORT`, `CONSUMERS` and flags `-port/-consumers` override |
+| signal-processor | `config/signal-processor.yaml` + `config/classifier.yaml` (`-processor-config`/`-classifier-config`); flags `-port/-threshold/-max-peaks/-model` and env `SIGNAL_TTL`, `SDR_CONFIG`, `MODEL_PATH`, `WS_HUB_URL` override |
+| recorder | (stub — nothing) `config/recorder.yaml` `[planned]` |
+| api-gateway | env `RECORDINGS_DIR`, `ALLOWED_ORIGINS` (CORS allowlist, §17.2), `WS_HUB_ADDR` (`/ws` relay, §2.2) |
 
 **Target:** the YAML files in `config/` are the **single source of
-truth**; each service MUST load its own file (flags/env remain as
-overrides for dev use). Until then, the defaults in §16.2–16.5 are
-normative and the YAML documents them.
+truth**; each service loads its own file (flags/env remain as
+overrides for dev use). The defaults in §16.2–16.5 remain normative
+and the YAML documents them.
 
-Known YAML-vs-behavior conflicts to resolve when wiring:
+Known YAML-vs-behavior conflicts:
 
-- `classifier.yaml` `onnx.min_confidence: 0.5` — **not enforced** by
-  the ONNX path today (argmax always wins). Either enforce
-  (low-confidence → rules fallback) or document as advisory.
+- `classifier.yaml` `onnx.min_confidence: 0.5` — **enforced**
+  (`[implemented]`): an ONNX result below the threshold falls back to
+  the rules classification (whose `method` stays `rules`).
 - `recorder.yaml` `audio.format` — resolved (Phase 1): `flac`
   removed; only `wav` is documented (§10.5).
-- `signal-processor.yaml` `fft.*` — see §5.7 (not wired).
+- `signal-processor.yaml` `fft.*` — see §5.7 (not wired,
+  `[planned]`).
 
 ### 16.2 `sdr-capture.yaml` (loaded)
 

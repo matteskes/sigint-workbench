@@ -35,7 +35,10 @@ services:
       args: { SERVICE: iq-ingest }
     ports:
       - "${IQ_INGEST_UDP_PORT:-9000}:9000/udp"
+    volumes:
+      - ./config/iq-ingest.yaml:/config/iq-ingest.yaml:ro
     environment:
+      - CONFIG=/config/iq-ingest.yaml
       - LISTEN_PORT=9000
       - CONSUMERS=signal-processor:9010
       - LOG_LEVEL=${LOG_LEVEL:-info}
@@ -47,17 +50,21 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.classifier
+    volumes:
+      - ./config/signal-processor.yaml:/config/signal-processor.yaml:ro
+      - ./config/classifier.yaml:/config/classifier.yaml:ro
+      - ./config/sdr-capture.yaml:/config/sdr-capture.yaml:ro
+      - ./models:/models:ro
     environment:
       - LISTEN_PORT=9010
       - DB_URL=${DB_URL:-postgres://sdr:sdr@db:5432/sdr?sslmode=disable}
       - WS_HUB_URL=http://ws-hub:8081
       - SDR_CONFIG=/config/sdr-capture.yaml
+      - PROCESSOR_CONFIG=/config/signal-processor.yaml
+      - CLASSIFIER_CONFIG=/config/classifier.yaml
       - SIGNAL_TTL=30
       - MODEL_PATH=/models/classifier.onnx
       - LOG_LEVEL=${LOG_LEVEL:-info}
-    volumes:
-      - ./config/sdr-capture.yaml:/config/sdr-capture.yaml:ro
-      - ./models:/models:ro
     networks: [sdr-net]
     depends_on: [iq-ingest, ws-hub]
     restart: unless-stopped
