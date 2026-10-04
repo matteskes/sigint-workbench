@@ -268,7 +268,9 @@ size and length bound (v2 maximum datagram: `64 + 1024*4 = 4160`
 bytes). During rollout a mixed stack is safe by construction — a v1
 ingest counts v2 datagrams as bad-magic drops (visible in the drop
 counters), and the v2 ingest still decodes v1. The encoder emits v2
-only after the deploy of this slice; there is no negotiation.
+only after the deploy of this slice; there is no negotiation. The
+implementation boundary (encoder flip, dual-format acceptance,
+rollout) is §9.6 (slice 5).
 
 Cost scaling is linear per receiver: ingest bandwidth (~8 MB/s per
 SDR at 2 MSPS int16) and per-frame processing in the
@@ -899,6 +901,72 @@ pair via outlier rejection. The 2-receiver locus-only case is
 exercised as the degenerate solve. On-air validation follows
 against a known continuous transmitter (2× RTL-SDR + HackRF,
 docs/HARDWARE.md §7), single-host first.
+
+### 9.6 TDOA engine wiring — **DRAFT, slice 5**
+
+**This section is a draft for Phase 4 slice 5 (§17.4) and is
+pending design review. Nothing here is implemented yet.**
+
+**Placement.** The engine is a pure-Go package `internal/tdoa`
+with three parts: `Buffer` (per-receiver contiguous-run store —
+the §9.5 alignment buffer), `Correlator` (GCC-PHAT pair delays
+with parabolic refinement), and `Solver` (weighted Gauss–Newton
+with outlier rejection). `internal/tdoa` imports no service and no
+database code; simulator tests exercise it directly with injected
+delays. The wiring lives in signal-processor: a `tdoa` goroutine
+consumes assembled windows (dual-ported from the existing per-SDR
+assembler, §5.1) and emits fixes — no new service, no duplicated
+IQ stream.
+
+**Protocol v2 delivery.** Slice 5 implements §4.5 end to end:
+`sdr-capture` emits `SDR2` frames (64-byte header, CLOCK_REALTIME
+anchor at the first sample, per-sender `seq`/`sample_index`);
+`iq-ingest`, `recorder`, and `signal-processor` accept both
+formats and keep per-sender gap counters from `seq`. The encoder
+stays on v1 until every consumer accepts v2 (config
+`stream_format: sdr1 | sdr2`, default `sdr1`, flipped in compose
+once rollout completes).
+
+**Trigger.** A solve attempt runs when, for a signal persisting
+≥ 2 s, ≥ 2 receivers simultaneously cover its frequency (monitor
+mode or parked sweep) and the alignment buffer holds intersecting
+gap-free runs for the pair set. Attempts are rate-limited to
+≤ 1 Hz per signal. Receivers swept off the emission contribute no
+window and are simply absent from that solve.
+
+**Results.**
+
+- Persistence: fixes are `signal_locations` rows with
+  `method = 'tdoa'` (migration 004 adds nullable `residual_ns`,
+  `pairs_used`, `max_baseline_m`, `reference` columns; NULL for
+  non-TDOA rows). TDOA rows feed §9.4 tracking like any placement.
+- The §9.5 placement-overwrite gate decides whether a fix
+  replaces the receiver-position placement or is event-only.
+- Events: `signal.tdoa` (§14.2) carries signal id, fix or locus,
+  the quality surface, `reference`, and receiver ids; hub
+  allowlist extended. Locus-only results emit
+  `locus: {lat1,lng1,lat2,lng2}` and persist nothing.
+- REST: TDOA quality fields ride existing location payloads when
+  `method = 'tdoa'`; no new endpoint.
+
+**Accuracy budget.** A fix is accepted if the post-solve RMS
+residual maps to ≤ `accuracy_budget_m` (defaults: **50 m**
+simulator gate, **200 m** on-air) — otherwise a `signal.tdoa`
+event with `accepted: false` and a reason is emitted, and nothing
+persists. Budgets are config, not constants.
+
+**Config (signal-processor):** `tdoa.enabled` (false),
+`tdoa.window_ms` (10), `tdoa.buffer_horizon_ms` (500),
+`tdoa.pair_cap` (15), `tdoa.outlier_sigma` (3),
+`tdoa.accuracy_budget_m` (200), `tdoa.overwrite_placement` (true,
+covariance-gated).
+
+**Testing obligations (§17.3):** the §9.5 validation gate as
+tests — deterministic-seed generator (baseband tone,
+geometry-true per-pair delays, AWGN, one corrupted pair; assert
+fix-within-budget + rejection), 2-receiver locus case, v2
+encode/decode round-trip + v1/v2 mixed acceptance + gap counters,
+live-DB migration test for the new columns.
 
 ## 10. Audio
 
@@ -1685,7 +1753,7 @@ stores and the API client; `svelte-check` for types.
 | **1 — Correctness** | D4 negative offsets; A1 unlocated signals; §6.5 class enum; dead `/ws` hub removal; FLAC-claim cleanup (code + README); CORS/origin tightening — all **done** | new tests per §17.3 green; docs match behavior |
 | **2 — Features** | §15.3 RTL-SDR defect fixes; §10.1 real SSB + pair-aware registry; §11.2 active/TTL lifecycle; `sdr.status` producer (§14.4.3); `GET /ws` gateway relay (§2.2, A3); frontend data wiring (§14.4.2); YAML config loading + `min_confidence` enforcement (§16.1); **slices 1–3:** D3 scan loop + §7.4 control status; §8 dual-SDR verification with verified latch; recorder (D1 in-band WAV + §11.3 retention); first live `TEST_DATABASE_URL` integration run (§17.3); **slice 4:** Opus live streaming recorder side (D1b, §10.3–§10.4: per-signal mux + `/ws/audio` server + `Dockerfile.recorder`); **slice 5:** `/ws/audio` gateway relay (§2.2, §10.4); control-API proxy — `PUT /api/sdrs/{id}` retune forwarding + `GET /api/sdrs/{id}/status` (§7.4, §13.1, §13.2.3) — **all delivered** | §17.3 obligations green; dashboard live end-to-end |
 | **3 — Hardware & fidelity** | RTL-SDR on-hardware validation (§15.3 defect fixes delivered in Phase 2); HackRF driver (H1/H2) — **delivered, compile-validated** (§15.4); power calibration contract (§5.6) — **delivered** (contract + mechanism + honesty flag; measuring each SDR's physical offset → docs/HARDWARE.md runbook, slice 3); **slice 0:** multi-SDR sim enablement — `driver: simulator` accepted via YAML + two-device shared-ingest-port rehearsal (§16.1, §16.4) — **delivered**; `min_confidence` enforcement (§16.1) — **delivered in Phase 2**; **slice 3:** RTL-SDR on-hardware validation runbook + calibration tooling — docs/HARDWARE.md, cmd/rtl-list, cmd/rtl-calibrate (§15.3, §5.6) — **delivered and executed 2026-10-04** (V1–V8 pass, offsets applied); **fft fidelity:** §5.7 `fft.size`/`fft.window` wired end-to-end — signal-processor assembles 4096-pair records, rtl-calibrate `-fft-size`, ONNX inference reachable on the native bench (`make ort-lib`, `-tags onnx`) — **delivered 2026-10-04** (offsets recalibrated at the 4096 geometry per §6.3; §8 session 2) | 2 real SDRs verified end-to-end; calibration documented — **met 2026-10-04** (RTL-SDR half; HackRF deferred, no hardware) |
-| **4 — Deferred** | **in progress** — **slice 0:** D2 stub removal (`cmd/classifier`, `cmd/location-service`, compose entries; `Dockerfile.classifier` builds signal-processor only) — **delivered**; **slice 1:** annotations — `GET/POST /api/signals/{id}/annotations` + SignalDetail notes UI — **delivered**; **slice 2:** `audio.level` coarse feed recorder → hub → frontend — **delivered** (scope settled: one event per actively demodulated §10.2 session); **slice 3:** tracking — populate `tracks` from consecutive placements (§9.4, §12.4) — **delivered** (1 Hz persist + `track.update`, final row on TTL sweep, `GET /api/signals/{id}/track`, SignalDetail speed/heading, MapView polyline); **slice 4:** TDOA design — normative §9.5 + §4 frame v2 sample-accurate timing (design review gate) — **drafted, in review**; **slice 5:** TDOA engine — simulator first (injected offsets), then 3-SDR on-air fix; **slice 6:** multi-host + NTP/PTP — remote capture hosts, sync-quality reporting (§16) | per-slice; slices 4–5: TDOA fix on a known on-air transmitter; slice 6: second capture host with NTP/PTP sync-quality reporting |
+| **4 — Deferred** | **in progress** — **slice 0:** D2 stub removal (`cmd/classifier`, `cmd/location-service`, compose entries; `Dockerfile.classifier` builds signal-processor only) — **delivered**; **slice 1:** annotations — `GET/POST /api/signals/{id}/annotations` + SignalDetail notes UI — **delivered**; **slice 2:** `audio.level` coarse feed recorder → hub → frontend — **delivered** (scope settled: one event per actively demodulated §10.2 session); **slice 3:** tracking — populate `tracks` from consecutive placements (§9.4, §12.4) — **delivered** (1 Hz persist + `track.update`, final row on TTL sweep, `GET /api/signals/{id}/track`, SignalDetail speed/heading, MapView polyline); **slice 4:** TDOA design — normative §9.5 + §4 frame v2 sample-accurate timing (design review gate) — **drafted, in review**; **slice 5:** TDOA engine — simulator first (injected offsets), then 3-SDR on-air fix — **spec drafted, in review**; **slice 6:** multi-host + NTP/PTP — remote capture hosts, sync-quality reporting (§16) | per-slice; slices 4–5: TDOA fix on a known on-air transmitter; slice 6: second capture host with NTP/PTP sync-quality reporting |
 
 ## Appendix A — Decision Register
 
