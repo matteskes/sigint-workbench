@@ -27,7 +27,7 @@ SIGINT Workbench is a single-host, multi-service SDR monitoring pipeline.
 It captures raw IQ samples, detects signals in the FFT spectrum,
 classifies modulation by frequency rules and (optionally) ONNX inference,
 attaches location from per-SDR coordinates, streams events to a web
-dashboard, and (planned) records decoded audio.
+dashboard, and records decoded audio.
 
 ### In scope (v1)
 

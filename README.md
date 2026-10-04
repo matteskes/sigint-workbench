@@ -5,19 +5,20 @@ and geospatial visualization.
 
 ## Features
 
-- **Dual-SDR wideband scanning** with cross-verification *(planned)*
-- **Real-time signal detection** and classification; tracking *(planned)*
+- **Dual-SDR wideband scanning** with cross-verification
+- **Real-time signal detection** and classification (rules + ONNX);
+  tracking *(planned)*
 - **Multilateration (TDOA)** — geolocate a craft by passively
   receiving its radio emissions (e.g., ADS-B/Mode S or ACARS)
   and comparing arrival times across the SDR network *(planned)*
-- **FM/AM voice demodulation** with live audio streaming (Opus over
-  WebSocket) *(planned)*
-- **Signal recording** — raw IQ + decoded audio (WAV) *(planned)*
-- **PostGIS-backed geospatial database** for signal locations and
+- **FM/AM/SSB voice demodulation** with live audio streaming (Opus
+  over WebSocket)
+- **Signal recording** — decoded audio (WAV) + raw IQ
+- **PostGIS-backed geospatial database** for signal locations;
   movement tracks *(planned)*
 - **Interactive map** (MapLibre GL + self-hosted OSM tiles) with
-  live signal overlay *(planned)*
-- **Spectrum analyzer** and **waterfall display**
+  live signal overlay
+- **Spectrum analyzer** and **waterfall display** *(planned)*
 - **Extensible demodulator and classifier framework** — add new modes
   by implementing one interface
 
@@ -60,11 +61,7 @@ and geospatial visualization.
 | `ws-hub` | Go | Internal WebSocket event fan-out (not client-facing) |
 | `db` | PostGIS | Spatial database (PostgreSQL 16): signals, recordings, tracks |
 | `tiles` | tileserver-gl | Self-hosted OSM vector tiles |
-| `frontend` | SvelteKit | Interactive map + signal list; live data delivered, audio player *(planned)* |
-
-> `cmd/classifier` and `cmd/location-service` are legacy stubs: their
-> logic is merged into `signal-processor` (D2) and they are scheduled
-> for removal.
+| `frontend` | SvelteKit | Interactive map + signal list; live data + recording playback delivered, live Opus listening *(planned)* |
 
 ## Technology Stack
 
@@ -78,7 +75,7 @@ and geospatial visualization.
 | Map | MapLibre GL JS (svelte-maplibre) |
 | Tiles | tileserver-gl (self-hosted OSM MBTiles) |
 | Styling | Tailwind CSS 4 |
-| Audio | Go demodulation (FM, AM) → PCM → WAV; Opus live streaming *(planned)* |
+| Audio | Go demodulation (FM, AM, SSB) → PCM → WAV; Opus live streaming |
 | Real-time | WebSocket (Go hub, native browser client) |
 | Orchestration | Docker Compose with profiles |
 | Config | YAML per service |
@@ -141,8 +138,7 @@ make deploy
 
 ```text
 sigint-workbench/
-├── cmd/                    # One main.go per service (8 binaries; classifier
-│                           # + location-service are legacy stubs, see D2)
+├── cmd/                    # One main.go per service (8 binaries)
 ├── internal/
 │   ├── sdr/                # SDR interface, drivers, UDP protocol
 │   ├── dsp/                # FFT, peak detection, filters, AGC
