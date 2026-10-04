@@ -270,6 +270,15 @@ ingest counts v2 datagrams as bad-magic drops (visible in the drop
 counters), and the v2 ingest still decodes v1. The encoder emits v2
 only after the deploy of this slice; there is no negotiation.
 
+Cost scaling is linear per receiver: ingest bandwidth (~8 MB/s per
+SDR at 2 MSPS int16) and per-frame processing in the
+signal-processor. The frame format itself is per-sender and carries
+no pairwise state, so receiver count is unbounded by the protocol.
+Multi-host topologies (remote capture hosts → central `iq-ingest`)
+and the clock-sync-quality surface are §16 (slice 6);
+unicast-per-capture-host is the supported topology,
+multicast/compression is future work.
+
 **Header layout (64 bytes, little-endian, as in §4.1):**
 
 ```text
@@ -843,12 +852,53 @@ model already carries the enum).
    solution covariance; otherwise the TDOA fix is published as an
    event only.
 
-**Validation path (slice 5, §17.4):** simulator first — virtual
-receivers with injected per-pair delays at known positions must be
-recovered within the accuracy budget; then on-air against a known
-continuous transmitter (2× RTL-SDR + HackRF, docs/HARDWARE.md §7).
-On-air tolerance is dominated by clock sync quality, which is why
-single-host multi-SDR is the first on-air configuration.
+**Receiver networks (N > 2, normative):**
+
+- **Pair selection.** The engine computes GCC-PHAT delays for
+  **all** receiver pairs while `C(N,2) ≤ pair_cap` (configurable,
+  default `pair_cap = 15`), which yields N−1 independent baselines
+  plus redundancy. Above the cap it MUST fall back to a
+  **reference-receiver spanning tree** (N−1 pairs).
+- **Reference receiver.** Chosen per solve, in order: (1) best
+  clock sync quality, (2) longest gap-free sample run in the
+  window, (3) most central position (minimum total distance to the
+  others). Reported as `reference` in the fix.
+- **Weighting.** Each pair's observation equation is weighted by
+  `1/σᵢⱼ²`, where `σᵢⱼ` at minimum combines the host-clock
+  uncertainty of both receivers (§16) and correlation-peak
+  quality. Until slice 6 ships sync-quality data, single-host
+  solves are uniformly weighted (shared clock ⇒ zero relative
+  skew by construction).
+- **Eligibility gate.** A pair is eligible only if its combined
+  clock uncertainty, scaled by `c ≈ 300 m/µs`, stays inside the
+  configured accuracy budget. Ineligible pairs are excluded from
+  the solve and counted in the result.
+- **Outlier rejection.** After the first solve, the pair with the
+  largest normalized residual is dropped and the solve repeated
+  while any residual exceeds a configurable threshold (default
+  3σ) and ≥ 2 independent baselines remain. Falling below 2
+  baselines degrades the result to locus-only (or no-fix with
+  reason) — never a silent point fix.
+- **Geometry model.** Receiver lat/lng are projected to a local
+  ENU frame (origin = reference receiver), the solve is 2-D, and
+  the fix is converted back to lat/lng. Mixed receiver altitudes
+  introduce a small known bias; a 3-D solve is a future
+  refinement, out of scope for slices 4–6.
+- **Alignment buffer.** Per-receiver contiguous runs are buffered
+  for a configurable horizon (default 500 ms) sized to exceed max
+  cross-host skew + jitter + window length; window matching is by
+  UTC-anchor intersection of gap-free `sample_index` runs
+  (mechanism step 1).
+
+**Validation path (slice 5, §17.4):** simulator first, and
+N-generic from day one — a 5-receiver virtual network with
+randomized geometry, per-pair injected delays + noise, and one
+deliberately corrupted pair, must recover the known transmitter
+position within the accuracy budget **and** reject the corrupted
+pair via outlier rejection. The 2-receiver locus-only case is
+exercised as the degenerate solve. On-air validation follows
+against a known continuous transmitter (2× RTL-SDR + HackRF,
+docs/HARDWARE.md §7), single-host first.
 
 ## 10. Audio
 
