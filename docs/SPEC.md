@@ -1051,7 +1051,7 @@ this interface.
 | Driver | Build tag | Freq range | Max BW | TX | Status |
 | -------- | ----------- | ------------ | -------- | ---- | -------- |
 | Simulator | (none) | 24 MHz – 1.7 GHz (declared) | 10 MHz | no | `[implemented]` — the CI testbed |
-| RTL-SDR (RTL2832U) | `rtlsdr` (cgo, librtlsdr) | 24 MHz – 1.7 GHz | 3.2 MHz | no | `[implemented]`, hardware-unverified |
+| RTL-SDR (RTL2832U) | `rtlsdr` (cgo, librtlsdr) | 24 MHz – 1.7 GHz | 3.2 MHz | no | `[implemented]` — §15.3 fixes compile-validated, hardware-unverified |
 | HackRF One | `hackrf` (cgo, libhackrf) | **1 MHz – 7250 MHz** (H1) | ≤ **56 MSPS** (H1; practical cap ≈ 20 MSPS) | hardware has TX; **prohibited** | `[planned]` |
 
 **Simulator normative defaults** (testbed fixture): center set per
@@ -1068,26 +1068,35 @@ Note the AM fixture sits at a **negative** offset: with today's
 one-sided FFT (§5.3 gap) it is invisible — the simulator is the
 canonical reproducer for the D4 fix.
 
-### 15.3 RTL-SDR known defects (`[gap]`, must fix before hardware
+### 15.3 RTL-SDR defect fixes (`[implemented]`, hardware-unverified)
 
-phase)
+All three defects are fixed and compile-validated with
+`go build -tags rtlsdr ./cmd/sdr-capture` (no hardware in CI):
 
-1. **Byte/element confusion in `ReadIQ`:** `rtlsdr_read_sync` is
-   passed `len(buf)` where it expects **bytes**, and the returned
-   byte count is reported as an **int16 count**. The capture loop
-   then slices `buf[:n]` as samples — at full speed this reads the
-   buffer twice as large as the valid data. Fix: pass
-   `uint32(len(buf)*2)`, convert the return with `n/2`.
-2. **Device selection:** `NewRTLSDR(id, usbIndex)` counts devices
-   with the index, but `Open` always opens USB index 0. `usb_index`
-   from config must be honored in `Open`.
-3. **Error swallowing:** `rtlsdr_set_center_freq`,
-   `rtlsdr_set_sample_rate`, `rtlsdr_set_gain` return values are
-   ignored; failures must surface (the §7.1 scan loop depends on
-   `SetFrequency` errors).
+1. **Byte/element confusion in `ReadIQ`:** `rtlsdr_read_sync` is now
+   given `len(buf)` **bytes** — the RTL2832U delivers one unsigned
+   8-bit I or Q sample per byte, matching one converted sample per
+   int16 slot — and each byte is scaled to full-scale int16 via
+   `(b-128)<<8`, so downstream keeps dividing by 32768. The returned
+   count is the converted sample count, trimmed to complete I/Q
+   pairs. (Requesting `len(buf)*2` bytes would overshoot
+   `MaxIQSamplesPerFrame` and mis-pair I/Q.)
+2. **Device selection:** `NewRTLSDR` stores the configured
+   `usb_index`; `Open` opens that index (was hardcoded 0) and resets
+   the demod buffer. Device name, product and serial are queried
+   for metadata without opening the device.
+3. **Error swallowing:** `set_center_freq`, `set_sample_rate`,
+   `set_tuner_gain` (with `set_tuner_gain_mode`; gain in tenths of
+   dB; negative dB selects auto gain) and `read_sync` return values
+   are checked and surfaced; `sdr-capture` aborts startup if the
+   initial frequency/rate/gain applies fail.
 
-All three are invisible to CI (no hardware); they gate the
-production Linux profile.
+The cgo bindings were rewritten against the real librtlsdr ABI
+(`rtlsdr_dev_t **` out-param from `rtlsdr_open`, argument-less
+`rtlsdr_get_device_count`, `rtlsdr_get_device_usb_strings`, 4-arg
+`rtlsdr_read_sync`) — the previous file referenced functions that do
+not exist in the library. On-hardware validation remains a Phase 3
+gate.
 
 ### 15.4 HackRF (H1/H2) — `[planned]` contract
 
@@ -1310,7 +1319,7 @@ stores and the API client; `svelte-check` for types.
 | **0 — Core pipeline** (current) | capture → ingest → DSP → classify → persist → events; dashboard shell; CI | smoke-onnx green; this spec written |
 | **1 — Correctness** | D4 negative offsets; A1 unlocated signals; §6.5 class enum; dead `/ws` hub removal; FLAC-claim cleanup (code + README); CORS/origin tightening — all **done** | new tests per §17.3 green; docs match behavior |
 | **2 — Features** | D3 scan loop; §8 verification in processor; recorder (D1 in-band + D6 retention); Opus live streaming (D1b) + gateway relays (§2.2); frontend data wiring; control-API proxy + `sdr.status` events | §17.3 feature obligations all green; dashboard live end-to-end |
-| **3 — Hardware & fidelity** | RTL-SDR defect fixes (§15.3) + on-hardware validation; HackRF driver (H1/H2); power calibration contract (§5.6); `min_confidence` enforcement (§16.1) | 2 real SDRs verified end-to-end; calibration documented |
+| **3 — Hardware & fidelity** | RTL-SDR on-hardware validation (§15.3 defect fixes delivered in Phase 2); HackRF driver (H1/H2); power calibration contract (§5.6); `min_confidence` enforcement (§16.1) | 2 real SDRs verified end-to-end; calibration documented |
 | **4 — Deferred** | multi-host + NTP/PTP; TDOA multilateration; tracking (`tracks`, §9.4); annotations UI; `audio.level` feed | scoped separately |
 
 ## Appendix A — Decision Register

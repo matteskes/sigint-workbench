@@ -6,6 +6,17 @@
 // Build with:  go build -tags rtlsdr ./cmd/sdr-capture
 // Requires:    librtlsdr-dev installed (brew install librtlsdr / apt install librtlsdr-dev)
 //
+// Binding notes (verified against rtl-sdr.h):
+//   - rtlsdr_open takes rtlsdr_dev_t ** and must be given the
+//     configured USB index (not hardcoded 0).
+//   - rtlsdr_read_sync counts BYTES. The RTL2832U delivers one
+//     unsigned 8-bit I or Q sample per byte, so a []int16 buffer
+//     holds one converted sample per slot: request len(buf) bytes
+//     and scale each byte to full-scale int16 via (b-128)<<8, the
+//     convention the pipeline assumes (float64(v)/32768.0).
+//   - Tuner gain is set in tenths of dB after switching the tuner
+//     to manual gain mode.
+//
 //go:build rtlsdr
 
 package sdr
@@ -13,119 +24,212 @@ package sdr
 /*
 #cgo pkg-config: librtlsdr
 #include <stdlib.h>
+#include <rtl-sdr.h>
 */
 import "C"
 
 import (
 	"fmt"
+	"sync"
 	"unsafe"
 )
 
 // RTLSDR implements the SDR interface for RTL2832U-based dongles.
 type RTLSDR struct {
-	device *C.int
-	meta   SDRMetadata
-	closed bool
+	mu      sync.Mutex
+	dev     *C.rtlsdr_dev_t
+	index   uint32
+	meta    SDRMetadata
+	closed  bool
+	readBuf []byte // reusable u8 scratch for ReadIQ (guarded by mu)
 }
 
 // NewRTLSDR creates a new RTL-SDR device at the given USB index.
+// The index is honored by Open (§15.3 defect 2); the device name,
+// product and serial strings are queried for metadata without
+// opening the device.
 func NewRTLSDR(id string, usbIndex int) (*RTLSDR, error) {
-	idx := C.int(usbIndex)
+	if usbIndex < 0 {
+		return nil, fmt.Errorf("rtl-sdr: invalid USB index %d", usbIndex)
+	}
+	idx := C.uint32_t(usbIndex)
 
-	var devCount C.int
-	C.rtlsdr_get_device_count(&devCount)
-	if idx >= devCount {
+	devCount := int(C.rtlsdr_get_device_count())
+	if usbIndex >= devCount {
 		return nil, fmt.Errorf("rtl-sdr: USB index %d out of range (found %d devices)", usbIndex, devCount)
 	}
 
-	var dev *C.uchar
-	C.rtlsdr_get_device_usb_string(idx, (*C.uchar)(C.malloc(C.size_t(256))), 256)
+	model := "RTL2832U"
+	if name := C.rtlsdr_get_device_name(idx); name != nil {
+		if s := C.GoString(name); s != "" {
+			model = s
+		}
+	}
 
-	r := &RTLSDR{
+	serial := ""
+	var manufact [256]C.char
+	var product [256]C.char
+	var serialBuf [256]C.char
+	if C.rtlsdr_get_device_usb_strings(idx,
+		(*C.char)(unsafe.Pointer(&manufact[0])),
+		(*C.char)(unsafe.Pointer(&product[0])),
+		(*C.char)(unsafe.Pointer(&serialBuf[0]))) == 0 {
+		if p := C.GoString((*C.char)(unsafe.Pointer(&product[0]))); p != "" {
+			model = p
+		}
+		serial = C.GoString((*C.char)(unsafe.Pointer(&serialBuf[0])))
+	}
+
+	return &RTLSDR{
+		index: uint32(idx),
 		meta: SDRMetadata{
 			ID:      id,
-			Model:   "RTL2832U",
-			FreqMin: 24_000_000,   // 24 MHz
+			Model:   model,
+			Serial:  serial,
+			FreqMin: 24_000_000,    // 24 MHz
 			FreqMax: 1_700_000_000, // 1.7 GHz
-			MaxBW:   3_200_000,   // 3.2 MHz max
+			MaxBW:   3_200_000,     // 3.2 MHz max
 			HasTX:   false,
 		},
-	}
-	_ = dev
-	_ = devCount
-	return r, nil
+	}, nil
 }
 
-// Open initializes the RTL-SDR device.
+// Open initializes the RTL-SDR device at the configured USB index
+// and resets the demod buffer so stale samples from a previous
+// session are not returned by ReadIQ.
 func (r *RTLSDR) Open() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.closed {
 		return fmt.Errorf("rtl-sdr: device already closed")
 	}
-	var dev C.int
-	if C.rtlsdr_open(&dev, 0) < 0 {
-		return fmt.Errorf("rtl-sdr: failed to open device")
+	if r.dev != nil {
+		return fmt.Errorf("rtl-sdr: device already open")
 	}
-	r.device = &dev
+	var dev *C.rtlsdr_dev_t
+	if C.rtlsdr_open(&dev, C.uint32_t(r.index)) < 0 {
+		return fmt.Errorf("rtl-sdr: failed to open device at USB index %d", r.index)
+	}
+	if C.rtlsdr_reset_buffer(dev) < 0 {
+		C.rtlsdr_close(dev)
+		return fmt.Errorf("rtl-sdr: failed to reset buffer")
+	}
+	r.dev = dev
 	return nil
 }
 
 // Close releases the RTL-SDR device.
 func (r *RTLSDR) Close() error {
-	if !r.closed && r.device != nil {
-		C.rtlsdr_close((*C.int)(r.device))
-		r.closed = true
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.dev != nil {
+		C.rtlsdr_close(r.dev)
+		r.dev = nil
 	}
+	r.closed = true
 	return nil
 }
 
 // SetFrequency tunes to the given center frequency in Hz.
 func (r *RTLSDR) SetFrequency(hz uint64) error {
-	if r.device == nil {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.dev == nil {
 		return fmt.Errorf("rtl-sdr: device not open")
 	}
-	C.rtlsdr_set_center_freq((*C.int)(r.device), C.uint32_t(hz))
+	if C.rtlsdr_set_center_freq(r.dev, C.uint32_t(hz)) < 0 {
+		return fmt.Errorf("rtl-sdr: set_center_freq(%d Hz) failed", hz)
+	}
 	return nil
 }
 
-// SetSampleRate sets the sample rate in Hz.
+// SetSampleRate sets the sample rate in Hz, clamped to the device
+// maximum.
 func (r *RTLSDR) SetSampleRate(hz uint32) error {
-	if r.device == nil {
+	if hz == 0 {
+		return fmt.Errorf("rtl-sdr: sample rate must be > 0")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.dev == nil {
 		return fmt.Errorf("rtl-sdr: device not open")
 	}
 	if hz > r.meta.MaxBW {
 		hz = r.meta.MaxBW
 	}
-	C.rtlsdr_set_sample_rate((*C.int)(r.device), C.uint32_t(hz))
+	if C.rtlsdr_set_sample_rate(r.dev, C.uint32_t(hz)) < 0 {
+		return fmt.Errorf("rtl-sdr: set_sample_rate(%d Hz) failed", hz)
+	}
 	return nil
 }
 
-// SetGain sets the RF gain in dB.
+// SetGain sets the RF gain in dB. The tuner is switched to manual
+// gain mode (librtlsdr takes gain in tenths of dB); a negative
+// value enables automatic gain instead.
 func (r *RTLSDR) SetGain(db float64) error {
-	if r.device == nil {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.dev == nil {
 		return fmt.Errorf("rtl-sdr: device not open")
 	}
-	C.rtlsdr_set_gain((*C.int)(r.device), C.float(db))
+	if db < 0 {
+		if C.rtlsdr_set_tuner_gain_mode(r.dev, 0) < 0 {
+			return fmt.Errorf("rtl-sdr: set_tuner_gain_mode(auto) failed")
+		}
+		return nil
+	}
+	if C.rtlsdr_set_tuner_gain_mode(r.dev, 1) < 0 {
+		return fmt.Errorf("rtl-sdr: set_tuner_gain_mode(manual) failed")
+	}
+	tenths := C.int(db * 10)
+	if C.rtlsdr_set_tuner_gain(r.dev, tenths) < 0 {
+		return fmt.Errorf("rtl-sdr: set_tuner_gain(%.1f dB) failed (tuner may not support that gain)", db)
+	}
 	return nil
 }
 
-// ReadIQ reads interleaved I/Q samples.
+// ReadIQ reads interleaved I/Q samples. The dongle delivers one
+// unsigned 8-bit sample per byte; each byte is scaled to a
+// full-scale int16 ((b-128)<<8) so downstream consumers can keep
+// dividing by 32768. The returned count is an even int16 count
+// (complete I/Q pairs), per the SDR interface contract.
 func (r *RTLSDR) ReadIQ(buf []int16) (int, error) {
-	if r.device == nil {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.dev == nil {
 		return 0, fmt.Errorf("rtl-sdr: device not open")
 	}
 	if len(buf) == 0 {
 		return 0, nil
 	}
-	n := C.rtlsdr_read_sync(
-		(*C.int)(r.device),
-		unsafe.Pointer(&buf[0]),
-		C.uint32_t(len(buf)),
-		nil, // timeout
-	)
-	if n < 0 {
-		return 0, fmt.Errorf("rtl-sdr: read error %d", int(n))
+
+	// One u8 sample per int16 slot: request len(buf) bytes (the
+	// byte/element fix, §15.3 defect 1 — NOT len(buf)*2, which would
+	// overshoot MaxIQSamplesPerFrame and mis-pair I/Q).
+	if len(r.readBuf) < len(buf) {
+		r.readBuf = make([]byte, len(buf))
 	}
-	return int(n), nil
+	raw := r.readBuf[:len(buf)]
+
+	var nRead C.int
+	if C.rtlsdr_read_sync(r.dev, unsafe.Pointer(&raw[0]), C.int(len(raw)), &nRead) < 0 {
+		return 0, fmt.Errorf("rtl-sdr: read_sync failed")
+	}
+
+	n := int(nRead)
+	if n < 0 {
+		n = 0
+	}
+	if n > len(raw) {
+		n = len(raw)
+	}
+	if n%2 != 0 {
+		n-- // keep complete I/Q pairs only
+	}
+	for i := 0; i < n; i++ {
+		buf[i] = (int16(raw[i]) - 128) << 8
+	}
+	return n, nil
 }
 
 // Metadata returns the device metadata.

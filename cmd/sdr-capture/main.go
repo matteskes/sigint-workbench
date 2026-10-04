@@ -276,9 +276,15 @@ func main() {
 		if err := device.Open(); err != nil {
 			log.Fatalf("open %s: %v", sc.ID, err)
 		}
-		device.SetFrequency(sc.DefaultFreq)
-		device.SetSampleRate(sc.DefaultBW)
-		device.SetGain(sc.DefaultGain)
+		if err := device.SetFrequency(sc.DefaultFreq); err != nil {
+			log.Fatalf("%s: set frequency: %v", sc.ID, err)
+		}
+		if err := device.SetSampleRate(sc.DefaultBW); err != nil {
+			log.Fatalf("%s: set sample rate: %v", sc.ID, err)
+		}
+		if err := device.SetGain(sc.DefaultGain); err != nil {
+			log.Fatalf("%s: set gain: %v", sc.ID, err)
+		}
 
 		streamer, err := sdr.NewIQStreamer(sc.StreamHost, sc.StreamPort)
 		if err != nil {
