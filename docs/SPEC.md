@@ -53,8 +53,10 @@ dashboard, and (planned) records decoded audio.
 
 ## 2. Architecture
 
-**Status: 4 of 6 services `[implemented]`; single-ingress relay and the
-merged classifier/location logic are `[planned]` (D2, A3).**
+**Status: 4 of 6 services `[implemented]`, plus the `GET /ws`
+single-ingress relay (A3, §2.2); the merged classifier/location
+topology (D2) and the control-path retune proxy are `[planned]`
+(§13).**
 
 ### 2.1 Topology (D2)
 
@@ -131,8 +133,11 @@ db (PostGIS :5432, internal) <── signal-processor, api-gateway
 
 ## 3. Deployment & Ports
 
-**Status: `[implemented]` for current compose files; the published-port
-reduction is `[planned]` (A3).**
+**Status: `[implemented]` for current compose files; the A3
+published-port reduction is partially done — `db:5432` and
+`ws-hub:8081` went internal-only in Phase 2; `9000/udp` (ingest),
+`8080` (gateway) and `3000` (frontend) remain the exposed surface
+(§17.2).**
 
 ### 3.1 Deployment modes
 
@@ -913,9 +918,11 @@ payload.
 
 ## 13. REST API
 
-**Status: endpoints in §13.1 `[implemented]`; the two relays and
-tuning proxy are `[planned]` (A3); §13.2 lists the `[gap]` fixes to
-existing endpoints — 2 of 4 closed in Phase 1.**
+**Status: endpoints in §13.1 `[implemented]` including the `GET /ws`
+relay (A3, Phase 2); `/ws/audio` and the control-API proxies are
+`[planned]`; §13.2 lists the `[gap]` fixes to existing endpoints —
+3 of 4 closed (items 1, 2, 4; item 1's `active` filter landed with
+§11.2 in Phase 2; item 3 awaits the control-API proxy).**
 
 All routes are served by `api-gateway` on `:8080` (chi router).
 General contract:
@@ -945,7 +952,7 @@ General contract:
 | `GET /api/recordings/{id}/audio` | `[implemented]` | Streams the file (path-confined to `RECORDINGS_DIR`); `audio/wav` for wav; every other format (`iq`) serves as `application/octet-stream` (`flac` branch removed in Phase 1 — no FLAC support, §10.5) |
 | `GET /api/sdrs` | `[implemented]` | All SDR rows |
 | `PUT /api/sdrs/{id}` | `[implemented]` → target `[planned]` | Partial update (`model`, `serial`, `lat`, `lon`, `gainDb`, `freqHz`, `active`); **today DB-only** — target: also proxy to `sdr-capture` control API (§7.4) so `freqHz`/`gainDb` actually retune hardware |
-| `GET /ws` | `[planned]` | Dead in-process hub removed (Phase 1); today the route answers `501`. Target: transparent relay to `ws-hub:8081/ws` (§2.2) |
+| `GET /ws` | `[implemented]` | Transparent bidirectional relay to `ws-hub:8081/ws` (§2.2, Phase 2); the hub is dialed before the client upgrade — hub down ⇒ `502` JSON `{"error":"ws-hub unreachable"}`; foreign origins ⇒ `403` (`ALLOWED_ORIGINS`, §17.2) |
 | `GET /ws/audio` | `[planned]` | Relay to recorder `:9012/ws/audio` (§10.4) |
 | `GET /api/sdrs/{id}/status` | `[planned]` | Proxy of capture control `GET /api/v1/status` (per-device live state) |
 | `GET/POST /api/signals/{id}/annotations` | `[planned]` | List / add notes (§12.5) |
@@ -955,23 +962,26 @@ General contract:
 1. **`GET /api/signals`** MUST add the `active = true` filter when
    the D6 column lands, and MUST include unlocated signals
    (`location IS NULL`) — those rows are simply without `lat`/`lon`
-   (A1, §9.3).
+   (A1, §9.3) — **done** (unlocated inclusion: Phase 1; `active`
+   filter: Phase 2, §11.2).
 2. **`GET /api/recordings/{id}/audio`**: the `flac` content-type
    branch was removed (Phase 1 — FLAC unsupported, §10.5); `iq`
    files serve as `application/octet-stream`.
 3. **`PUT /api/sdrs/{id}`**: after the control-API proxy lands, a
    `409` (or `502`) response with a clear error body is required
    when the capture service is unreachable — never silently
-   DB-only.
+   DB-only. **Open** — awaits the control-API proxy (§13.1).
 4. **`GET /ws`**: the in-process hub implementation was deleted from
    `api-gateway` entirely (Phase 1); the `ws.Hub` dependency moved
    out of the gateway — the hub lives only in the `ws-hub` service.
 
 ## 14. WebSocket Events
 
-**Status: `ws-hub` + producer POST path `[implemented]`; client
-relay `[planned]` (A3); frontend data wiring `[gap]` (stores exist
-but the page never connects).**
+**Status: `ws-hub` + producer POST path + `GET /ws` client relay
+`[implemented]` (A3, §14.4.1); `sdr.status` producer
+`[implemented]` (§14.4.3); frontend data wiring `[implemented]`
+(§14.4.2); the `/ws/audio` relay is `[planned]` (awaits the
+recorder, D1b).**
 
 ### 14.1 Transport paths
 
