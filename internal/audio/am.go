@@ -45,6 +45,39 @@ func (a *AMDemodulator) CanHandle(modulation string) bool {
 	return false
 }
 
+// CanHandlePair reports whether this demodulator handles the
+// (modulation, subType) pair. A plain AM demodulator claims only
+// AM/DSB; SSB subtypes belong to the SSB demodulator (§10.1). The
+// legacy SSBMode variants keep claiming their sideband for
+// compatibility with hand-built registries.
+func (a *AMDemodulator) CanHandlePair(modulation, subType string) bool {
+	mod := NormalizeModulation(modulation)
+	sub := NormalizeModulation(subType)
+	isSSB := a.SSBMode == "upper" || a.SSBMode == "lower"
+	switch mod {
+	case "AM", "DSB":
+		return !isSSB
+	case "USB":
+		return a.SSBMode == "upper"
+	case "LSB":
+		return a.SSBMode == "lower"
+	case "SSB":
+		if !isSSB {
+			return false
+		}
+		switch sub {
+		case "":
+			return true
+		case "USB":
+			return a.SSBMode == "upper"
+		case "LSB":
+			return a.SSBMode == "lower"
+		}
+		return false
+	}
+	return false
+}
+
 // AudioSampleRate returns the output audio sample rate.
 func (a *AMDemodulator) AudioSampleRate() uint32 {
 	return a.AudioRate

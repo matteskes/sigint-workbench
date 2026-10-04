@@ -26,17 +26,43 @@ func (r *Registry) Register(d Demodulator) {
 	r.demodulators = append(r.demodulators, d)
 }
 
-// Get returns a demodulator that can handle the given modulation string.
-func (r *Registry) Get(modulation string) (Demodulator, error) {
+// SubtypeAware is implemented by demodulators that distinguish
+// subtypes within a modulation family (WFM vs NFM, USB vs LSB).
+// The registry prefers exact (modulation, subType) matches before
+// falling back to modulation-only matching (§10.1).
+type SubtypeAware interface {
+	Demodulator
+	CanHandlePair(modulation, subType string) bool
+}
+
+// Get returns a demodulator for the given (modulation, subType) pair.
+// Selection is two-pass: an exact pair match via SubtypeAware wins;
+// otherwise the first demodulator registered for the modulation
+// family is returned (an empty or unrecognized subType always falls
+// back to family order). The recorder MUST select on the full pair
+// so a signal classified FM/NFM resolves to the 2.5 kHz demodulator,
+// not the 25 kHz one (§10.1).
+func (r *Registry) Get(modulation, subType string) (Demodulator, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	for _, d := range r.demodulators {
-		if d.CanHandle(modulation) {
+		if sd, ok := d.(SubtypeAware); ok {
+			if sd.CanHandlePair(modulation, subType) {
+				return d, nil
+			}
+		}
+	}
+	for _, d := range r.demodulators {
+		if sd, ok := d.(SubtypeAware); ok {
+			if sd.CanHandlePair(modulation, "") {
+				return d, nil
+			}
+		} else if d.CanHandle(modulation) {
 			return d, nil
 		}
 	}
-	return nil, fmt.Errorf("audio: no demodulator for modulation %q", modulation)
+	return nil, fmt.Errorf("audio: no demodulator for modulation %q (subType %q)", modulation, subType)
 }
 
 // All returns all registered demodulators.
@@ -58,10 +84,10 @@ func DefaultRegistry() *Registry {
 	r.Register(nfm)
 	// Standard AM
 	r.Register(NewAMDemodulator(48000, ""))
-	// SSB upper
-	r.Register(NewAMDemodulator(48000, "upper"))
+	// SSB upper (true sideband-select demodulation, §10.1)
+	r.Register(NewSSBDemodulator(48000, "upper"))
 	// SSB lower
-	r.Register(NewAMDemodulator(48000, "lower"))
+	r.Register(NewSSBDemodulator(48000, "lower"))
 	return r
 }
 

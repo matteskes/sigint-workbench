@@ -43,6 +43,27 @@ func (f *FMDemodulator) CanHandle(modulation string) bool {
 	return false
 }
 
+// CanHandlePair reports whether this demodulator handles the
+// (modulation, subType) pair. Wideband demods claim WFM (or FM with
+// no subtype); narrowband demods claim NFM (§10.1 registry fix).
+func (f *FMDemodulator) CanHandlePair(modulation, subType string) bool {
+	mod := NormalizeModulation(modulation)
+	sub := NormalizeModulation(subType)
+	wide := f.DeviationHz >= 10000
+	switch mod {
+	case "WFM":
+		return wide && (sub == "" || sub == "WFM")
+	case "NFM":
+		return !wide && (sub == "" || sub == "NFM")
+	case "FM":
+		if sub == "" {
+			return true
+		}
+		return (sub == "WFM") == wide
+	}
+	return false
+}
+
 // AudioSampleRate returns the output audio sample rate.
 func (f *FMDemodulator) AudioSampleRate() uint32 {
 	return f.AudioRate

@@ -228,7 +228,7 @@ func TestFMDemodulate_Tone(t *testing.T) {
 
 func TestRegistry_Get_Empty(t *testing.T) {
 	r := NewRegistry()
-	if _, err := r.Get("WFM"); err == nil {
+	if _, err := r.Get("WFM", ""); err == nil {
 		t.Fatal("expected error from empty registry, got nil")
 	}
 }
@@ -236,17 +236,17 @@ func TestRegistry_Get_Empty(t *testing.T) {
 func TestRegistry_RegisterAndGet(t *testing.T) {
 	r := NewRegistry()
 	r.Register(NewFMDemodulator(25000, 48000))
-	d, err := r.Get("WFM")
+	d, err := r.Get("WFM", "")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
 	if d.Name() != "WFM" {
 		t.Fatalf("Get(\"WFM\").Name() = %q, want WFM", d.Name())
 	}
-	if _, err := r.Get("AM"); err == nil {
+	if _, err := r.Get("AM", ""); err == nil {
 		t.Fatal("expected error for unregistered modulation, got nil")
 	}
-	if _, err := r.Get("bogus"); err == nil {
+	if _, err := r.Get("bogus", ""); err == nil {
 		t.Fatal("expected error for unknown modulation, got nil")
 	}
 }
@@ -266,7 +266,7 @@ func TestDefaultRegistry(t *testing.T) {
 	if got := len(r.All()); got != 5 {
 		t.Fatalf("DefaultRegistry has %d demodulators, want 5", got)
 	}
-	d, err := r.Get("wfm")
+	d, err := r.Get("wfm", "")
 	if err != nil {
 		t.Fatalf("Get(\"wfm\"): %v", err)
 	}
@@ -274,11 +274,11 @@ func TestDefaultRegistry(t *testing.T) {
 		t.Fatalf("Get(\"wfm\").Name() = %q, want WFM", d.Name())
 	}
 	for _, mod := range []string{"AM", "am", "USB", "LSB", "ssb"} {
-		if _, err := r.Get(mod); err != nil {
+		if _, err := r.Get(mod, ""); err != nil {
 			t.Errorf("DefaultRegistry has no demodulator for %q: %v", mod, err)
 		}
 	}
-	if _, err := r.Get("CW"); err == nil {
+	if _, err := r.Get("CW", ""); err == nil {
 		t.Fatal("expected error for CW in default registry")
 	}
 }
@@ -297,5 +297,51 @@ func TestNormalizeModulation(t *testing.T) {
 		if got := NormalizeModulation(c.in); got != c.want {
 			t.Errorf("NormalizeModulation(%q) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+// TestRegistry_PairSelection pins the (modulation, subType) →
+// demodulator mapping of the default registry. The NFM case is the
+// §10.1 regression guard: first-match selection used to resolve
+// FM/NFM to the 25 kHz (WFM) demodulator.
+func TestRegistry_PairSelection(t *testing.T) {
+	r := DefaultRegistry()
+	cases := []struct{ mod, sub, want string }{
+		{"FM", "NFM", "NFM"},
+		{"FM", "WFM", "WFM"},
+		{"FM", "", "WFM"}, // unspecified subtype → first registered FM demod
+		{"WFM", "", "WFM"},
+		{"NFM", "", "NFM"},
+		{"SSB", "USB", "USB"},
+		{"SSB", "LSB", "LSB"},
+		{"SSB", "", "USB"}, // sideband unspecified → upper
+		{"USB", "", "USB"},
+		{"LSB", "", "LSB"},
+		{"AM", "", "AM"},
+		{"DSB", "", "AM"},
+	}
+	for _, c := range cases {
+		d, err := r.Get(c.mod, c.sub)
+		if err != nil {
+			t.Errorf("Get(%q, %q): %v", c.mod, c.sub, err)
+			continue
+		}
+		if d.Name() != c.want {
+			t.Errorf("Get(%q, %q).Name() = %q, want %q", c.mod, c.sub, d.Name(), c.want)
+		}
+	}
+	if _, err := r.Get("CW", ""); err == nil {
+		t.Error("expected error for CW, got nil")
+	}
+
+	// The NFM demodulator must be the 2.5 kHz one, verified by deviation.
+	d, err := r.Get("FM", "NFM")
+	if err != nil {
+		t.Fatalf("Get(FM, NFM): %v", err)
+	}
+	if fmd, ok := d.(*FMDemodulator); !ok {
+		t.Fatalf("Get(FM, NFM) returned %T, want *FMDemodulator", d)
+	} else if fmd.DeviationHz != 2500 {
+		t.Errorf("NFM deviation = %v Hz, want 2500", fmd.DeviationHz)
 	}
 }

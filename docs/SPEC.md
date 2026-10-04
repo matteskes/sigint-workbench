@@ -667,10 +667,9 @@ haversine distance between consecutive fixes,
 
 ## 10. Audio
 
-**Status: demodulators + WAV encoder `[implemented]` (library only —
-`cmd/recorder` is a stub); in-band capture, dedicated monitor mode,
-and live Opus streaming are `[planned]` (D1/D1b); SSB and registry
-selection are `[gap]` fixes.**
+**Status: demodulators (incl. SSB) + WAV encoder `[implemented]`
+(library only — `cmd/recorder` is a stub); in-band capture, dedicated
+monitor mode, and live Opus streaming are `[planned]` (D1/D1b).**
 
 ### 10.1 Demodulator contract
 
@@ -680,6 +679,9 @@ Go interface (`audio.Demodulator`):
 Demodulate(iq []complex64, sampleRate uint32) ([]float32, error)
 AudioSampleRate() uint32
 CanHandle(mod string) bool
+
+// optional SubtypeAware — implemented by every built-in demod:
+CanHandlePair(mod, subType string) bool
 ```
 
 Output is **mono float32 in −1.0 … 1.0** at the output rate. Demods
@@ -691,18 +693,19 @@ frame).
 | WFM | cross-product phase discriminator (`atan2(cross, dot)`, unwrapped), ÷ deviation | 25 000 Hz | 48 kHz | `[implemented]` |
 | NFM | same discriminator | 2 500 Hz | 48 kHz | `[implemented]` |
 | AM | envelope `sqrt(I²+Q²)`, DC removal, peak normalize | — | 48 kHz | `[implemented]` |
-| USB/LSB | **same envelope path as AM** (no Hilbert implemented) | — | 48 kHz | `[gap]` — label says SSB, behavior is AM |
+| USB/LSB | frequency-domain sideband select (FFT, keep wanted sideband ≤ 3 kHz, conjugate-mirror, inverse FFT, real part) | — | 48 kHz | `[implemented]` |
 
-Common post-processing (FM and AM): moving-average low-pass of
+Common post-processing (FM, AM and SSB): moving-average low-pass of
 length `decimateFactor` (odd-padded, symmetric), then decimate by
 `round(sampleRate / 48000)`, hard-clip at ±1.0.
 
-**Registry gap (MUST fix before recorder ships):** `Registry.Get`
-is first-match in registration order, and both FM demods `CanHandle`
-`"FM"`, `"WFM"` and `"NFM"` — so a signal classified
-`FM/NFM` currently resolves to the **25 kHz** (WFM) demodulator.
-The recorder MUST select on the full `(modulation, subType)` pair,
-mapping `NFM → 2.5 kHz demod`, not on modulation alone.
+**Registry selection (§10.1 fix, `[implemented]`):**
+`Registry.Get(modulation, subType)` selects on the full pair — exact
+`SubtypeAware.CanHandlePair` match first, then modulation-family
+fallback in registration order (an empty or unrecognized `subType`
+falls back). The default registry maps `FM/NFM → 2.5 kHz demod`,
+`FM/WFM → 25 kHz`, `SSB/USB|LSB → SSB demod`, `AM → envelope`;
+`FM` with no subtype resolves to WFM (first registered).
 
 ### 10.2 In-band capture (D1)
 
@@ -1307,7 +1310,7 @@ stores and the API client; `svelte-check` for types.
 | **0 — Core pipeline** (current) | capture → ingest → DSP → classify → persist → events; dashboard shell; CI | smoke-onnx green; this spec written |
 | **1 — Correctness** | D4 negative offsets; A1 unlocated signals; §6.5 class enum; dead `/ws` hub removal; FLAC-claim cleanup (code + README); CORS/origin tightening — all **done** | new tests per §17.3 green; docs match behavior |
 | **2 — Features** | D3 scan loop; §8 verification in processor; recorder (D1 in-band + D6 retention); Opus live streaming (D1b) + gateway relays (§2.2); frontend data wiring; control-API proxy + `sdr.status` events | §17.3 feature obligations all green; dashboard live end-to-end |
-| **3 — Hardware & fidelity** | RTL-SDR defect fixes (§15.3) + on-hardware validation; HackRF driver (H1/H2); power calibration contract (§5.6); SSB Hilbert (§10.1); `min_confidence` enforcement (§16.1) | 2 real SDRs verified end-to-end; calibration documented |
+| **3 — Hardware & fidelity** | RTL-SDR defect fixes (§15.3) + on-hardware validation; HackRF driver (H1/H2); power calibration contract (§5.6); `min_confidence` enforcement (§16.1) | 2 real SDRs verified end-to-end; calibration documented |
 | **4 — Deferred** | multi-host + NTP/PTP; TDOA multilateration; tracking (`tracks`, §9.4); annotations UI; `audio.level` feed | scoped separately |
 
 ## Appendix A — Decision Register
