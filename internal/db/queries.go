@@ -18,9 +18,9 @@ import (
 func (d *DB) UpsertSignal(ctx context.Context, s *Signal) error {
 	query := `
 		INSERT INTO signals (id, frequency_hz, bandwidth_hz, modulation, sub_type, class, method,
-			confidence, power_dbm, location, accuracy_m, first_seen, last_seen, sdr_id, verified, active)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, ST_SetSRID(ST_MakePoint($10, $11), 4326),
-			$12, $13, $14, $15, $16, $17)
+			confidence, power_dbm, power_calibrated, location, accuracy_m, first_seen, last_seen, sdr_id, verified, active)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, ST_SetSRID(ST_MakePoint($11, $12), 4326),
+			$13, $14, $15, $16, $17, $18)
 		ON CONFLICT (id) DO UPDATE SET
 			last_seen = EXCLUDED.last_seen,
 			bandwidth_hz = EXCLUDED.bandwidth_hz,
@@ -30,13 +30,14 @@ func (d *DB) UpsertSignal(ctx context.Context, s *Signal) error {
 			method = EXCLUDED.method,
 			confidence = EXCLUDED.confidence,
 			power_dbm = EXCLUDED.power_dbm,
+			power_calibrated = EXCLUDED.power_calibrated,
 			location = EXCLUDED.location,
 			verified = signals.verified OR EXCLUDED.verified,
 			active = TRUE
 	`
 	_, err := d.Pool.Exec(ctx, query,
 		s.ID, s.FreqHz, s.BandwidthHz, s.Modulation, s.SubType, s.Class, s.Method,
-		s.Confidence, s.PowerDBM, s.Lon, s.Lat, s.AccuracyM,
+		s.Confidence, s.PowerDBM, s.PowerCalibrated, s.Lon, s.Lat, s.AccuracyM,
 		s.FirstSeen, s.LastSeen, s.SDRID, s.Verified, s.Active,
 	)
 	return err
@@ -49,7 +50,7 @@ func (d *DB) UpsertSignal(ctx context.Context, s *Signal) error {
 func (d *DB) GetSignals(ctx context.Context, minLat, minLon, maxLat, maxLon float64) ([]Signal, error) {
 	query := `
 		SELECT id, frequency_hz, bandwidth_hz, COALESCE(modulation,''), COALESCE(sub_type,''),
-			COALESCE(class,''), COALESCE(method,''), confidence, COALESCE(power_dbm,0),
+			COALESCE(class,''), COALESCE(method,''), confidence, COALESCE(power_dbm,0), power_calibrated,
 			ST_Y(location::geometry), ST_X(location::geometry), COALESCE(accuracy_m,0),
 			first_seen, last_seen, sdr_id, verified
 		FROM signals
@@ -67,7 +68,7 @@ func (d *DB) GetSignals(ctx context.Context, minLat, minLon, maxLat, maxLon floa
 	for rows.Next() {
 		var s Signal
 		if err := rows.Scan(&s.ID, &s.FreqHz, &s.BandwidthHz, &s.Modulation, &s.SubType,
-			&s.Class, &s.Method, &s.Confidence, &s.PowerDBM, &s.Lat, &s.Lon, &s.AccuracyM,
+			&s.Class, &s.Method, &s.Confidence, &s.PowerDBM, &s.PowerCalibrated, &s.Lat, &s.Lon, &s.AccuracyM,
 			&s.FirstSeen, &s.LastSeen, &s.SDRID, &s.Verified); err != nil {
 			return nil, err
 		}
@@ -81,7 +82,7 @@ func (d *DB) GetSignals(ctx context.Context, minLat, minLon, maxLat, maxLon floa
 func (d *DB) GetSignal(ctx context.Context, id string) (*Signal, error) {
 	query := `
 		SELECT id, frequency_hz, bandwidth_hz, COALESCE(modulation,''), COALESCE(sub_type,''),
-			COALESCE(class,''), COALESCE(method,''), confidence, COALESCE(power_dbm,0),
+			COALESCE(class,''), COALESCE(method,''), confidence, COALESCE(power_dbm,0), power_calibrated,
 			ST_Y(location::geometry), ST_X(location::geometry), COALESCE(accuracy_m,0),
 			first_seen, last_seen, sdr_id, verified, active
 		FROM signals
@@ -89,7 +90,7 @@ func (d *DB) GetSignal(ctx context.Context, id string) (*Signal, error) {
 	`
 	var s Signal
 	err := d.Pool.QueryRow(ctx, query, id).Scan(&s.ID, &s.FreqHz, &s.BandwidthHz, &s.Modulation, &s.SubType,
-		&s.Class, &s.Method, &s.Confidence, &s.PowerDBM, &s.Lat, &s.Lon, &s.AccuracyM,
+		&s.Class, &s.Method, &s.Confidence, &s.PowerDBM, &s.PowerCalibrated, &s.Lat, &s.Lon, &s.AccuracyM,
 		&s.FirstSeen, &s.LastSeen, &s.SDRID, &s.Verified, &s.Active)
 	if err != nil {
 		if err == pgx.ErrNoRows {

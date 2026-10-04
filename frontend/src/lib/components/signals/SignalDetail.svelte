@@ -46,10 +46,12 @@
 		</div>
 	</div>
 
-	<!-- Power -->
+	<!-- Power (§5.6: "dBm" only for calibrated SDRs) -->
 	<div>
 		<div class="text-xs text-slate-500">Power</div>
-		<div class="text-sm font-mono">{signal.powerDbm?.toFixed(1)} dBm</div>
+		<div class="text-sm font-mono">
+			{signal.powerDbm?.toFixed(1)} {signal.powerCalibrated ? 'dBm' : 'dB (rel.)'}
+		</div>
 	</div>
 
 	<!-- Location -->

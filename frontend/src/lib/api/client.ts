@@ -12,6 +12,12 @@ export interface Signal {
 	class: string;
 	confidence: number;
 	powerDbm: number;
+	/**
+	 * §5.6: true only when powerDbm is a calibrated absolute level.
+	 * false (uncalibrated SDR) means powerDbm is relative dB — the UI
+	 * must label it "dB (rel.)", never "dBm".
+	 */
+	powerCalibrated: boolean;
 	lat: number | null;
 	lon: number | null;
 	accuracyM: number;

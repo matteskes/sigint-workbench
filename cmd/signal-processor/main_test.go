@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"math"
@@ -455,4 +456,88 @@ func TestPublishNoVerifyOnFreqMismatch(t *testing.T) {
 	if len(p.verified) != 0 {
 		t.Errorf("unexpected verifications: %v", p.verified)
 	}
+}
+
+// §5.6: calibrate decorates events from SDRs with a calibration_offset_db
+// (power_dbm = power_db − applied_gain + offset) and is a no-op for
+// uncalibrated or unknown SDRs. Gain polling (updateGain) must influence
+// the result so runtime POST /api/v1/gain changes stay honest.
+func TestCalibrateSignalPower(t *testing.T) {
+	off := -12.5
+	hub := &fakeHub{}
+	srv := hub.serve()
+	defer srv.Close()
+
+	p := newPublisher(nil, srv.URL, map[string]sdrLocation{}, 2*time.Second)
+	p.initSDRs([]sdr.SDRCaptureConfig{
+		{ID: "cal-0", Driver: "rtlsdr", DefaultFreq: 100_000_000,
+			DefaultGain: 40, DefaultBW: 2_400_000, CalibrationOffsetDB: &off},
+		{ID: "raw-0", Driver: "rtlsdr", DefaultFreq: 100_000_000,
+			DefaultGain: 40, DefaultBW: 2_400_000},
+	})
+
+	ev := signalEvent{SDRID: "cal-0", PowerDB: -50}
+	p.calibrate(&ev)
+	if !ev.Calibrated {
+		t.Fatal("expected Calibrated=true for an SDR with calibration_offset_db")
+	}
+	if ev.PowerDBM != -102.5 { // −50 − 40 − 12.5
+		t.Fatalf("PowerDBM = %v, want −102.5", ev.PowerDBM)
+	}
+
+	// Uncalibrated SDR: pass-through (relative dB), flag stays false.
+	raw := signalEvent{SDRID: "raw-0", PowerDB: -50}
+	p.calibrate(&raw)
+	if raw.Calibrated || raw.PowerDBM != 0 {
+		t.Fatalf("uncalibrated event was mutated: %+v", raw)
+	}
+
+	// Unknown SDR (frame from an unconfigured device): no-op.
+	ghost := signalEvent{SDRID: "ghost", PowerDB: -50}
+	p.calibrate(&ghost)
+	if ghost.Calibrated {
+		t.Fatal("unknown SDR must not be calibrated")
+	}
+
+	// A polled gain change must flow into the calibration math (§5.6).
+	p.updateGain("cal-0", 30)
+	ev2 := signalEvent{SDRID: "cal-0", PowerDB: -50}
+	p.calibrate(&ev2)
+	if !ev2.Calibrated || ev2.PowerDBM != -92.5 { // −50 − 30 − 12.5
+		t.Fatalf("after gain change PowerDBM = %v Calibrated=%v, want −92.5 true",
+			ev2.PowerDBM, ev2.Calibrated)
+	}
+
+	// updateGain on unknown SDRs is a silent no-op.
+	p.updateGain("ghost", 99)
+}
+
+// §5.6: pollGainOnce reads a capture control status snapshot (array of
+// slot maps with id/gain_db) and refreshes state; unknown IDs are ignored.
+func TestPollGainOnce(t *testing.T) {
+	hub := &fakeHub{}
+	srv := hub.serve()
+	defer srv.Close()
+
+	status := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `[{"id":"cal-0","gain_db":21.4},{"id":"other","gain_db":10}]`)
+	}))
+	defer status.Close()
+
+	p := newPublisher(nil, srv.URL, map[string]sdrLocation{}, 2*time.Second)
+	p.initSDRs([]sdr.SDRCaptureConfig{
+		{ID: "cal-0", Driver: "rtlsdr", DefaultFreq: 100_000_000,
+			DefaultGain: 40, DefaultBW: 2_400_000},
+	})
+	p.pollGainOnce(status.URL + "/api/v1/status")
+
+	p.mu.Lock()
+	got := p.sdrs["cal-0"].gainDB
+	p.mu.Unlock()
+	if got != 21.4 {
+		t.Fatalf("gainDB = %v, want 21.4 after poll", got)
+	}
+	// An unreachable endpoint must not panic or wedge the poller.
+	p.pollGainOnce("http://127.0.0.1:1/api/v1/status")
 }

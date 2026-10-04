@@ -98,6 +98,51 @@ scan:
 	}
 }
 
+func TestLoadCaptureConfig_CalibrationAndAPIPort(t *testing.T) {
+	// §5.6: calibration_offset_db is optional per SDR; PRESENCE of the
+	// key marks the device calibrated, absence leaves it nil. api_port
+	// is the capture control-API port consumed by signal-processor's
+	// gain polling (0 = off).
+	cfg, err := LoadCaptureConfig(writeCaptureConfig(t, `
+api_port: 9090
+sdrs:
+  - id: "rtlsdr-0"
+    driver: rtlsdr
+    default_freq: 146520000
+    default_gain: 40
+    calibration_offset_db: -12.5
+  - id: "simulator-0"
+    driver: simulator
+    default_freq: 100000000
+    default_gain: 40
+    calibration_offset_db: 0.0
+`))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.APIPort != 9090 {
+		t.Errorf("api_port = %d, want 9090", cfg.APIPort)
+	}
+	if got := cfg.SDRs[0].CalibrationOffsetDB; got == nil || *got != -12.5 {
+		t.Errorf("rtlsdr-0 calibration_offset_db = %v, want -12.5", got)
+	}
+	if got := cfg.SDRs[1].CalibrationOffsetDB; got == nil || *got != 0.0 {
+		t.Errorf("simulator-0 calibration_offset_db = %v, want 0.0 (explicit)", got)
+	}
+	// Absent key → nil (uncalibrated).
+	cfg2, err := LoadCaptureConfig(writeCaptureConfig(t, scannerSDR))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg2.SDRs[0].CalibrationOffsetDB != nil {
+		t.Errorf("calibration_offset_db = %v, want nil when absent",
+			cfg2.SDRs[0].CalibrationOffsetDB)
+	}
+	if cfg2.APIPort != 0 {
+		t.Errorf("api_port = %d, want 0 (polling disabled) when absent", cfg2.APIPort)
+	}
+}
+
 func TestLoadCaptureConfig_SimulatorDriver(t *testing.T) {
 	// §16.2 documents driver: simulator — the loader must accept it so
 	// hardware-less multi-SDR development works. This fixture is the

@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS signals (
     method          TEXT NOT NULL DEFAULT '',
     confidence      REAL DEFAULT 0,
     power_dbm       REAL,
+    power_calibrated BOOLEAN NOT NULL DEFAULT FALSE,
     location        GEOGRAPHY(POINT, 4326),
     accuracy_m      REAL,
     first_seen      TIMESTAMPTZ DEFAULT now(),

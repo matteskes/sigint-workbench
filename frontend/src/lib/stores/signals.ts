@@ -9,6 +9,8 @@ export interface Signal {
 	class: string;
 	confidence: number;
 	powerDbm: number;
+	/** §5.6: false = powerDbm is uncalibrated relative dB (label "dB (rel.)"). */
+	powerCalibrated: boolean;
 	lat: number | null;
 	lon: number | null;
 	accuracyM: number;

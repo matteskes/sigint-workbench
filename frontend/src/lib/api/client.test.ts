@@ -57,6 +57,21 @@ describe('fetchSignals', () => {
 		expect(url.search).toBe('');
 	});
 
+	it('passes through the §5.6 calibrated power fields', async () => {
+		const fetchMock = vi.fn().mockResolvedValue(
+			okJSON([
+				{ id: 'calibrated', powerDbm: -82.5, powerCalibrated: true },
+				{ id: 'relative', powerDbm: -50, powerCalibrated: false }
+			])
+		);
+		vi.stubGlobal('fetch', fetchMock);
+
+		const signals = await fetchSignals();
+
+		expect(signals[0].powerCalibrated).toBe(true);
+		expect(signals[1].powerCalibrated).toBe(false);
+	});
+
 	it('throws on non-OK response', async () => {
 		vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 404, json: async () => ({}) } as Response));
 		await expect(fetchSignals()).rejects.toThrow('API error: 404');

@@ -19,6 +19,13 @@ const (
 type CaptureConfig struct {
 	SDRs []SDRCaptureConfig `yaml:"sdrs"`
 	Scan ScanConfig         `yaml:"scan,omitempty"`
+
+	// APIPort is the control-API port this capture instance listens on
+	// (the sdr-capture `-listen` flag, default 9090). sdr-capture itself
+	// does not use this field — it is consumed by signal-processor, which
+	// reads the same file, to poll the control status endpoint for live
+	// gain changes (§5.6 calibration). 0 disables polling.
+	APIPort int `yaml:"api_port,omitempty"`
 }
 
 // ScanConfig configures the D3 scan loop (§7.1) applied to every device
@@ -68,6 +75,14 @@ type SDRCaptureConfig struct {
 	// for map placement of signals that cannot be located otherwise.
 	Lat *float64 `yaml:"lat,omitempty"`
 	Lon *float64 `yaml:"lon,omitempty"`
+
+	// CalibrationOffsetDB (optional, §5.6) — per-device power
+	// calibration offset in dB. PRESENCE of the key marks this SDR as
+	// calibrated: signal-processor then reports
+	// power_dbm = power_db − applied_gain + offset and sets
+	// powerCalibrated = true. Absent (nil) → power values stay
+	// uncalibrated relative dB. Negative values are valid.
+	CalibrationOffsetDB *float64 `yaml:"calibration_offset_db,omitempty"`
 }
 
 // LoadCaptureConfig reads and parses a YAML config file.

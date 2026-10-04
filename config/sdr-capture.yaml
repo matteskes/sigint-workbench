@@ -1,6 +1,14 @@
 # SIGINT Workbench — SDR Capture Configuration
 # Used by: sdr-capture (native macOS or Docker on Linux)
 
+# ─── Control API (§5.6 gain polling) ───
+# Port of this capture instance's control API (the sdr-capture
+# `-listen` flag, default 127.0.0.1:9090). Consumed by signal-processor,
+# which polls the status endpoint to keep calibrated dBm values correct
+# when gain changes at runtime. Omit to disable polling.
+
+api_port: 9090
+
 sdrs:
   - id: "rtlsdr-0"
     driver: rtlsdr
@@ -11,6 +19,11 @@ sdrs:
     mode: scanner              # scanner | monitor | both
     stream_host: localhost
     stream_port: 9000
+    # Power calibration (§5.6): presence of calibration_offset_db marks
+    # this SDR calibrated — power_dbm = power_db − gain + offset, and
+    # the UI shows dBm. Measure the offset against a known reference
+    # (see SPEC §15.3 runbook); until then leave it unset (relative dB).
+    # calibration_offset_db: -12.5
     # Location (optional) — used by signal-processor to geo-locate
     # single-receiver signals on the map. Set lat+lon together.
     # lat: 40.7128

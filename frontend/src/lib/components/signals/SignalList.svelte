@@ -47,7 +47,9 @@
 						{signal.class}
 					</span>
 					<span class="text-xs text-slate-500">{signal.modulation}</span>
-					<span class="text-xs text-slate-500 ml-auto">{signal.powerDbm?.toFixed(1)} dBm</span>
+					<span class="text-xs text-slate-500 ml-auto">
+						{signal.powerDbm?.toFixed(1)} {signal.powerCalibrated ? 'dBm' : 'dB (rel.)'}
+					</span>
 				</div>
 			</button>
 		{:else}

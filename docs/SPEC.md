@@ -252,8 +252,7 @@ sequence number exists in v1; `timestamp` is the only ordering hint.
 
 ## 5. DSP Pipeline
 
-**Status: `[implemented]` except §5.6 (calibration, `[planned]`),
-§5.7 (FFT config, `[gap]`).**
+**Status: `[implemented]` except §5.7 (FFT config, `[gap]`).**
 
 ### 5.1 Per-frame processing (`signal-processor`)
 
@@ -356,16 +355,44 @@ features.
 
 Out-of-table frequencies report band `Unknown`.
 
-### 5.6 Power values — calibration
+### 5.6 Power values — calibration — `[implemented]`
 
-**Gap:** all power numbers in the pipeline are **uncalibrated
-relative dB** (10·log10 of squared FFT magnitude). There is no
-gain chain calibration, no noise-floor subtraction, and no dBm
-conversion. The API field `powerDbm` is therefore a misnomer until
-calibration exists; consumers MUST treat it as a relative level, not
-an absolute RF power. The roadmap (§17.4, Phase 3) defines a
-calibration contract; until then the UI MUST NOT display "dBm" as an
-absolute measurement.
+**Two power domains.** Every detected signal carries both:
+
+- `power_db` — **uncalibrated relative dBFS** (10·log10 of the
+  squared FFT magnitude, §5.2). Peak thresholds (§5.4), peak sorting,
+  bandwidth estimates, and verification SNR (§8) all stay in this
+  domain; the DSP pipeline never converts.
+- `power_dbm` — the calibrated absolute estimate, valid only when the
+  detecting SDR is calibrated:
+
+  ```text
+  power_dbm = power_db − applied_gain_db + calibration_offset_db
+  ```
+
+  `applied_gain_db` is the SDR's gain **at the time of the frame**,
+  tracked per SDR by signal-processor: seeded from `default_gain`,
+  refreshed every 5 s from the capture control status endpoint
+  (`api_port` → `GET /api/v1/status`, §7.4) so a runtime
+  `POST /api/v1/gain` change stays honest. `calibration_offset_db`
+  is the per-device offset from the sdr-capture config (§16.2),
+  measured against a known reference (a signal generator or calibrated
+  receiver — measuring it is hardware work for the Phase 3 hardware
+  slice, not part of this contract).
+
+**Honesty flag.** A signal is calibrated **iff** its SDR config
+contains `calibration_offset_db` — presence of the key, not its value
+(`0.0` is a valid offset; the simulator fixture uses it because the
+simulator is calibrated by construction). The boolean
+`power_calibrated` (§12.2) travels with every REST/WS payload
+(`powerCalibrated`, §12.7); the UI renders "dBm" only when it is true
+and "dB (rel.)" otherwise, and the signal-processor log line labels
+power the same way. Consumers MUST NOT treat `power_dbm` on an
+uncalibrated signal as an absolute level.
+
+**SNR is calibration-invariant:** the noise floor passes through the
+same per-SDR transform as the peaks, so ratios do not move when
+calibration is switched on.
 
 ### 5.7 Noise floor & frame-level extras
 
@@ -378,6 +405,9 @@ absolute measurement.
   (≤ 1024 pairs) and **no windowing**. Until wired, that YAML block is
   aspirational; the normative values are "frame length, rectangular
   window".
+- Noise-floor estimates feed the §8 verification SNR. Under §5.6
+  calibration the floor transforms identically to the peaks
+  (same gain + offset), so SNR is calibration-invariant.
 
 ### 5.8 Event throttling
 
@@ -886,7 +916,8 @@ Applied automatically on first start via
 | modulation / sub_type | TEXT | §6.1 |
 | class | TEXT | §6.5 enum — never a method tag |
 | confidence | REAL | 0–1 |
-| power_dbm | REAL | **relative dB until §5.6 calibration** |
+| power_dbm | REAL | calibrated dBm when `power_calibrated`, else relative dB (§5.6) |
+| power_calibrated | BOOLEAN | `[implemented]` — §5.6 honesty flag; default false |
 | location | GEOGRAPHY(POINT, 4326) | NULL allowed (→ §9.3) |
 | accuracy_m | REAL | 0 = exactly at SDR (§9.2) |
 | first_seen / last_seen | TIMESTAMPTZ | upsert semantics: first_seen kept, last_seen refreshed |
@@ -929,9 +960,10 @@ GIST on `path`. Populated in Phase 4 (§9.4).
 
 REST and WS payloads use the **camelCase** keys of
 `internal/db/models.go` (`freqHz`, `bandwidthHz`, `sdrId`,
-`firstSeen`, `powerDbm`, `signalId`, …). `location` is flattened to
-`lat`/`lon` (NULL when unlocated). No snake_case in any client
-payload.
+`firstSeen`, `powerDbm`, `powerCalibrated`, `signalId`, …).
+`location` is flattened to `lat`/`lon` (NULL when unlocated). No
+snake_case in any client payload. `powerCalibrated` (§5.6) marks
+whether `powerDbm` is an absolute level — false means relative dB.
 
 ## 13. REST API
 
@@ -1223,7 +1255,11 @@ Known YAML-vs-behavior conflicts:
 
 ### 16.2 `sdr-capture.yaml` (loaded)
 
-```textsdrs[]:
+```textapi_port       int      control-API port of this capture instance (the -listen
+                         flag, default 9090); consumed by signal-processor's §5.6
+                         gain polling (GET /api/v1/status every 5 s); unset = off
+
+sdrs[]:
   id            string   required, unique; frame sdr_id + DB row
   driver        string   rtlsdr | hackrf | simulator(-sim flag)
   usb_index     int      (rtlsdr)
@@ -1235,6 +1271,8 @@ Known YAML-vs-behavior conflicts:
   stream_host   string   default localhost
   stream_port   int      default 9000 + index
   lat, lon      float    optional — single-receiver location (§9.2)
+  calibration_offset_db float  optional — PRESENCE marks the SDR calibrated;
+                         power_dbm = power_db − gain + offset (§5.6)
 ```
 
 ### 16.3 `signal-processor` (flags/env)
@@ -1430,7 +1468,7 @@ stores and the API client; `svelte-check` for types.
 | **0 — Core pipeline** | capture → ingest → DSP → classify → persist → events; dashboard shell; CI | smoke-onnx green; this spec written |
 | **1 — Correctness** | D4 negative offsets; A1 unlocated signals; §6.5 class enum; dead `/ws` hub removal; FLAC-claim cleanup (code + README); CORS/origin tightening — all **done** | new tests per §17.3 green; docs match behavior |
 | **2 — Features** | §15.3 RTL-SDR defect fixes; §10.1 real SSB + pair-aware registry; §11.2 active/TTL lifecycle; `sdr.status` producer (§14.4.3); `GET /ws` gateway relay (§2.2, A3); frontend data wiring (§14.4.2); YAML config loading + `min_confidence` enforcement (§16.1); **slices 1–3:** D3 scan loop + §7.4 control status; §8 dual-SDR verification with verified latch; recorder (D1 in-band WAV + §11.3 retention); first live `TEST_DATABASE_URL` integration run (§17.3); **slice 4:** Opus live streaming recorder side (D1b, §10.3–§10.4: per-signal mux + `/ws/audio` server + `Dockerfile.recorder`); **slice 5:** `/ws/audio` gateway relay (§2.2, §10.4); control-API proxy — `PUT /api/sdrs/{id}` retune forwarding + `GET /api/sdrs/{id}/status` (§7.4, §13.1, §13.2.3) — **all delivered** | §17.3 obligations green; dashboard live end-to-end |
-| **3 — Hardware & fidelity** | RTL-SDR on-hardware validation (§15.3 defect fixes delivered in Phase 2); HackRF driver (H1/H2) — **delivered, compile-validated** (§15.4); power calibration contract (§5.6); **slice 0:** multi-SDR sim enablement — `driver: simulator` accepted via YAML + two-device shared-ingest-port rehearsal (§16.1, §16.4) — **delivered**; `min_confidence` enforcement (§16.1) — **delivered in Phase 2** | 2 real SDRs verified end-to-end; calibration documented |
+| **3 — Hardware & fidelity** | RTL-SDR on-hardware validation (§15.3 defect fixes delivered in Phase 2); HackRF driver (H1/H2) — **delivered, compile-validated** (§15.4); power calibration contract (§5.6) — **delivered** (contract + mechanism + honesty flag; measuring each SDR's physical offset → Phase 3 hardware slice runbook); **slice 0:** multi-SDR sim enablement — `driver: simulator` accepted via YAML + two-device shared-ingest-port rehearsal (§16.1, §16.4) — **delivered**; `min_confidence` enforcement (§16.1) — **delivered in Phase 2** | 2 real SDRs verified end-to-end; calibration documented |
 | **4 — Deferred** | multi-host + NTP/PTP; TDOA multilateration; tracking (`tracks`, §9.4); annotations UI; `audio.level` feed | scoped separately |
 
 ## Appendix A — Decision Register

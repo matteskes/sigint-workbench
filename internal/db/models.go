@@ -5,23 +5,27 @@ import "time"
 
 // Signal represents a detected RF signal.
 type Signal struct {
-	ID          string    `json:"id" db:"id"`
-	FreqHz      uint64    `json:"freqHz" db:"freq_hz"`
-	BandwidthHz int32     `json:"bandwidthHz" db:"bandwidth_hz"`
-	Modulation  string    `json:"modulation" db:"modulation"`
-	SubType     string    `json:"subType" db:"sub_type"`
-	Class       string    `json:"class" db:"class"`
-	Method      string    `json:"method" db:"method"` // "rules" or "onnx"
-	Confidence  float64   `json:"confidence" db:"confidence"`
-	PowerDBM    float64   `json:"powerDbm" db:"power_dbm"`
-	Lat         *float64  `json:"lat" db:"lat"`
-	Lon         *float64  `json:"lon" db:"lon"`
-	AccuracyM   float64   `json:"accuracyM" db:"accuracy_m"`
-	FirstSeen   time.Time `json:"firstSeen" db:"first_seen"`
-	LastSeen    time.Time `json:"lastSeen" db:"last_seen"`
-	SDRID       string    `json:"sdrId" db:"sdr_id"`
-	Verified    bool      `json:"verified" db:"verified"`
-	Active      bool      `json:"active" db:"active"` // §11.2 lifecycle
+	ID          string  `json:"id" db:"id"`
+	FreqHz      uint64  `json:"freqHz" db:"freq_hz"`
+	BandwidthHz int32   `json:"bandwidthHz" db:"bandwidth_hz"`
+	Modulation  string  `json:"modulation" db:"modulation"`
+	SubType     string  `json:"subType" db:"sub_type"`
+	Class       string  `json:"class" db:"class"`
+	Method      string  `json:"method" db:"method"` // "rules" or "onnx"
+	Confidence  float64 `json:"confidence" db:"confidence"`
+	PowerDBM    float64 `json:"powerDbm" db:"power_dbm"`
+	// §5.6: true only when power_dbm is calibrated (the detecting SDR
+	// has a calibration_offset_db); false = relative dB (powerDbm holds
+	// the raw relative value).
+	PowerCalibrated bool      `json:"powerCalibrated" db:"power_calibrated"`
+	Lat             *float64  `json:"lat" db:"lat"`
+	Lon             *float64  `json:"lon" db:"lon"`
+	AccuracyM       float64   `json:"accuracyM" db:"accuracy_m"`
+	FirstSeen       time.Time `json:"firstSeen" db:"first_seen"`
+	LastSeen        time.Time `json:"lastSeen" db:"last_seen"`
+	SDRID           string    `json:"sdrId" db:"sdr_id"`
+	Verified        bool      `json:"verified" db:"verified"`
+	Active          bool      `json:"active" db:"active"` // §11.2 lifecycle
 }
 
 // Recording represents a recorded signal capture.

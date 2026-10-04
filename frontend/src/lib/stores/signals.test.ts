@@ -12,6 +12,7 @@ function makeSignal(overrides: Partial<Signal> = {}): Signal {
 		class: 'signal',
 		confidence: 0.9,
 		powerDbm: -70,
+		powerCalibrated: false,
 		lat: 50,
 		lon: 30,
 		accuracyM: 100,

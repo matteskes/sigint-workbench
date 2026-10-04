@@ -11,6 +11,12 @@
 # The signal-processor should be pointed at this same file via
 # SDR_CONFIG — the locations below drive §9 map placement.
 
+# The simulator is calibrated by construction (§5.6): its tone
+# amplitudes are exact, so calibration_offset_db: 0.0 makes the
+# reported dBm values exact, which end-to-end tests pin.
+
+api_port: 9090               # matches sdr-capture's default -listen
+
 sdrs:
   - id: "simulator-0"
     driver: simulator
@@ -22,6 +28,7 @@ sdrs:
     stream_port: 9000          # shared with simulator-1
     lat: 40.7128
     lon: -74.0060
+    calibration_offset_db: 0.0 # calibrated by construction (§5.6)
 
   - id: "simulator-1"
     driver: simulator
@@ -33,3 +40,4 @@ sdrs:
     stream_port: 9000          # shared with simulator-0
     lat: 40.7128
     lon: -73.9950              # ~1 km east: distinct map placement
+    calibration_offset_db: 0.0 # calibrated by construction (§5.6)

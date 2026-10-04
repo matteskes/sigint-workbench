@@ -45,15 +45,21 @@ import (
 
 // signalEvent is a classified signal detected in the spectrum.
 type signalEvent struct {
-	SDRID     string           `json:"sdr_id"`
-	Timestamp time.Time        `json:"timestamp"`
-	CenterHz  uint64           `json:"center_hz"`
-	PeakHz    uint64           `json:"peak_hz"`
-	OffsetHz  float64          `json:"offset_hz"`
-	PowerDB   float64          `json:"power_db"`
-	Bandwidth float64          `json:"bandwidth_hz"`
-	BandName  string           `json:"band_name"`
-	Class     *classify.Result `json:"class"`
+	SDRID     string    `json:"sdr_id"`
+	Timestamp time.Time `json:"timestamp"`
+	CenterHz  uint64    `json:"center_hz"`
+	PeakHz    uint64    `json:"peak_hz"`
+	OffsetHz  float64   `json:"offset_hz"`
+	PowerDB   float64   `json:"power_db"`
+	// Calibrated power (§5.6): PowerDBM is meaningful only when
+	// Calibrated is true (power_dbm = power_db − applied_gain +
+	// offset_db for the detecting SDR); otherwise it mirrors PowerDB
+	// (uncalibrated relative dB) and consumers MUST treat it as such.
+	PowerDBM   float64          `json:"power_dbm"`
+	Calibrated bool             `json:"power_calibrated"`
+	Bandwidth  float64          `json:"bandwidth_hz"`
+	BandName   string           `json:"band_name"`
+	Class      *classify.Result `json:"class"`
 }
 
 // sdrLocation is a receiver's physical location.
@@ -74,6 +80,10 @@ type sdrState struct {
 	active     bool
 	lastFrame  time.Time
 	emittedAt  time.Time
+	// calOffset is the §5.6 per-device power calibration offset
+	// (calibration_offset_db). nil = uncalibrated: power values stay
+	// relative dB and powerCalibrated stays false.
+	calOffset *float64
 }
 
 // statusEvent builds the sdr.status payload: the §12.1 SDRDevice
@@ -183,6 +193,7 @@ func (p *publisher) initSDRs(cfgs []sdr.SDRCaptureConfig) {
 			serial:     c.Serial,
 			gainDB:     c.DefaultGain,
 			bwHz:       c.DefaultBW,
+			calOffset:  c.CalibrationOffsetDB, // §5.6 (nil = uncalibrated)
 		}
 		if c.Lat != nil && c.Lon != nil {
 			st.lat, st.lon = c.Lat, c.Lon
@@ -248,6 +259,78 @@ func (p *publisher) observeFrame(sdrID string, freqHz uint64, now time.Time) {
 	}
 }
 
+// gainPollInterval is how often signal-processor re-reads the capture
+// instance's control status for live gain changes (§5.6).
+const gainPollInterval = 5 * time.Second
+
+// startGainPolling launches a goroutine that periodically refreshes
+// per-SDR gain from a capture instance's control status endpoint
+// (§5.6). Failed polls keep the last known values; unknown SDR IDs in
+// the response are ignored. statusURL is the /api/v1/status of the
+// capture instance (port from the config's api_port).
+func (p *publisher) startGainPolling(statusURL string) {
+	go func() {
+		ticker := time.NewTicker(gainPollInterval)
+		defer ticker.Stop()
+		for range ticker.C {
+			p.pollGainOnce(statusURL)
+		}
+	}()
+}
+
+// pollGainOnce fetches and applies one status snapshot. Errors are
+// silent: the capture instance may be down or the endpoint absent.
+func (p *publisher) pollGainOnce(statusURL string) {
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(statusURL)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+	var slots []struct {
+		ID     string  `json:"id"`
+		GainDB float64 `json:"gain_db"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&slots); err != nil {
+		return
+	}
+	for _, s := range slots {
+		p.updateGain(s.ID, s.GainDB)
+	}
+}
+
+// updateGain refreshes one SDR's applied gain (§5.6 calibration input)
+// and logs the change so operators can correlate dBm shifts.
+func (p *publisher) updateGain(id string, gainDB float64) {
+	p.mu.Lock()
+	st, ok := p.sdrs[id]
+	if !ok || st.gainDB == gainDB {
+		p.mu.Unlock()
+		return
+	}
+	st.gainDB = gainDB
+	p.mu.Unlock()
+	log.Printf("[%s] gain (polled) -> %.1f dB", id, gainDB)
+}
+
+// calibrate decorates ev with the §5.6 calibrated power for its SDR:
+// power_dbm = power_db − applied_gain + offset_db, Calibrated = true.
+// Without a configured calibration_offset_db it is a no-op — the event
+// keeps its uncalibrated relative dB.
+func (p *publisher) calibrate(ev *signalEvent) {
+	p.mu.Lock()
+	st, ok := p.sdrs[ev.SDRID]
+	if !ok || st.calOffset == nil {
+		p.mu.Unlock()
+		return
+	}
+	off := *st.calOffset
+	gain := st.gainDB
+	p.mu.Unlock()
+	ev.PowerDBM = ev.PowerDB - gain + off
+	ev.Calibrated = true
+}
+
 // publish records one detected signal. It always upserts to the database
 // and emits a signal.new/signal.update event (§9.3). When the detecting
 // SDR has a known location it is attached to the row; otherwise the signal
@@ -291,23 +374,31 @@ func (p *publisher) publish(ev signalEvent, now time.Time) {
 	if loc != nil {
 		lat, lon = &loc.Lat, &loc.Lon
 	}
+	// §5.6: power_dbm is the calibrated value when the SDR has a
+	// calibration offset; otherwise the raw relative dB passes through
+	// and PowerCalibrated stays false (consumers treat it as relative).
+	pwr := ev.PowerDB
+	if ev.Calibrated {
+		pwr = ev.PowerDBM
+	}
 	sig := &db.Signal{
-		ID:          id,
-		FreqHz:      ev.PeakHz,
-		BandwidthHz: bw,
-		Modulation:  mod,
-		SubType:     subType,
-		Class:       class,
-		Method:      method,
-		Confidence:  conf,
-		PowerDBM:    ev.PowerDB,
-		Lat:         lat,
-		Lon:         lon,
-		FirstSeen:   first,
-		LastSeen:    now,
-		SDRID:       ev.SDRID,
-		Verified:    alreadyVerified,
-		Active:      true,
+		ID:              id,
+		FreqHz:          ev.PeakHz,
+		BandwidthHz:     bw,
+		Modulation:      mod,
+		SubType:         subType,
+		Class:           class,
+		Method:          method,
+		Confidence:      conf,
+		PowerDBM:        pwr,
+		PowerCalibrated: ev.Calibrated,
+		Lat:             lat,
+		Lon:             lon,
+		FirstSeen:       first,
+		LastSeen:        now,
+		SDRID:           ev.SDRID,
+		Verified:        alreadyVerified,
+		Active:          true,
 	}
 
 	if p.db != nil {
@@ -518,6 +609,17 @@ func loadLocations(path string) map[string]sdrLocation {
 	return locs
 }
 
+// loadAPIPort returns the capture config's control-API port (§5.6 gain
+// polling) or 0 when unavailable. Tolerant like loadSDRs/loadLocations:
+// a missing or broken config just disables gain polling.
+func loadAPIPort(path string) int {
+	cfg, err := sdr.LoadCaptureConfig(path)
+	if err != nil {
+		return 0
+	}
+	return cfg.APIPort
+}
+
 // frameClassifier classifies one detected peak. RuleClassifier is the
 // default; onnxFrameClassifier wraps the ML model with a per-peak
 // rules fallback so a bad frame never costs a detection.
@@ -645,6 +747,11 @@ func main() {
 	ttl := time.Duration(envInt("SIGNAL_TTL", 30)) * time.Second
 	pub := newPublisher(database, wsHubURL, loadLocations(*configPath), ttl)
 	pub.initSDRs(loadSDRs(*configPath))
+	if apiPort := loadAPIPort(*configPath); apiPort != 0 {
+		statusURL := fmt.Sprintf("http://localhost:%d/api/v1/status", apiPort)
+		pub.startGainPolling(statusURL)
+		log.Printf("gain polling (§5.6) -> %s every %v", statusURL, gainPollInterval)
+	}
 	if wsHubURL != "" {
 		log.Printf("emitting events to %s (ttl=%v)", wsHubURL, ttl)
 	}
@@ -705,6 +812,12 @@ func main() {
 		pub.observeFrame(frame.SDRID, frame.FreqHz, time.Now())
 
 		events := processFrame(frame, peakDetector, classifier)
+
+		// §5.6: decorate each event with calibrated power before
+		// logging/publishing (no-op without calibration_offset_db).
+		for i := range events {
+			pub.calibrate(&events[i])
+		}
 
 		// Log + publish events (throttled)
 		now := time.Now()
@@ -813,12 +926,21 @@ func logSignal(ev signalEvent) {
 	}
 	// §6.5: class carries the source enum; method (rules|onnx) is recorded
 	// separately, never folded into the class string.
-	log.Printf("SIGNAL  %s  %.4f MHz  %s  %s/%s  %s  %.1f dB  BW:%.0f kHz  conf:%.2f",
+	// §5.6: calibrated SDRs report dBm; uncalibrated ones say "dB (rel.)"
+	// so the log never claims a precision it does not have.
+	unit := "dB (rel.)"
+	pwr := ev.PowerDB
+	if ev.Calibrated {
+		unit = "dBm"
+		pwr = ev.PowerDBM
+	}
+	log.Printf("SIGNAL  %s  %.4f MHz  %s  %s/%s  %s  %.1f %s  BW:%.0f kHz  conf:%.2f",
 		ev.SDRID,
 		float64(ev.PeakHz)/1e6,
 		ev.BandName,
 		mod, src, method,
-		ev.PowerDB,
+		pwr,
+		unit,
 		bw/1000,
 		conf,
 	)
