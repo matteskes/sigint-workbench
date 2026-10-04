@@ -27,13 +27,16 @@ import (
 	"os"
 	"os/signal"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"sigint-workbench/internal/sdr"
 )
 
-// sdrSlot tracks one SDR device and its streaming state.
+// sdrSlot tracks one SDR device and its streaming state. A slot is
+// driven either by manual control only (mode "monitor") or by the D3
+// scan loop (§7.1) when configured with mode "scanner" or "both".
 type sdrSlot struct {
 	cfg      sdr.SDRCaptureConfig
 	device   sdr.SDR
@@ -41,6 +44,19 @@ type sdrSlot struct {
 	freqHz   uint64
 	gainDB   float64
 	mu       sync.Mutex
+
+	scanning   bool // D3 scan loop attached to this slot
+	scanPaused bool // a manual tune parked the sweep (§7.4)
+
+	// Scan loop parameters (§7.1 defaults: 100 kHz step, 50 ms dwell).
+	scanStep  uint64
+	scanDwell time.Duration
+	scanMinHz uint64
+	scanMaxHz uint64
+
+	// Last successful IQ read (unix nanos); 0 until data flows. Backs
+	// the §7.4 status "active" field.
+	lastRead atomic.Int64
 }
 
 func (s *sdrSlot) setFrequency(mhz float64) error {
@@ -51,8 +67,65 @@ func (s *sdrSlot) setFrequency(mhz float64) error {
 		return err
 	}
 	s.freqHz = hz
-	log.Printf("[%s] frequency -> %.4f MHz", s.cfg.ID, mhz)
+	// §7.4: a manual tune parks the D3 scan loop until restart.
+	if s.scanning {
+		s.scanPaused = true
+		log.Printf("[%s] frequency -> %.4f MHz (scan loop paused)", s.cfg.ID, mhz)
+	} else {
+		log.Printf("[%s] frequency -> %.4f MHz", s.cfg.ID, mhz)
+	}
 	return nil
+}
+
+// setScanFrequency tunes the device as part of the D3 sweep (§7.1).
+// Unlike a manual setFrequency it does not pause the scan loop.
+func (s *sdrSlot) setScanFrequency(hz uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.device.SetFrequency(hz); err != nil {
+		return err
+	}
+	s.freqHz = hz
+	return nil
+}
+
+// nextScanFreq returns the next sweep frequency after cur (§7.1):
+// f = min + k·step, wrapping to min once the step would exceed max.
+// ok is false when the range is degenerate (step 0 or min >= max),
+// which disables the sweep.
+func nextScanFreq(cur, step, min, max uint64) (next uint64, ok bool) {
+	if step == 0 || min >= max {
+		return 0, false
+	}
+	if cur < min || cur >= max {
+		return min, true
+	}
+	next = cur + step
+	if next > max {
+		next = min
+	}
+	return next, true
+}
+
+// resolveScanRange resolves the effective sweep range for one device
+// (§7.1): configured scan.min_hz/scan.max_hz with zero meaning "driver
+// default", with the result clamped to the driver's capability range.
+// ok is false when no usable range remains.
+func resolveScanRange(cfg sdr.ScanConfig, meta sdr.SDRMetadata) (min, max uint64, ok bool) {
+	min, max = cfg.MinHz, cfg.MaxHz
+	if min == 0 {
+		min = meta.FreqMin
+	}
+	if max == 0 {
+		max = meta.FreqMax
+	}
+	if min < meta.FreqMin {
+		min = meta.FreqMin
+	}
+	if max > meta.FreqMax {
+		max = meta.FreqMax
+	}
+	return min, max, min < max
 }
 
 func (s *sdrSlot) setGain(db float64) error {
@@ -70,15 +143,25 @@ func (s *sdrSlot) status() map[string]any {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	meta := s.device.Metadata()
+	// §7.4: a device is active while IQ frames are still flowing.
+	active := false
+	if last := s.lastRead.Load(); last != 0 && time.Since(time.Unix(0, last)) < 5*time.Second {
+		active = true
+	}
 	return map[string]any{
-		"id":       s.cfg.ID,
-		"driver":   s.cfg.Driver,
-		"model":    meta.Model,
-		"freq_mhz": s.freqHz / 1e6,
-		"gain_db":  s.gainDB,
-		"bw_hz":    s.cfg.DefaultBW,
-		"mode":     s.cfg.Mode,
-		"stream":   fmt.Sprintf("%s:%d", s.cfg.StreamHost, s.cfg.StreamPort),
+		"id":          s.cfg.ID,
+		"driver":      s.cfg.Driver,
+		"model":       meta.Model,
+		"active":      active,
+		"freq_hz":     s.freqHz,
+		"freq_mhz":    float64(s.freqHz) / 1e6,
+		"gain_db":     s.gainDB,
+		"bw_hz":       s.cfg.DefaultBW,
+		"sample_rate": s.cfg.DefaultBW,
+		"mode":        s.cfg.Mode,
+		"scanning":    s.scanning,
+		"scan_paused": s.scanPaused,
+		"stream":      fmt.Sprintf("%s:%d", s.cfg.StreamHost, s.cfg.StreamPort),
 	}
 }
 
@@ -107,6 +190,7 @@ func iqReadLoop(slot *sdrSlot, buf []int16, exit <-chan struct{}) {
 		if n == 0 {
 			continue
 		}
+		slot.lastRead.Store(time.Now().UnixNano())
 		slot.mu.Lock()
 		freqHz := slot.freqHz
 		slot.mu.Unlock()
@@ -119,6 +203,41 @@ func iqReadLoop(slot *sdrSlot, buf []int16, exit <-chan struct{}) {
 		}
 		if err := slot.streamer.Send(frame); err != nil {
 			log.Printf("[%s] send error: %v", slot.cfg.ID, err)
+		}
+	}
+}
+
+// scanLoop implements the D3 frequency sweep (§7.1): step across the
+// resolved range at scanStep resolution, dwelling scanDwell per
+// frequency. A manual tune (§7.4) parks the loop until restart.
+func scanLoop(slot *sdrSlot, exit <-chan struct{}) {
+	ticker := time.NewTicker(slot.scanDwell)
+	defer ticker.Stop()
+	slot.mu.Lock()
+	cur := slot.freqHz
+	slot.mu.Unlock()
+	for {
+		select {
+		case <-exit:
+			return
+		case <-ticker.C:
+		}
+		slot.mu.Lock()
+		paused := slot.scanPaused
+		slot.mu.Unlock()
+		if paused {
+			continue
+		}
+		next, ok := nextScanFreq(cur, slot.scanStep, slot.scanMinHz, slot.scanMaxHz)
+		if !ok {
+			continue
+		}
+		// Advance the sweep cursor even when the tune fails so one
+		// bad frequency cannot wedge the scan (§7.1); the slot keeps
+		// reporting its last successfully tuned frequency.
+		cur = next
+		if err := slot.setScanFrequency(next); err != nil {
+			log.Printf("[%s] scan: %.4f MHz: %v", slot.cfg.ID, float64(next)/1e6, err)
 		}
 	}
 }
@@ -290,25 +409,47 @@ func main() {
 		if err != nil {
 			log.Fatalf("streamer %s: %v", sc.ID, err)
 		}
-		slots = append(slots, &sdrSlot{
+		meta := device.Metadata()
+		slot := &sdrSlot{
 			cfg:      sc,
 			device:   device,
 			streamer: streamer,
 			freqHz:   sc.DefaultFreq,
 			gainDB:   sc.DefaultGain,
-		})
+		}
+		// §7.1: scanner-mode devices are driven by the D3 sweep loop.
+		if sc.Mode == "scanner" || sc.Mode == "both" {
+			if minHz, maxHz, ok := resolveScanRange(cfg.Scan, meta); ok {
+				slot.scanning = true
+				slot.scanStep = cfg.Scan.Step()
+				slot.scanDwell = cfg.Scan.Dwell()
+				slot.scanMinHz = minHz
+				slot.scanMaxHz = maxHz
+			} else {
+				log.Printf("[%s] scan disabled: no usable frequency range (driver %.0f-%.0f MHz)",
+					sc.ID, float64(meta.FreqMin)/1e6, float64(meta.FreqMax)/1e6)
+			}
+		}
+		slots = append(slots, slot)
 		log.Printf("%s: %s  %.4f MHz  %.1f dB  %.2f MHz  -> %s:%d",
-			sc.ID, device.Metadata().Model,
+			sc.ID, meta.Model,
 			float64(sc.DefaultFreq)/1e6, sc.DefaultGain,
 			float64(sc.DefaultBW)/1e6, sc.StreamHost, sc.StreamPort)
 	}
 
-	// Start IQ read loops
+	// Start IQ read loops and D3 scan loops (§7.1).
 	exit := make(chan struct{})
 	bufSize := sdr.MaxIQSamplesPerFrame * 2
 	for _, slot := range slots {
 		buf := make([]int16, bufSize)
 		go iqReadLoop(slot, buf, exit)
+		if slot.scanning {
+			log.Printf("[%s] scan: %.4f-%.4f MHz  step %.0f kHz  dwell %d ms",
+				slot.cfg.ID,
+				float64(slot.scanMinHz)/1e6, float64(slot.scanMaxHz)/1e6,
+				float64(slot.scanStep)/1e3, slot.scanDwell.Milliseconds())
+			go scanLoop(slot, exit)
+		}
 	}
 
 	// Start HTTP control server
