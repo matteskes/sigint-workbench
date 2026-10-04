@@ -1,6 +1,6 @@
 import { get } from 'svelte/store';
 import { describe, it, expect, beforeEach } from 'vitest';
-import { signals, selectedSignal, signalCount, filteredSignals, type Signal } from './signals';
+import { signals, selectedSignal, signalCount, filteredSignals, upsertSignal, removeSignal, type Signal } from './signals';
 
 function makeSignal(overrides: Partial<Signal> = {}): Signal {
 	return {
@@ -66,5 +66,41 @@ describe('signals store', () => {
 		expect(get(wide)).toEqual([]);
 		signals.update(($s) => [...$s, makeSignal({ id: 'b', bandwidthHz: 50_000 })]);
 		expect(get(wide).map((s) => s.id)).toEqual(['b']);
+	});
+
+	it('upsertSignal inserts a new signal at the front', () => {
+		upsertSignal(makeSignal({ id: 'a' }));
+		upsertSignal(makeSignal({ id: 'b' }));
+		expect(get(signals).map((s) => s.id)).toEqual(['b', 'a']);
+	});
+
+	it('upsertSignal replaces the existing entry in place', () => {
+		upsertSignal(makeSignal({ id: 'a', verified: false }));
+		upsertSignal(makeSignal({ id: 'b' }));
+		upsertSignal(makeSignal({ id: 'a', verified: true }));
+		const list = get(signals);
+		expect(list.map((s) => s.id)).toEqual(['b', 'a']);
+		expect(list[1].verified).toBe(true);
+	});
+
+	it('removeSignal drops the signal and clears a matching selection', () => {
+		const a = makeSignal({ id: 'a' });
+		signals.set([a, makeSignal({ id: 'b' })]);
+		selectedSignal.set(a);
+
+		removeSignal('a');
+
+		expect(get(signals).map((s) => s.id)).toEqual(['b']);
+		expect(get(selectedSignal)).toBeNull();
+	});
+
+	it('removeSignal keeps an unrelated selection', () => {
+		const b = makeSignal({ id: 'b' });
+		signals.set([makeSignal({ id: 'a' }), b]);
+		selectedSignal.set(b);
+
+		removeSignal('a');
+
+		expect(get(selectedSignal)).toEqual(b);
 	});
 });

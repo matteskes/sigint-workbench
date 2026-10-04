@@ -5,6 +5,15 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .
+# Vite env is baked into the bundle at build time (there is no runtime
+# substitution) — pass browser-reachable URLs via --build-arg (the
+# compose file wires these to host-published ports by default).
+ARG VITE_API_URL=http://localhost:8080
+ARG VITE_WS_URL=ws://localhost:8080/ws
+ARG VITE_TILE_URL=http://localhost:8082/data/{z}/{x}/{y}.pbf
+ENV VITE_API_URL=$VITE_API_URL \
+    VITE_WS_URL=$VITE_WS_URL \
+    VITE_TILE_URL=$VITE_TILE_URL
 RUN npm run build
 
 # Fresh nginx install from the current alpine repos. The official

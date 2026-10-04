@@ -1,6 +1,6 @@
 import { get } from 'svelte/store';
 import { describe, it, expect, beforeEach } from 'vitest';
-import { sdrs, sdrCount, selectSDR, type SDRStatus } from './sdrs';
+import { sdrs, sdrCount, selectSDR, applySDRStatus, type SDRStatus } from './sdrs';
 
 function makeSDR(overrides: Partial<SDRStatus> = {}): SDRStatus {
 	return {
@@ -44,5 +44,20 @@ describe('sdrs store', () => {
 		const updated = selectSDR('rtlsdr-0');
 		expect(updated?.freqHz).toBe(146_000_000);
 		expect(updated?.active).toBe(false);
+	});
+
+	it('applySDRStatus appends unknown SDRs', () => {
+		applySDRStatus(makeSDR({ id: 'rtlsdr-0' }));
+		applySDRStatus(makeSDR({ id: 'rtlsdr-1', freqHz: 121_500_000 }));
+		expect(get(sdrs).map((s) => s.id)).toEqual(['rtlsdr-0', 'rtlsdr-1']);
+	});
+
+	it('applySDRStatus replaces the matching SDR in place', () => {
+		applySDRStatus(makeSDR({ id: 'rtlsdr-0', freqHz: 146_520_000, active: true }));
+		applySDRStatus(makeSDR({ id: 'rtlsdr-0', freqHz: 121_500_000, active: false }));
+		const list = get(sdrs);
+		expect(list).toHaveLength(1);
+		expect(list[0].freqHz).toBe(121_500_000);
+		expect(list[0].active).toBe(false);
 	});
 });

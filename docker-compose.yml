@@ -175,12 +175,14 @@ services:
     build:
       context: ./frontend
       dockerfile: ../docker/Dockerfile.frontend
+      # Vite env is baked at build time — these are URLs the BROWSER
+      # can reach (host-published ports), not service DNS names.
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:8080}
+        VITE_WS_URL: ${VITE_WS_URL:-ws://localhost:8080/ws}
+        VITE_TILE_URL: ${VITE_TILE_URL:-http://localhost:8082/data/{z}/{x}/{y}.pbf}
     ports:
       - "3000:80"
-    environment:
-      - VITE_API_URL=http://api-gateway:8080
-      - VITE_WS_URL=ws://ws-hub:8081
-      - VITE_TILE_URL=http://tiles:8080/data/{z}/{x}/{y}.pbf
     networks: [sdr-net]
     depends_on: [api-gateway, tiles]
     restart: unless-stopped

@@ -19,3 +19,14 @@ export function selectSDR(id: string): SDRStatus | undefined {
 	});
 	return found;
 }
+
+/** Inserts an SDR or replaces the existing one with the same id. */
+export function applySDRStatus(status: SDRStatus): void {
+	sdrs.update(($s) => {
+		const i = $s.findIndex((s) => s.id === status.id);
+		if (i === -1) return [...$s, status];
+		const copy = [...$s];
+		copy[i] = status;
+		return copy;
+	});
+}
