@@ -48,13 +48,6 @@ func newConsumer(addr string) (*consumer, error) {
 	return &consumer{name: addr, conn: conn}, nil
 }
 
-func envStr(key, def string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return def
-}
-
 func envInt(key string, def int) int {
 	v := os.Getenv(key)
 	if v == "" {
