@@ -79,6 +79,30 @@ type ClassifierConfig struct {
 	} `yaml:"onnx"`
 }
 
+// RecorderConfig mirrors config/recorder.yaml.
+type RecorderConfig struct {
+	RecordingsDir string `yaml:"recordings_dir"`
+	ListenPort    int    `yaml:"listen_port"`
+	Audio         struct {
+		SampleRate uint32 `yaml:"sample_rate"`
+		Format     string `yaml:"format"`
+		Channels   int    `yaml:"channels"`
+	} `yaml:"audio"`
+	IQ struct {
+		Enabled      bool   `yaml:"enabled"`
+		Format       string `yaml:"format"`
+		MaxDurationS int    `yaml:"max_duration_s"`
+	} `yaml:"iq"`
+	Retention struct {
+		MaxAgeDays int     `yaml:"max_age_days"`
+		MaxSizeGB  float64 `yaml:"max_size_gb"`
+	} `yaml:"retention"`
+	Capture struct {
+		CloseSilenceS int `yaml:"close_silence_s"`
+		MaxConcurrent int `yaml:"max_concurrent"`
+	} `yaml:"capture"`
+}
+
 // ─── Precedence helpers (flag > env > yaml > default) ────────────────
 
 // ResolveInt returns the first non-zero value.

@@ -40,7 +40,7 @@ services:
     environment:
       - CONFIG=/config/iq-ingest.yaml
       - LISTEN_PORT=9000
-      - CONSUMERS=signal-processor:9010
+      - CONSUMERS=signal-processor:9010,recorder:9011
       - LOG_LEVEL=${LOG_LEVEL:-info}
     networks: [sdr-net]
     restart: unless-stopped
@@ -91,10 +91,13 @@ services:
       context: .
       dockerfile: docker/Dockerfile.services
       args: { SERVICE: recorder }
+    ports:
+      - "${RECORDER_UDP_PORT:-9011}:9011/udp"
     volumes:
       - ./recordings:/recordings
       - ./config/recorder.yaml:/config.yaml:ro
     environment:
+      - RECORDER_CONFIG=/config.yaml
       - DB_URL=${DB_URL:-postgres://sdr:sdr@db:5432/sdr?sslmode=disable}
       - LOG_LEVEL=${LOG_LEVEL:-info}
     networks: [sdr-net]

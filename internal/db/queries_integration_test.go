@@ -243,3 +243,90 @@ func TestIntegrationVerification(t *testing.T) {
 		t.Errorf("verification rows = %d, want 1", n)
 	}
 }
+
+func TestIntegrationRecordingsAndPurge(t *testing.T) {
+	// §10.2/§11: recording rows round-trip and the archive purge
+	// removes long-inactive signals while recordings survive (their
+	// signal_id becomes NULL).
+	d := integrationPool(t)
+	ctx := context.Background()
+
+	id := "33333333-3333-3333-3333-333333333333"
+	if err := d.UpsertSignal(ctx, integrationSignal(id, "rules")); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	start := time.Now().Add(-time.Minute)
+	rec := &Recording{
+		SignalID:    id,
+		StartTime:   start,
+		EndTime:     start.Add(30 * time.Second),
+		DurationS:   30,
+		SampleRate:  48000,
+		CenterFreq:  146_520_000,
+		BandwidthHz: 12_500,
+		FilePath:    "/recordings/test-33333333.wav",
+		FileFormat:  "wav",
+		SizeBytes:   2880044,
+	}
+	if err := d.InsertRecording(ctx, rec); err != nil {
+		t.Fatalf("insert recording: %v", err)
+	}
+
+	rows, err := d.ListRecordings(ctx, id, 0)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("recordings = %d, want 1", len(rows))
+	}
+	if rows[0].FilePath != rec.FilePath || rows[0].SizeBytes != rec.SizeBytes ||
+		rows[0].SignalID != id || rows[0].SampleRate != 48000 {
+		t.Errorf("recording round-trip mismatch: %+v", rows[0])
+	}
+
+	// A long-inactive sibling signal with its own recording.
+	stale := "44444444-4444-4444-4444-444444444444"
+	if err := d.UpsertSignal(ctx, integrationSignal(stale, "rules")); err != nil {
+		t.Fatalf("upsert stale: %v", err)
+	}
+	if _, err := d.Pool.Exec(ctx,
+		`UPDATE signals SET active = FALSE, last_seen = now() - interval '40 days' WHERE id = $1`, stale); err != nil {
+		t.Fatalf("age stale signal: %v", err)
+	}
+	staleRec := &Recording{SignalID: stale, StartTime: start, FilePath: "/recordings/stale.wav",
+		FileFormat: "wav", SizeBytes: 1000}
+	if err := d.InsertRecording(ctx, staleRec); err != nil {
+		t.Fatalf("insert stale recording: %v", err)
+	}
+
+	n, err := d.PurgeInactiveSignals(ctx, 30*24*time.Hour)
+	if err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("purged %d signals, want 1", n)
+	}
+	if _, err := d.GetSignal(ctx, stale); err != ErrNotFound {
+		t.Errorf("stale signal survived purge: err=%v, want ErrNotFound", err)
+	}
+	if _, err := d.GetSignal(ctx, id); err != nil {
+		t.Errorf("active signal must survive purge: %v", err)
+	}
+	// The stale recording survives with a detached signal reference (§11).
+	srows, err := d.ListRecordings(ctx, "", 0)
+	if err != nil {
+		t.Fatalf("list after purge: %v", err)
+	}
+	if len(srows) != 2 {
+		t.Fatalf("recordings after purge = %d, want 2 (rows survive the purge)", len(srows))
+	}
+
+	// Delete by ID.
+	if err := d.DeleteRecording(ctx, rows[0].ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if err := d.DeleteRecording(ctx, rows[0].ID); err != ErrNotFound {
+		t.Errorf("second delete err = %v, want ErrNotFound", err)
+	}
+}

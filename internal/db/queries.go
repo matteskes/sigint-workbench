@@ -4,6 +4,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -49,10 +50,10 @@ func (d *DB) GetSignals(ctx context.Context, minLat, minLon, maxLat, maxLon floa
 	query := `
 		SELECT id, frequency_hz, bandwidth_hz, COALESCE(modulation,''), COALESCE(sub_type,''),
 			COALESCE(class,''), COALESCE(method,''), confidence, COALESCE(power_dbm,0),
-			ST_Y(location), ST_X(location), COALESCE(accuracy_m,0),
+			ST_Y(location::geometry), ST_X(location::geometry), COALESCE(accuracy_m,0),
 			first_seen, last_seen, sdr_id, verified
 		FROM signals
-		WHERE active AND (location IS NULL OR location && ST_MakeEnvelope($1, $2, $3, $4, 4326))
+		WHERE active AND (location IS NULL OR location::geometry && ST_MakeEnvelope($1, $2, $3, $4, 4326))
 		ORDER BY last_seen DESC
 		LIMIT 500
 	`
@@ -81,7 +82,7 @@ func (d *DB) GetSignal(ctx context.Context, id string) (*Signal, error) {
 	query := `
 		SELECT id, frequency_hz, bandwidth_hz, COALESCE(modulation,''), COALESCE(sub_type,''),
 			COALESCE(class,''), COALESCE(method,''), confidence, COALESCE(power_dbm,0),
-			ST_Y(location), ST_X(location), COALESCE(accuracy_m,0),
+			ST_Y(location::geometry), ST_X(location::geometry), COALESCE(accuracy_m,0),
 			first_seen, last_seen, sdr_id, verified, active
 		FROM signals
 		WHERE id = $1
@@ -315,16 +316,86 @@ func (d *DB) InsertVerification(ctx context.Context, v *Verification) error {
 	return nil
 }
 
-// InsertRecording inserts a recording entry.
+// InsertRecording inserts a recording entry. An empty ID lets the
+// database generate the UUID (gen_random_uuid(), core in PG13+).
 func (d *DB) InsertRecording(ctx context.Context, r *Recording) error {
 	query := `
 		INSERT INTO recordings (id, signal_id, start_time, end_time, duration_s,
 			sample_rate, center_freq, bandwidth_hz, file_path, file_format, size_bytes)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		VALUES (COALESCE($1::uuid, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 	`
+	var idArg any
+	if r.ID != "" {
+		idArg = r.ID
+	}
 	_, err := d.Pool.Exec(ctx, query,
-		r.ID, r.SignalID, r.StartTime, r.EndTime, r.DurationS,
+		idArg, r.SignalID, r.StartTime, r.EndTime, r.DurationS,
 		r.SampleRate, r.CenterFreq, r.BandwidthHz, r.FilePath, r.FileFormat, r.SizeBytes,
 	)
 	return err
+}
+
+// ListRecordings returns recordings, newest first, optionally filtered
+// by signal (empty signalID = all), capped at limit (<=0 → 200).
+func (d *DB) ListRecordings(ctx context.Context, signalID string, limit int) ([]Recording, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	query := `
+		SELECT id, COALESCE(signal_id::TEXT, ''), start_time, end_time,
+			COALESCE(duration_s, 0), COALESCE(sample_rate, 0), COALESCE(center_freq, 0),
+			COALESCE(bandwidth_hz, 0), file_path, COALESCE(file_format, ''), COALESCE(size_bytes, 0)
+		FROM recordings
+		WHERE ($1 = '' OR signal_id::TEXT = $1)
+		ORDER BY start_time DESC
+		LIMIT $2
+	`
+	rows, err := d.Pool.Query(ctx, query, signalID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("db: list recordings: %w", err)
+	}
+	defer rows.Close()
+
+	var out []Recording
+	for rows.Next() {
+		var r Recording
+		var end *time.Time
+		if err := rows.Scan(&r.ID, &r.SignalID, &r.StartTime, &end, &r.DurationS,
+			&r.SampleRate, &r.CenterFreq, &r.BandwidthHz, &r.FilePath, &r.FileFormat, &r.SizeBytes); err != nil {
+			return nil, fmt.Errorf("db: scan recording: %w", err)
+		}
+		if end != nil {
+			r.EndTime = *end
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// DeleteRecording removes a recording row by ID (§11.2 archive
+// purge). Returns ErrNotFound when the row does not exist.
+func (d *DB) DeleteRecording(ctx context.Context, id string) error {
+	tag, err := d.Pool.Exec(ctx, `DELETE FROM recordings WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("db: delete recording: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// PurgeInactiveSignals hard-deletes signals that have been inactive
+// for longer than olderThan (§11/D6: the TTL deactivates, the 30-day
+// archive purge removes). Verifications and tracks cascade; recordings
+// survive with signal_id set NULL. Returns the number of signals
+// removed.
+func (d *DB) PurgeInactiveSignals(ctx context.Context, olderThan time.Duration) (int64, error) {
+	cutoff := time.Now().Add(-olderThan)
+	tag, err := d.Pool.Exec(ctx,
+		`DELETE FROM signals WHERE NOT active AND last_seen < $1`, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("db: purge inactive signals: %w", err)
+	}
+	return tag.RowsAffected(), nil
 }

@@ -1,5 +1,6 @@
 # Recorder Configuration
 recordings_dir: /recordings
+listen_port: 9011       # UDP IQ in (iq-ingest CONSUMERS fan-out)
 
 # Audio encoding
 audio:
@@ -13,7 +14,13 @@ iq:
   format: raw          # raw (int16 interleaved)
   max_duration_s: 300  # 5 min max per recording
 
-# Retention
+# In-band audio capture (D1, §10.2): the recorder demodulates tracked
+# signals straight off the shared IQ stream — no extra tuners.
+capture:
+  close_silence_s: 10  # finalize a session after this much silence
+  max_concurrent: 8    # simultaneous recordings (strongest-first later)
+
+# Retention (§11)
 retention:
   max_age_days: 30
   max_size_gb: 50
