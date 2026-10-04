@@ -2,6 +2,7 @@
 #
 # Dev mode (macOS):
 #   1. Build & run sdr-capture natively:  make build-capture && ./bin/sdr-capture -config config/sdr-capture.yaml
+#      (no hardware? -config config/sdr-capture.sim.yaml — two sim devices sharing one ingest port)
 #   2. Start services:                    docker compose up
 #   3. Start frontend:                    cd frontend && npm run dev
 #
@@ -20,10 +21,8 @@ services:
       - /dev/bus/usb/001/003:/dev/bus/usb/001/003
     volumes:
       - ./config/sdr-capture.yaml:/config.yaml:ro
-    environment:
-      - UDP_TARGET_HOST=iq-ingest
-      - UDP_TARGET_PORT_0=9000
-      - UDP_TARGET_PORT_1=9001
+    # Stream targets come from the mounted YAML (stream_host/stream_port);
+    # frames carry sdr_id, so several devices may share one ingest port.
     networks: [sdr-net]
     restart: unless-stopped
 

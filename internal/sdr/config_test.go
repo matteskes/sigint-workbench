@@ -97,3 +97,57 @@ scan:
 		t.Error("expected error for inverted scan range, got nil")
 	}
 }
+
+func TestLoadCaptureConfig_SimulatorDriver(t *testing.T) {
+	// §16.2 documents driver: simulator — the loader must accept it so
+	// hardware-less multi-SDR development works. This fixture is the
+	// config-rehearsal shape: two sim devices sharing one iq-ingest UDP
+	// port (frames carry sdr_id, §16.4), same center so the §8
+	// verification pair forms between them.
+	cfg, err := LoadCaptureConfig(writeCaptureConfig(t, `
+sdrs:
+  - id: "simulator-0"
+    driver: simulator
+    default_freq: 100000000
+    default_gain: 40
+    default_bw: 2400000
+    mode: monitor
+    stream_port: 9000
+    lat: 40.7128
+    lon: -74.0060
+  - id: "simulator-1"
+    driver: simulator
+    default_freq: 100000000
+    default_gain: 40
+    default_bw: 2400000
+    mode: monitor
+    stream_port: 9000
+    lat: 40.7128
+    lon: -73.9950
+`))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	for i, want := range []string{"simulator-0", "simulator-1"} {
+		if cfg.SDRs[i].Driver != "simulator" {
+			t.Errorf("sdr[%d] driver = %q, want simulator", i, cfg.SDRs[i].Driver)
+		}
+		if cfg.SDRs[i].ID != want {
+			t.Errorf("sdr[%d] id = %q, want %q", i, cfg.SDRs[i].ID, want)
+		}
+		if cfg.SDRs[i].StreamHost != "localhost" || cfg.SDRs[i].StreamPort != 9000 {
+			t.Errorf("sdr[%d] stream = %s:%d, want localhost:9000 (shared port)",
+				i, cfg.SDRs[i].StreamHost, cfg.SDRs[i].StreamPort)
+		}
+	}
+	// Unknown drivers are still rejected.
+	bad := `
+sdrs:
+  - id: "x"
+    driver: plutosdr
+    default_freq: 100000000
+`
+	if _, err := LoadCaptureConfig(writeCaptureConfig(t, bad)); err == nil {
+		t.Error("expected error for unknown driver, got nil")
+	}
+}

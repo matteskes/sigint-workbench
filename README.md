@@ -95,7 +95,8 @@ and geospatial visualization.
 ### macOS (Development)
 
 - `brew install librtlsdr`
-- RTL-SDR dongle(s) connected via USB
+- RTL-SDR dongle(s) connected via USB — or none: run hardware-less
+  with `config/sdr-capture.sim.yaml`
 
 ### Linux (Production)
 
@@ -112,6 +113,8 @@ make setup
 # → Installs deps, pulls LFS models, creates .env from .env.example
 
 # 2. Configure SDRs — edit config/sdr-capture.yaml
+#    (no hardware? run config/sdr-capture.sim.yaml instead — two
+#     simulated devices sharing one iq-ingest port; SPEC §16.4)
 
 # 3. Set Up Map Tiles
 ./tiles/setup-tiles.sh california 10 16
@@ -176,9 +179,11 @@ sigint-workbench/
 | `make clean` | Remove build artifacts |
 | `make help` | Show all targets |
 
-The Go test suite (40 tests) covers the DSP core (FFT, peak detection,
-AGC, filters) and the SDR package (UDP IQ protocol, simulator). Run it
-with `make test`; the frontend suite runs via `make frontend-test`.
+The Go test suite covers the DSP core (FFT, peak detection, AGC,
+filters), the SDR package (UDP IQ protocol, simulator, capture-config
+loading), classification, location/verification, audio demodulation,
+recording, API handlers, and DB models. Run it with `make test`; the
+frontend suite runs via `make frontend-test`.
 
 ### Adding a New Demodulator
 

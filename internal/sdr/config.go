@@ -89,7 +89,7 @@ func LoadCaptureConfig(path string) (*CaptureConfig, error) {
 			return nil, fmt.Errorf("sdr[%d]: id is required", i)
 		}
 		switch s.Driver {
-		case "rtlsdr", "hackrf":
+		case "rtlsdr", "hackrf", "simulator":
 		default:
 			return nil, fmt.Errorf("sdr[%d]: unknown driver %q", i, s.Driver)
 		}

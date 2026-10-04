@@ -10,10 +10,9 @@ consumers:
     host: signal-processor
     port: 9010
 
-  # Enable when recorder is ready:
-  # - name: recorder
-  #   host: recorder
-  #   port: 9011
+  - name: recorder
+    host: recorder
+    port: 9011
 
 stats:
   interval_s: 5

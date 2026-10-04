@@ -1187,6 +1187,10 @@ Known YAML-vs-behavior conflicts:
   removed; only `wav` is documented (§10.5).
 - `signal-processor.yaml` `fft.*` — see §5.7 (not wired,
   `[planned]`).
+- `sdr-capture.yaml` `driver: simulator` — resolved (Phase 3,
+  slice 0): the loader accepts `simulator`; the two-device dev
+  fixture `config/sdr-capture.sim.yaml` shares one ingest port
+  (§16.4).
 
 ### 16.2 `sdr-capture.yaml` (loaded)
 
@@ -1222,8 +1226,8 @@ Known YAML-vs-behavior conflicts:
 
 | Key | Default | Meaning |
 | ----- | --------- | --------- |
-| `LISTEN_PORT` | 9000 | UDP receive port (one per SDR; multi-port `[planned]` — today S1/S2 need two ingest instances or a port-list) |
-| `CONSUMERS` | `signal-processor:9010` | csv of fan-out targets; **recorder target MUST be added** when it ships |
+| `LISTEN_PORT` | 9000 | UDP receive port. **One port serves all SDRs** — frames carry `sdr_id`, so capture devices may point `stream_port` at the same ingest port (`config/sdr-capture.sim.yaml` does this); a per-device port list remains unnecessary in v1 |
+| `CONSUMERS` | `signal-processor:9010` | csv of fan-out targets; add `recorder:9011` for audio demod/recording (compose default: both) |
 
 Stats log interval: 5 s. Buffer: 256 frames.
 
@@ -1396,7 +1400,7 @@ stores and the API client; `svelte-check` for types.
 | **0 — Core pipeline** | capture → ingest → DSP → classify → persist → events; dashboard shell; CI | smoke-onnx green; this spec written |
 | **1 — Correctness** | D4 negative offsets; A1 unlocated signals; §6.5 class enum; dead `/ws` hub removal; FLAC-claim cleanup (code + README); CORS/origin tightening — all **done** | new tests per §17.3 green; docs match behavior |
 | **2 — Features** | §15.3 RTL-SDR defect fixes; §10.1 real SSB + pair-aware registry; §11.2 active/TTL lifecycle; `sdr.status` producer (§14.4.3); `GET /ws` gateway relay (§2.2, A3); frontend data wiring (§14.4.2); YAML config loading + `min_confidence` enforcement (§16.1); **slices 1–3:** D3 scan loop + §7.4 control status; §8 dual-SDR verification with verified latch; recorder (D1 in-band WAV + §11.3 retention); first live `TEST_DATABASE_URL` integration run (§17.3); **slice 4:** Opus live streaming recorder side (D1b, §10.3–§10.4: per-signal mux + `/ws/audio` server + `Dockerfile.recorder`); **slice 5:** `/ws/audio` gateway relay (§2.2, §10.4); control-API proxy — `PUT /api/sdrs/{id}` retune forwarding + `GET /api/sdrs/{id}/status` (§7.4, §13.1, §13.2.3) — **all delivered** | §17.3 obligations green; dashboard live end-to-end |
-| **3 — Hardware & fidelity** | RTL-SDR on-hardware validation (§15.3 defect fixes delivered in Phase 2); HackRF driver (H1/H2); power calibration contract (§5.6); `min_confidence` enforcement (§16.1) | 2 real SDRs verified end-to-end; calibration documented |
+| **3 — Hardware & fidelity** | RTL-SDR on-hardware validation (§15.3 defect fixes delivered in Phase 2); HackRF driver (H1/H2); power calibration contract (§5.6); `min_confidence` enforcement (§16.1); **slice 0:** multi-SDR sim enablement — `driver: simulator` accepted via YAML + two-device shared-ingest-port rehearsal (§16.1, §16.4) — **delivered** | 2 real SDRs verified end-to-end; calibration documented |
 | **4 — Deferred** | multi-host + NTP/PTP; TDOA multilateration; tracking (`tracks`, §9.4); annotations UI; `audio.level` feed | scoped separately |
 
 ## Appendix A — Decision Register

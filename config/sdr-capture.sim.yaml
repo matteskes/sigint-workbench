@@ -1,0 +1,35 @@
+# SIGINT Workbench — SDR Capture Configuration (hardware-less dev)
+#
+# Two simulated devices sharing ONE iq-ingest UDP port: frames carry
+# sdr_id, so a single ingest instance multiplexes both streams
+# (SPEC §16.4). Both devices park on the same center frequency, so each
+# sees the simulator fixture signals (§15.2: CW +100 kHz, FM +500 kHz,
+# AM −200 kHz) and the §8 dual-SDR verification pair forms between them.
+#
+# Run:
+#   ./bin/sdr-capture -config config/sdr-capture.sim.yaml
+# The signal-processor should be pointed at this same file via
+# SDR_CONFIG — the locations below drive §9 map placement.
+
+sdrs:
+  - id: "simulator-0"
+    driver: simulator
+    default_freq: 100000000    # 100 MHz center
+    default_gain: 40
+    default_bw: 2400000
+    mode: monitor              # parked (no sweep) — signals stay visible
+    stream_host: localhost
+    stream_port: 9000          # shared with simulator-1
+    lat: 40.7128
+    lon: -74.0060
+
+  - id: "simulator-1"
+    driver: simulator
+    default_freq: 100000000    # same center as simulator-0 → §8 pair
+    default_gain: 40
+    default_bw: 2400000
+    mode: monitor
+    stream_host: localhost
+    stream_port: 9000          # shared with simulator-0
+    lat: 40.7128
+    lon: -73.9950              # ~1 km east: distinct map placement
