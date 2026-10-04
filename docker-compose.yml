@@ -87,10 +87,14 @@ services:
     restart: unless-stopped
 
   recorder:
+    # Opus-enabled build (cgo + libopus on debian:bookworm-slim, §10.4)
     build:
       context: .
-      dockerfile: docker/Dockerfile.services
-      args: { SERVICE: recorder }
+      dockerfile: docker/Dockerfile.recorder
+    ports:
+      - "${RECORDER_UDP_PORT:-9011}:9011/udp"
+    # No published TCP port: :9012/ws/audio (§10.4) is internal-only;
+    # the api-gateway relays /ws/audio to ws://recorder:9012 (§3.2).
     ports:
       - "${RECORDER_UDP_PORT:-9011}:9011/udp"
     volumes:

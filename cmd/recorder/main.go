@@ -11,13 +11,16 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"sync"
 	"syscall"
 	"time"
 
+	"sigint-workbench/internal/audio"
 	"sigint-workbench/internal/config"
 	"sigint-workbench/internal/db"
 	"sigint-workbench/internal/record"
@@ -27,6 +30,7 @@ import (
 func main() {
 	cfgPath := flag.String("config", config.GetEnv("RECORDER_CONFIG", "config/recorder.yaml"), "recorder YAML config")
 	listenPort := flag.Int("port", 0, "UDP IQ listen port (overrides env/config)")
+	wsPortFlag := flag.Int("ws-port", 0, "live audio WS listen port (overrides env/config)")
 	dir := flag.String("dir", "", "recordings directory (overrides env/config)")
 	flag.Parse()
 
@@ -39,6 +43,7 @@ func main() {
 		log.Printf("%v; using defaults", err)
 	}
 	port := config.ResolveInt(*listenPort, config.GetEnvInt("RECORDER_PORT", 0), cfg.ListenPort, 9011)
+	wsPort := config.ResolveInt(*wsPortFlag, config.GetEnvInt("RECORDER_WS_PORT", 0), cfg.Stream.ListenPort, 9012)
 	dirPath := config.ResolveString(*dir, os.Getenv("RECORDINGS_DIR"), cfg.RecordingsDir, "./recordings")
 
 	// Optional database (files-only mode without it).
@@ -57,13 +62,49 @@ func main() {
 		}
 	}
 
+	// Live audio (D1b, §10.4): per-signal Opus mux feeding the
+	// /ws/audio server. Needs the opus build tag (libopus); without
+	// it recording continues unaffected.
+	var streamer *record.Streamer
+	if audio.OpusAvailable {
+		streamer = record.NewStreamer(record.StreamConfig{
+			SampleRate: int(cfg.Audio.SampleRate),
+			Channels:   cfg.Audio.Channels,
+			BitrateBps: cfg.Stream.BitrateBps,
+		})
+	} else {
+		log.Printf("opus support not built in (-tags opus); live audio disabled, recording unaffected")
+	}
+
 	rec := record.NewRecorder(record.Config{
 		Dir:           dirPath,
 		MaxAgeDays:    cfg.Retention.MaxAgeDays,
 		MaxSizeGB:     cfg.Retention.MaxSizeGB,
 		CloseSilence:  time.Duration(cfg.Capture.CloseSilenceS) * time.Second,
 		MaxConcurrent: cfg.Capture.MaxConcurrent,
+		Streamer:      streamer,
 	}, database)
+
+	// §10.4: internal /ws/audio server on :9012 (unpublished; the
+	// api-gateway relays browser connections to it).
+	if streamer != nil {
+		wsSrv := &http.Server{
+			Addr:              fmt.Sprintf(":%d", wsPort),
+			Handler:           record.WSAudioHandler(streamer),
+			ReadHeaderTimeout: 5 * time.Second,
+		}
+		go func() {
+			log.Printf("live audio: ws://recorder:%d/ws/audio?signal=<id> (§10.4)", wsPort)
+			if err := wsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Printf("ws server: %v", err)
+			}
+		}()
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			wsSrv.Shutdown(shutdownCtx)
+		}()
+	}
 
 	rx, frames, err := sdr.NewIQReceiver(port, 512)
 	if err != nil {

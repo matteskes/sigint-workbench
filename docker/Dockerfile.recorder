@@ -1,0 +1,27 @@
+# Recorder with live Opus streaming (D1b, SPEC §10.4).
+#
+# Unlike Dockerfile.services (CGO_ENABLED=0, alpine), this image
+# builds with `-tags opus` (libopus is a cgo dependency), so the
+# builder is Debian. The runtime stage is debian:bookworm-slim with
+# the shared libraries the binary links against (libopus0 and, for
+# the binding's pkg-config, libopusfile0).
+#
+# Usage:
+#   docker build -f docker/Dockerfile.recorder -t recorder .
+
+FROM golang:1.25-bookworm AS builder
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends gcc pkg-config libopus-dev libopusfile-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    && CGO_ENABLED=1 go build -tags opus -ldflags="-s -w" -o /app/recorder ./cmd/recorder
+
+FROM debian:bookworm-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates libopus0 libopusfile0 \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /app/recorder /recorder
+ENTRYPOINT ["/recorder"]

@@ -20,6 +20,7 @@ type Config struct {
 	PollInterval  time.Duration // active-signal poll period
 	CloseSilence  time.Duration // idle time before a session finalizes
 	MaxConcurrent int           // simultaneous session cap
+	Streamer      *Streamer     // live audio mux (§10.4); nil disables
 }
 
 // Recorder tracks active signals and records the ones that appear in
@@ -28,6 +29,7 @@ type Recorder struct {
 	cfg      Config
 	db       *db.DB
 	registry *audio.Registry
+	streamer *Streamer
 
 	mu       sync.Mutex
 	sessions map[string]*Session // signal ID -> open session
@@ -51,6 +53,7 @@ func NewRecorder(cfg Config, database *db.DB) *Recorder {
 		cfg:      cfg,
 		db:       database,
 		registry: audio.DefaultRegistry(),
+		streamer: cfg.Streamer,
 		sessions: make(map[string]*Session),
 	}
 }
@@ -90,8 +93,13 @@ func (r *Recorder) ObserveFrame(frame *sdr.IQFrame, tracked []db.Signal) {
 			r.sessions[sig.ID] = sess
 		}
 		offset := float64(sig.FreqHz) - float64(frame.FreqHz)
-		if err := sess.Feed(frame, offset); err != nil {
+		aud, err := sess.Feed(frame, offset)
+		if err != nil {
 			r.discardLocked(sig.ID, sess)
+			continue
+		}
+		if r.streamer != nil {
+			r.streamer.Feed(sig, aud)
 		}
 	}
 }
@@ -198,11 +206,21 @@ func (r *Recorder) Close() int {
 // discardLocked removes a broken session without recording it.
 func (r *Recorder) discardLocked(id string, sess *Session) {
 	delete(r.sessions, id)
+	r.endStreamLocked(id)
 	sess.abandon()
+}
+
+// endStreamLocked tears down the live stream of a finalized or
+// discarded session (no-op without a streamer).
+func (r *Recorder) endStreamLocked(id string) {
+	if r.streamer != nil {
+		r.streamer.CloseStream(id)
+	}
 }
 
 // finalizeLocked persists a finalized session's recording row.
 func (r *Recorder) finalizeLocked(sess *Session) {
+	r.endStreamLocked(sess.Signal.ID) // the live stream ends with the session (§10.4.4)
 	rec, err := sess.finalize()
 	if err != nil {
 		sess.abandon()

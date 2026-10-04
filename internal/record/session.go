@@ -79,16 +79,18 @@ func newSession(reg *audio.Registry, dir string, sig db.Signal, at time.Time) (*
 // Feed demodulates one IQ frame for this session's signal and appends
 // the audio. offsetHz is the signal's offset from the frame center
 // (positive = above center); the mixer keeps phase continuity across
-// frames so FM does not click at frame boundaries.
-func (s *Session) Feed(frame *sdr.IQFrame, offsetHz float64) error {
+// frames so FM does not click at frame boundaries. The demodulated
+// audio is returned so the caller can also feed the live stream
+// (§10.4) without re-shifting.
+func (s *Session) Feed(frame *sdr.IQFrame, offsetHz float64) ([]float32, error) {
 	iq := int16PairsToComplex(frame.Samples)
 	shifted := s.mixer.shift(iq, offsetHz, frame.SampleRate)
 	aud, err := s.Demod.Demodulate(shifted, frame.SampleRate)
 	if err != nil {
-		return fmt.Errorf("record: demodulate %s: %w", s.Signal.ID, err)
+		return nil, fmt.Errorf("record: demodulate %s: %w", s.Signal.ID, err)
 	}
 	s.lastFeed = time.Now()
-	return s.wav.Write(aud)
+	return aud, s.wav.Write(aud)
 }
 
 // finalize closes the WAV and returns the recording row to persist.

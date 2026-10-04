@@ -84,8 +84,12 @@ func TestSessionRoundTrip(t *testing.T) {
 		t.Fatalf("newSession: %v", err)
 	}
 	frame := testFrame(sig.FreqHz, 1024)
-	if err := sess.Feed(frame, 0); err != nil {
+	aud, err := sess.Feed(frame, 0)
+	if err != nil {
 		t.Fatalf("feed: %v", err)
+	}
+	if len(aud) == 0 {
+		t.Fatal("feed returned no audio")
 	}
 	rec, err := sess.finalize()
 	if err != nil {

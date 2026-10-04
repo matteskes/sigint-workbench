@@ -64,6 +64,26 @@ jobs:
           printf '%s\n' "$out" | grep -qF -e '-> peak' || { echo "FAIL: signal-processor ONNX E2E skipped (ORT_LIBRARY_PATH/model?)"; exit 1; }
           echo "OK: onnx real-inference E2E passed (CW + WFM)"
 
+      - name: go build + vet + test (opus tag, real libopus)
+        # §10.4/§17.3: the live-audio encoder is cgo (libopus), built only
+        # with `-tags opus`. The tagged tests exercise the real encoder —
+        # including the §17.3 TOC-0xF8 frame-counter obligation through the
+        # recorder's /ws/audio server — so this step fails if they did not
+        # actually run (same guard pattern as the onnx step above).
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config libopus-dev libopusfile-dev
+          go build -tags opus ./...
+          go vet -tags opus ./...
+          out="$(go test -tags opus -v -count=1 ./internal/audio/ ./internal/record/ 2>&1)" || test_rc=$?
+          printf '%s\n' "$out"
+          if [ "${test_rc:-0}" -ne 0 ]; then
+            echo "FAIL: opus-tag go test failed (rc=${test_rc})"
+            exit 1
+          fi
+          printf '%s\n' "$out" | grep -qF 'TestOpusEncoderFrameContract' || { echo "FAIL: opus encoder contract test missing"; exit 1; }
+          printf '%s\n' "$out" | grep -qF 'TestWSAudioOpusFrameCounter' || { echo "FAIL: ws audio frame-counter test missing"; exit 1; }
+          echo "OK: opus real-encoder E2E passed (encoder contract + WS frame counter)"
+
   # ─── Frontend: svelte-check ───
   frontend:
     name: Frontend (svelte-check)
@@ -116,6 +136,7 @@ jobs:
           docker build -f docker/Dockerfile.sdr-capture -t sigint-sdr-capture:scan .
           docker build -f docker/Dockerfile.services --build-arg SERVICE=iq-ingest -t sigint-services:scan .
           docker build -f docker/Dockerfile.classifier -t sigint-classifier:scan .
+          docker build -f docker/Dockerfile.recorder -t sigint-recorder:scan .
 
       - name: Install Trivy
         run: |

@@ -101,6 +101,10 @@ type RecorderConfig struct {
 		CloseSilenceS int `yaml:"close_silence_s"`
 		MaxConcurrent int `yaml:"max_concurrent"`
 	} `yaml:"capture"`
+	Stream struct {
+		ListenPort int `yaml:"listen_port"` // internal /ws/audio WS (§10.4)
+		BitrateBps int `yaml:"bitrate_bps"` // Opus CBR bitrate (§10.4: 24000)
+	} `yaml:"stream"`
 }
 
 // ─── Precedence helpers (flag > env > yaml > default) ────────────────

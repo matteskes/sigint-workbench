@@ -24,3 +24,11 @@ capture:
 retention:
   max_age_days: 30
   max_size_gb: 50
+
+# Live audio (D1b, §10.4): per-signal Opus over WebSocket. The
+# api-gateway relays /ws/audio here (slice 5); this port stays
+# internal-only (§3.2). Requires an opus-tagged build (libopus) —
+# without it the server is skipped and recording is unaffected.
+stream:
+  listen_port: 9012
+  bitrate_bps: 24000  # 24 kbps CBR, mono, 20 ms frames (960 samples)

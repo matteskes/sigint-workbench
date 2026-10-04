@@ -7,6 +7,7 @@ require (
 	github.com/go-chi/cors v1.2.1
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
+	github.com/hraban/opus v0.0.0-20260708213942-bde8e4304501
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/rs/zerolog v1.33.0
 	github.com/yalue/onnxruntime_go v1.36.0
