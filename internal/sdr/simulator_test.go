@@ -51,14 +51,6 @@ func TestSimulator_ReadIQ_ProducesSamples(t *testing.T) {
 	if allZero {
 		t.Error("all samples are zero — simulator should produce non-zero signal")
 	}
-
-	// Verify samples are within int16 range (they should be, but sanity check)
-	for i, s := range buf {
-		if s < -32767 || s > 32767 {
-			t.Errorf("buf[%d] = %d, out of int16 range", i, s)
-			break
-		}
-	}
 }
 
 func TestSimulator_MultipleReads(t *testing.T) {

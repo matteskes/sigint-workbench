@@ -95,8 +95,6 @@ services:
       - "${RECORDER_UDP_PORT:-9011}:9011/udp"
     # No published TCP port: :9012/ws/audio (§10.4) is internal-only;
     # the api-gateway relays /ws/audio to ws://recorder:9012 (§3.2).
-    ports:
-      - "${RECORDER_UDP_PORT:-9011}:9011/udp"
     volumes:
       - ./recordings:/recordings
       - ./config/recorder.yaml:/config.yaml:ro

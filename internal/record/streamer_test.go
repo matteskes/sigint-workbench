@@ -14,7 +14,7 @@ type fakePacketizer struct{ n int }
 
 func (f *fakePacketizer) EncodeFrame(pcm []float32) ([]byte, error) {
 	f.n++
-	return []byte(fmt.Sprintf("pkt-%03d(%d)", f.n, len(pcm))), nil
+	return fmt.Appendf(nil, "pkt-%03d(%d)", f.n, len(pcm)), nil
 }
 
 // failPacketizer models a build without opus (or a broken encoder):
