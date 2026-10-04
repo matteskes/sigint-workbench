@@ -895,7 +895,7 @@ GIST on `path`. Populated in Phase 4 (§9.4).
 
 `id` UUID PK; `signal_id` → signals **ON DELETE CASCADE**;
 `user_note` TEXT; `created_at`. No REST surface in v1
-(`[gap]` — planned endpoint, §13.3).
+(`[gap]` — planned endpoint, §13.1).
 
 ### 12.6 `verifications`
 
@@ -1022,10 +1022,13 @@ payload-by-`id` upsert on `new`/`update`, delete on `removed`.
    (§13.2.4, Phase 1); the `GET /ws` relay to ws-hub is now
    `[implemented]` (§2.2, A3) — the `/ws/audio` relay awaits the
    recorder (D1b).
-2. Frontend: `+page.svelte` must bootstrap via
-   `$lib/api/client.ts` (`fetchSignals`, `fetchSDRs`) and open the
-   event socket; `SignalList`/`MapView`/`SDRControl` render from the
-   stores. Until then the dashboard shows only empty panels.
+2. Frontend wiring — `[implemented]`: `+page.svelte` bootstraps via
+   `$lib/api/client.ts` (`fetchSignals`, `fetchSDRs`), opens the
+   event socket through the gateway relay, dispatches
+   `signal.new`/`signal.update`/`signal.removed` + `sdr.status`
+   into the stores, and re-bootstraps with exponential backoff after
+   every reconnect; `SignalList`/`MapView`/`SDRControl` render from
+   the stores.
 3. `sdr.status` producer — `[implemented]`: the processor observes
    every incoming frame per SDR (§4) and emits a **deduplicated**
    event when a device's effective state changes (first frame,
@@ -1038,8 +1041,8 @@ payload-by-`id` upsert on `new`/`update`, delete on `removed`.
 ## 15. Hardware
 
 **Status: simulator `[implemented]`; RTL-SDR driver
-`[implemented]` (build tag, **untested on hardware in CI** — known
-defects, §15.3); HackRF `[planned]` (H1/H2).**
+`[implemented]` (build tag; §15.3 defect fixes compile-validated,
+on-hardware validation `[planned]`); HackRF `[planned]` (H1/H2).**
 
 ### 15.1 Driver contract
 
@@ -1334,7 +1337,7 @@ stores and the API client; `svelte-check` for types.
 | ------- | ------- | --------------- |
 | **0 — Core pipeline** (current) | capture → ingest → DSP → classify → persist → events; dashboard shell; CI | smoke-onnx green; this spec written |
 | **1 — Correctness** | D4 negative offsets; A1 unlocated signals; §6.5 class enum; dead `/ws` hub removal; FLAC-claim cleanup (code + README); CORS/origin tightening — all **done** | new tests per §17.3 green; docs match behavior |
-| **2 — Features** | D3 scan loop; §8 verification in processor; recorder (D1 in-band + D6 retention); Opus live streaming (D1b) + gateway relays (§2.2); frontend data wiring; control-API proxy + `sdr.status` events | §17.3 feature obligations all green; dashboard live end-to-end |
+| **2 — Features** | **Delivered in Phase 2:** §15.3 RTL-SDR defect fixes; §10.1 real SSB + pair-aware registry; §11.2 active/TTL lifecycle; `sdr.status` producer (§14.4.3); `GET /ws` gateway relay (§2.2, A3); frontend data wiring (§14.4.2); YAML config loading + `min_confidence` enforcement (§16.1). **Remaining `[planned]`:** D3 scan loop; §8 verification in processor; recorder (D1 in-band + D6 retention); Opus live streaming (D1b); `/ws/audio` relay; control-API proxy | §17.3 obligations green for delivered scope; dashboard live end-to-end |
 | **3 — Hardware & fidelity** | RTL-SDR on-hardware validation (§15.3 defect fixes delivered in Phase 2); HackRF driver (H1/H2); power calibration contract (§5.6); `min_confidence` enforcement (§16.1) | 2 real SDRs verified end-to-end; calibration documented |
 | **4 — Deferred** | multi-host + NTP/PTP; TDOA multilateration; tracking (`tracks`, §9.4); annotations UI; `audio.level` feed | scoped separately |
 
@@ -1353,7 +1356,7 @@ defaults — they have no separate normative surface.)
 | D3 | Normative scanner loop in sdr-capture (step/dwell); 2-SDR verification asynchronous | §7, §8 |
 | D4 | FFT bins above fs/2 wrapped to negative offsets (below-center blind spot) | §5.3 |
 | D6 | Retention: TTL → `active=false` (no hard delete); 30-day archive purge; recordings 30 days / 50 GB | §11 |
-| H1 | Hardware: RTL-SDR + simulator now; HackRF 1–7250 MHz, ≤ 56 MSPS, planned | §15.2, §15.4 |
+| H1 | Hardware: RTL-SDR + simulator now; HackRF 1–7250 MHz, ≤ 56 MSPS, planned | §15.1, §15.3, §15.4 |
 | H2 | TX prohibited by policy; drivers report `hasTX=false` | §1.2, §15.4, §17.2 |
 | A1 | Unlocated signals are listed & verified, never silently dropped (map omits them) | §9.3 |
 | A3 | Single client ingress: api-gateway proxies `/ws` and `/ws/audio`; hub + recorder internal-only | §2.2, §3.2 |
