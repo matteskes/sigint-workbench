@@ -3,9 +3,12 @@ package api
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog"
 )
 
@@ -15,6 +18,107 @@ func newTestServer() *httptest.Server {
 	srv := NewServer(nil, log)
 	ts := httptest.NewServer(srv.Handler())
 	return ts
+}
+
+// newTestServerWithHub builds an API server wired to the given
+// ws-hub address.
+func newTestServerWithHub(hubAddr string) *httptest.Server {
+	log := zerolog.Nop()
+	srv := NewServer(nil, log)
+	srv.wsHubAddr = hubAddr
+	return httptest.NewServer(srv.Handler())
+}
+
+func TestWSRelayForwardsHubEvents(t *testing.T) {
+	// Fake ws-hub: pushes one event after the client (relay) connects.
+	hubTS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/ws" {
+			http.NotFound(w, r)
+			return
+		}
+		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"signal.new","payload":{"id":"abc"}}`)); err != nil {
+			return
+		}
+		// Keep the connection open until the relay tears it down.
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}))
+	defer hubTS.Close()
+
+	hubURL, err := url.Parse(hubTS.URL)
+	if err != nil {
+		t.Fatalf("parse hub url: %v", err)
+	}
+	ts := newTestServerWithHub(hubURL.Host)
+	defer ts.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws"
+	client, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial relay: %v", err)
+	}
+	defer client.Close()
+	client.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_, msg, err := client.ReadMessage()
+	if err != nil {
+		t.Fatalf("read via relay: %v", err)
+	}
+	if !strings.Contains(string(msg), "signal.new") {
+		t.Fatalf("relayed message = %q, want signal.new event", msg)
+	}
+}
+
+func TestWSRelayHubUnreachable(t *testing.T) {
+	// Closed port: the relay must answer 502 JSON, not a handshake.
+	ts := newTestServerWithHub("127.0.0.1:1")
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/ws")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", resp.StatusCode)
+	}
+	body := make([]byte, 128)
+	n, _ := resp.Body.Read(body)
+	if !strings.Contains(string(body[:n]), "ws-hub unreachable") {
+		t.Fatalf("body = %q, want ws-hub unreachable JSON", body[:n])
+	}
+}
+
+func TestWSRelayRejectsForeignOrigin(t *testing.T) {
+	hubTS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		conn.Close()
+	}))
+	defer hubTS.Close()
+	hubURL, _ := url.Parse(hubTS.URL)
+
+	ts := newTestServerWithHub(hubURL.Host)
+	defer ts.Close()
+
+	header := http.Header{}
+	header.Set("Origin", "http://evil.example")
+	_, resp, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(ts.URL, "http")+"/ws", header)
+	if err == nil {
+		t.Fatal("expected dial failure for foreign origin")
+	}
+	if resp == nil || resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %v, want 403", resp)
+	}
 }
 
 func TestHealth(t *testing.T) {
@@ -59,20 +163,6 @@ func TestUpdateSDRWithoutDB(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503", resp.StatusCode)
-	}
-}
-
-func TestWSRelayPending(t *testing.T) {
-	ts := newTestServer()
-	defer ts.Close()
-
-	resp, err := http.Get(ts.URL + "/ws")
-	if err != nil {
-		t.Fatalf("get: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusNotImplemented {
-		t.Fatalf("status = %d, want 501", resp.StatusCode)
 	}
 }
 

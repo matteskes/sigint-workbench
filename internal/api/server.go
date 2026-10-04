@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/cors"
+	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog"
 
 	"sigint-workbench/internal/db"
@@ -26,6 +28,7 @@ type Server struct {
 	log    zerolog.Logger
 
 	recordingsDir string
+	wsHubAddr     string // ws-hub host:port for the /ws relay (§2.2)
 }
 
 // NewServer creates a new API server.
@@ -34,10 +37,15 @@ func NewServer(database *db.DB, log zerolog.Logger) *Server {
 	if dir == "" {
 		dir = "recordings"
 	}
+	hubAddr := os.Getenv("WS_HUB_ADDR")
+	if hubAddr == "" {
+		hubAddr = "127.0.0.1:8081"
+	}
 	s := &Server{
 		db:            database,
 		log:           log,
 		recordingsDir: dir,
+		wsHubAddr:     hubAddr,
 	}
 	s.buildRoutes()
 	return s
@@ -78,9 +86,10 @@ func (s *Server) buildRoutes() {
 	s.router.Get("/api/sdrs", s.handleGetSDRs)
 	s.router.Put("/api/sdrs/{id}", s.handleUpdateSDR)
 
-	// WebSocket event relay to ws-hub is [planned] (A3); the former
-	// in-process hub had no producers and was removed (SPEC §13.2.4).
-	s.router.Get("/ws", s.handleWSRelayPending)
+	// WebSocket event relay (§2.2, A3): the gateway is the single
+	// client ingress; the former in-process hub had no producers and
+	// was removed (§13.2.4).
+	s.router.Get("/ws", s.handleWSRelay)
 
 	// Metrics (Prometheus)
 	// s.router.Get("/metrics", promhttp.Handler().ServeHTTP)
@@ -324,12 +333,79 @@ func (s *Server) handleUpdateSDR(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, existing)
 }
 
-// handleWSRelayPending answers /ws until the transparent relay to
-// ws-hub (A3) ships in Phase 2.
-func (s *Server) handleWSRelayPending(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusNotImplemented)
-	_, _ = w.Write([]byte(`{"error":"websocket relay not implemented yet (A3); events are served by ws-hub :8081/ws"}`))
+// relayUpgrader upgrades client WS requests at the gateway. Origin
+// enforcement mirrors ws-hub (§17.2): cross-origin upgrades are
+// rejected unless the origin is allowlisted; non-browser clients
+// (no Origin header) pass.
+var relayUpgrader = websocket.Upgrader{
+	ReadBufferSize:  1024,
+	WriteBufferSize: 1024,
+	CheckOrigin:     ws.OriginCheckFunc(ws.AllowedOriginsFromEnv()),
+}
+
+// handleWSRelay upgrades the client connection and transparently
+// relays frames in both directions between the client and the
+// ws-hub /ws endpoint (§2.2, A3 — single client ingress). The hub is
+// dialed first so an unreachable hub still answers the client's
+// handshake with a plain **502 JSON** response.
+func (s *Server) handleWSRelay(w http.ResponseWriter, r *http.Request) {
+	if !ws.OriginCheckFunc(ws.AllowedOriginsFromEnv())(r) {
+		w.Header().Set("Content-Type", "application/json")
+		http.Error(w, `{"error":"origin not allowed"}`, http.StatusForbidden)
+		return
+	}
+
+	backend := url.URL{Scheme: "ws", Host: s.wsHubAddr, Path: "/ws"}
+	hubConn, resp, err := websocket.DefaultDialer.Dial(backend.String(), nil)
+	if err != nil {
+		s.log.Error().Err(err).Str("hub", s.wsHubAddr).Msg("ws relay: hub unreachable")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(`{"error":"ws-hub unreachable"}`))
+		if resp != nil && resp.Body != nil {
+			resp.Body.Close()
+		}
+		return
+	}
+
+	clientConn, err := relayUpgrader.Upgrade(w, r, nil)
+	if err != nil {
+		hubConn.Close() // Upgrade already wrote the HTTP error
+		return
+	}
+
+	clientDone := make(chan struct{})
+	hubDone := make(chan struct{})
+	go func() {
+		defer close(clientDone)
+		for {
+			mt, data, err := clientConn.ReadMessage()
+			if err != nil {
+				return
+			}
+			if err := hubConn.WriteMessage(mt, data); err != nil {
+				return
+			}
+		}
+	}()
+	go func() {
+		defer close(hubDone)
+		for {
+			mt, data, err := hubConn.ReadMessage()
+			if err != nil {
+				return
+			}
+			if err := clientConn.WriteMessage(mt, data); err != nil {
+				return
+			}
+		}
+	}()
+	select {
+	case <-clientDone:
+	case <-hubDone:
+	}
+	clientConn.Close()
+	hubConn.Close()
 }
 
 func writeJSON(w http.ResponseWriter, v interface{}) {

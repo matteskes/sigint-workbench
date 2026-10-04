@@ -131,8 +131,8 @@ services:
       context: .
       dockerfile: docker/Dockerfile.services
       args: { SERVICE: ws-hub }
-    ports:
-      - "${WS_HUB_PORT:-8081}:8081"
+    # No published ports (§3.2): clients reach ws-hub only through
+    # the api-gateway /ws relay.
     environment:
       - DB_URL=${DB_URL:-postgres://sdr:sdr@db:5432/sdr?sslmode=disable}
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:5173}
@@ -151,8 +151,8 @@ services:
     volumes:
       - db-data:/var/lib/postgresql/data
       - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
-    ports:
-      - "5432:5432"
+    # No published ports (§3.2): only services on sdr-net reach the
+    # database. Host-side access: docker compose exec db psql -U sdr -d sdr
     networks: [sdr-net]
     restart: unless-stopped
     healthcheck:

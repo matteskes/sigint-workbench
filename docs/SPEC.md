@@ -90,7 +90,11 @@ legacy. The target deployment runs exactly the six services above.
 `ws-hub` and the recorder MUST be reachable only from within the Docker
 network. The former in-process `/ws` hub inside `api-gateway` (no
 producers, dead code) was removed in Phase 1 (§13.2.4); `GET /ws`
-currently answers **501** until the relay ships (Phase 2).
+now transparently relays to `ws-hub` `:8081/ws` (`[implemented]`,
+A3): the hub is dialed before the client handshake, so an unreachable
+hub answers **502 JSON** (`{"error":"ws-hub unreachable"}`), and the
+same origin allowlist as ws-hub applies (foreign origins get **403**).
+The `/ws/audio` relay awaits the recorder (D1b, `[planned]`).
 
 The frontend's nginx `location /ws/ → ws-hub:8081` rule MUST be replaced
 by a single `location / → api-gateway:8080` proxy after the relay lands,
@@ -153,9 +157,9 @@ reduction is `[planned]` (A3).**
 | 9001 | UDP | capture → ingest (S2) | published (host-side dev) | `[implemented]` |
 | 9010 | UDP | processor IQ input | internal only | `[implemented]` |
 | 9011 | UDP | recorder IQ input | internal only | `[planned]` |
-| 8081 | TCP | ws-hub (events) | internal only | `[gap]` — currently published |
-| 9090 | TCP | capture control API | internal only | `[gap]` — host-bind today |
-| 5432 | TCP | db (PostGIS) | internal only | `[gap]` — currently published |
+| 8081 | TCP | ws-hub (events) | internal only | `[implemented]` — via gateway `/ws` relay |
+| 9090 | TCP | capture control API | internal only | `[implemented]` — loopback bind in dev, unpublished in compose |
+| 5432 | TCP | db (PostGIS) | internal only | `[implemented]` — compose publish removed (`make db-migrate` / `exec psql` for host access) |
 
 The target surface exposed on the host is exactly: `8080`, `8082`,
 `3000`, and UDP `9000`/`9001` (needed only while capture runs on the
@@ -1015,8 +1019,9 @@ payload-by-`id` upsert on `new`/`update`, delete on `removed`.
 ### 14.4 Gap fixes
 
 1. The dead in-process `/ws` hub was removed from `api-gateway`
-   (§13.2.4, Phase 1); shipping the two relays (§2.2) remains
-   `[planned]`.
+   (§13.2.4, Phase 1); the `GET /ws` relay to ws-hub is now
+   `[implemented]` (§2.2, A3) — the `/ws/audio` relay awaits the
+   recorder (D1b).
 2. Frontend: `+page.svelte` must bootstrap via
    `$lib/api/client.ts` (`fetchSignals`, `fetchSDRs`) and open the
    event socket; `SignalList`/`MapView`/`SDRControl` render from the
