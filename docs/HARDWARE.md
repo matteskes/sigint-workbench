@@ -113,6 +113,31 @@ LISTEN_PORT=9010 SIGNAL_TTL=30 \
 ./bin/sdr-capture -config config/sdr-capture.yaml
 ```
 
+**ML classification (optional):** the untagged build above falls back
+to the rules classifier. To run the real ONNX model on the bench,
+fetch the runtime library (dlopen'd — nothing else changes), rebuild
+tagged, and export the library path before the launch line:
+
+```bash
+git lfs pull --include models/classifier.onnx   # if not local yet
+make ort-lib                                    # downloads into .ort/
+CGO_ENABLED=1 go build -tags onnx \
+  -o bin/signal-processor ./cmd/signal-processor
+eval "$(make ort-lib)"   # sets ORT_LIBRARY_PATH in this shell
+
+ORT_LIBRARY_PATH="$ORT_LIBRARY_PATH" LISTEN_PORT=9010 SIGNAL_TTL=30 \
+  DB_URL='postgres://sdr:sdr@localhost:5432/sdr?sslmode=disable' \
+  SDR_CONFIG=config/sdr-capture.yaml \
+  PROCESSOR_CONFIG=config/signal-processor.yaml \
+  CLASSIFIER_CONFIG=config/classifier.yaml ./bin/signal-processor &
+```
+
+The model path itself comes from `classifier.yaml`
+(`models/classifier.onnx`; `-model` or `MODEL_PATH` override it).
+Pass looks like a `loaded ONNX classifier …` startup line; without
+the tag or library the log says the ONNX classifier is unavailable
+and rules are used — that is what the 2026-10-04 V4 run did (§8).
+
 On startup, check:
 
 - the sdr-capture log shows one open line per device (model, freq,

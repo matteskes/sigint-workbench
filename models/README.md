@@ -67,6 +67,9 @@ The Go build tag `onnx` enables ONNX Runtime inference
 classifier. The runtime library is loaded via `dlopen` — set
 `ORT_LIBRARY_PATH` when it is not on the default search path (the
 Docker image `docker/Dockerfile.classifier` does this automatically).
+For native (non-Docker) builds, `make ort-lib` fetches the same
+release into `.ort/` and prints the export line
+(`eval "$(make ort-lib)"` before starting the binary).
 
 ## Adding a New Model
 

@@ -1,4 +1,4 @@
-.PHONY: help dev build-capture build-capture-hw build-hw-tools build-prod test frontend-test db-init clean
+.PHONY: help dev build-capture build-capture-hw build-hw-tools build-prod test frontend-test smoke-onnx ort-lib db-init clean
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -60,6 +60,9 @@ frontend-test: ## Run frontend tests
 
 smoke-onnx: ## E2E: real binary detects CW+WFM over UDP (auto-downloads ORT; needs git-lfs model)
 	./scripts/smoke-test.sh
+
+ort-lib: ## Fetch ONNX Runtime library for native -tags onnx builds (prints the export line)
+	./scripts/fetch-ort.sh
 # ─── Utilities ───
 
 tidy: ## Tidy Go modules
