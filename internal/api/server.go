@@ -2,8 +2,11 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -27,8 +30,10 @@ type Server struct {
 	db     *db.DB
 	log    zerolog.Logger
 
-	recordingsDir string
-	wsHubAddr     string // ws-hub host:port for the /ws relay (§2.2)
+	recordingsDir  string
+	wsHubAddr      string // ws-hub host:port for the /ws relay (§2.2)
+	recorderWSAddr string // recorder host:port for the /ws/audio relay (§10.4)
+	captureCtrl    string // sdr-capture host:port for the control-API proxy (§7.4)
 }
 
 // NewServer creates a new API server.
@@ -41,11 +46,21 @@ func NewServer(database *db.DB, log zerolog.Logger) *Server {
 	if hubAddr == "" {
 		hubAddr = "127.0.0.1:8081"
 	}
+	recAddr := os.Getenv("RECORDER_WS_ADDR")
+	if recAddr == "" {
+		recAddr = "127.0.0.1:9012"
+	}
+	capAddr := os.Getenv("CAPTURE_CTRL_ADDR")
+	if capAddr == "" {
+		capAddr = "127.0.0.1:9090"
+	}
 	s := &Server{
-		db:            database,
-		log:           log,
-		recordingsDir: dir,
-		wsHubAddr:     hubAddr,
+		db:             database,
+		log:            log,
+		recordingsDir:  dir,
+		wsHubAddr:      hubAddr,
+		recorderWSAddr: recAddr,
+		captureCtrl:    capAddr,
 	}
 	s.buildRoutes()
 	return s
@@ -86,13 +101,17 @@ func (s *Server) buildRoutes() {
 	s.router.Get("/api/sdrs", s.handleGetSDRs)
 	s.router.Put("/api/sdrs/{id}", s.handleUpdateSDR)
 
-	// WebSocket event relay (§2.2, A3): the gateway is the single
-	// client ingress; the former in-process hub had no producers and
-	// was removed (§13.2.4).
+	// WebSocket relays (§2.2, A3): the gateway is the single client
+	// ingress; the former in-process hub had no producers and was
+	// removed (§13.2.4). /ws relays signal events from ws-hub;
+	// /ws/audio relays the live Opus stream from the recorder (§10.4).
 	s.router.Get("/ws", s.handleWSRelay)
+	s.router.Get("/ws/audio", s.handleWSAudioRelay)
 
-	// Metrics (Prometheus)
-	// s.router.Get("/metrics", promhttp.Handler().ServeHTTP)
+	// SDRs
+	s.router.Get("/api/sdrs", s.handleGetSDRs)
+	s.router.Put("/api/sdrs/{id}", s.handleUpdateSDR)
+	s.router.Get("/api/sdrs/{id}/status", s.handleGetSDRStatus)
 }
 
 // Handler returns the HTTP handler.
@@ -330,7 +349,146 @@ func (s *Server) handleUpdateSDR(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	// Forward hardware-affecting fields to the capture control API
+	// (§7.4) so freqHz/gainDb actually retune the device. The DB row
+	// above is already saved; a control-API failure surfaces as 502
+	// with a clear body — never silently DB-only (§13.2.3).
+	if upd.FreqHz != nil || upd.GainDB != nil {
+		if fail := s.retuneCapture(ctx, id, upd.FreqHz, upd.GainDB); fail != nil {
+			s.log.Error().Str("id", id).Msg("capture retune: " + fail.message)
+			body, _ := json.Marshal(map[string]string{"error": fail.message})
+			http.Error(w, string(body), fail.status)
+			return
+		}
+	}
 	writeJSON(w, existing)
+}
+
+// ctrlFailure is a control-API failure carrying the HTTP status the
+// gateway should surface to the client (§13.2.3: control-API
+// failures must never be swallowed into a DB-only update).
+type ctrlFailure struct {
+	status  int
+	message string
+}
+
+func (e *ctrlFailure) Error() string { return e.message }
+
+// captureFreqRequest is the body of the capture control API's
+// POST /api/v1/frequency (§7.4).
+type captureFreqRequest struct {
+	ID      string  `json:"id"`
+	FreqMHz float64 `json:"freq_mhz"`
+}
+
+// captureGainRequest is the body of the capture control API's
+// POST /api/v1/gain (§7.4).
+type captureGainRequest struct {
+	ID     string  `json:"id"`
+	GainDB float64 `json:"gain_db"`
+}
+
+// retuneCapture forwards hardware-affecting fields of an SDR update
+// to the sdr-capture control API (§7.4): freqHz (DB units, Hz) is
+// converted to the control API's MHz. A manual frequency command
+// pauses that device's scan loop until the capture service restarts
+// (§7.4, documented operator behavior).
+func (s *Server) retuneCapture(ctx context.Context, id string, freqHz *uint64, gainDb *float64) *ctrlFailure {
+	post := func(path string, payload any) *ctrlFailure {
+		buf, err := json.Marshal(payload)
+		if err != nil {
+			return &ctrlFailure{http.StatusInternalServerError, "retune request encode failed"}
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+			"http://"+s.captureCtrl+path, bytes.NewReader(buf))
+		if err != nil {
+			return &ctrlFailure{http.StatusBadGateway, "sdr-capture unreachable"}
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return &ctrlFailure{http.StatusBadGateway,
+				"sdr-capture unreachable (DB row updated; hardware not retuned)"}
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode == http.StatusNotFound {
+			return &ctrlFailure{http.StatusNotFound, "sdr-capture reports unknown SDR id"}
+		}
+		if resp.StatusCode < 200 || resp.StatusCode > 299 {
+			b, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+			s.log.Error().Str("id", id).Str("path", path).
+				Int("status", resp.StatusCode).Msg("capture control: " + string(b))
+			return &ctrlFailure{http.StatusBadGateway, "sdr-capture control API error"}
+		}
+		return nil
+	}
+	if freqHz != nil {
+		if fail := post("/api/v1/frequency", captureFreqRequest{
+			ID:      id,
+			FreqMHz: float64(*freqHz) / 1e6,
+		}); fail != nil {
+			return fail
+		}
+	}
+	if gainDb != nil {
+		if fail := post("/api/v1/gain", captureGainRequest{ID: id, GainDB: *gainDb}); fail != nil {
+			return fail
+		}
+	}
+	return nil
+}
+
+// handleGetSDRStatus proxies the capture control API's per-device
+// live state (§7.4, §13.1). The data is live from sdr-capture, not
+// the DB, but per the §13 contract every /api/* route answers 503
+// when the DB is down.
+func (s *Server) handleGetSDRStatus(w http.ResponseWriter, r *http.Request) {
+	if !s.requireDB(w) {
+		return
+	}
+	id := chi.URLParam(r, "id")
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	status, fail := s.captureStatus(ctx, id)
+	if fail != nil {
+		s.log.Error().Str("id", id).Msg("capture status: " + fail.message)
+		body, _ := json.Marshal(map[string]string{"error": fail.message})
+		http.Error(w, string(body), fail.status)
+		return
+	}
+	writeJSON(w, status)
+}
+
+// captureStatus fetches GET /api/v1/status from the capture control
+// API and returns the entry matching the device id.
+func (s *Server) captureStatus(ctx context.Context, id string) (map[string]any, *ctrlFailure) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		"http://"+s.captureCtrl+"/api/v1/status", nil)
+	if err != nil {
+		return nil, &ctrlFailure{http.StatusBadGateway, "sdr-capture unreachable"}
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, &ctrlFailure{http.StatusBadGateway, "sdr-capture unreachable"}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, &ctrlFailure{http.StatusBadGateway, "sdr-capture control API error"}
+	}
+	var all []map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&all); err != nil {
+		return nil, &ctrlFailure{http.StatusBadGateway,
+			"sdr-capture control API returned invalid JSON"}
+	}
+	for _, m := range all {
+		if devID, _ := m["id"].(string); devID == id {
+			return m, nil
+		}
+	}
+	return nil, &ctrlFailure{http.StatusNotFound, "sdr not found in capture status"}
 }
 
 // relayUpgrader upgrades client WS requests at the gateway. Origin
@@ -343,25 +501,57 @@ var relayUpgrader = websocket.Upgrader{
 	CheckOrigin:     ws.OriginCheckFunc(ws.AllowedOriginsFromEnv()),
 }
 
-// handleWSRelay upgrades the client connection and transparently
-// relays frames in both directions between the client and the
-// ws-hub /ws endpoint (§2.2, A3 — single client ingress). The hub is
-// dialed first so an unreachable hub still answers the client's
-// handshake with a plain **502 JSON** response.
+// handleWSRelay relays the client WebSocket to the ws-hub /ws
+// endpoint (§2.2, A3 — single client ingress).
 func (s *Server) handleWSRelay(w http.ResponseWriter, r *http.Request) {
-	if !ws.OriginCheckFunc(ws.AllowedOriginsFromEnv())(r) {
-		w.Header().Set("Content-Type", "application/json")
-		http.Error(w, `{"error":"origin not allowed"}`, http.StatusForbidden)
+	if !s.checkRelayOrigin(w, r) {
 		return
 	}
-
 	backend := url.URL{Scheme: "ws", Host: s.wsHubAddr, Path: "/ws"}
-	hubConn, resp, err := websocket.DefaultDialer.Dial(backend.String(), nil)
+	s.relayWS(w, r, backend, "ws-hub", s.wsHubAddr)
+}
+
+// handleWSAudioRelay relays GET /ws/audio?signal=<id> to the
+// recorder's internal live-audio WS (§10.4): the query string is
+// forwarded untouched; after the handshake the client receives the
+// recorder's one text audio.meta hello followed by binary Opus
+// packets, all passed through without decoding.
+func (s *Server) handleWSAudioRelay(w http.ResponseWriter, r *http.Request) {
+	if !s.checkRelayOrigin(w, r) {
+		return
+	}
+	backend := url.URL{
+		Scheme:   "ws",
+		Host:     s.recorderWSAddr,
+		Path:     "/ws/audio",
+		RawQuery: r.URL.RawQuery,
+	}
+	s.relayWS(w, r, backend, "recorder", s.recorderWSAddr)
+}
+
+// checkRelayOrigin enforces the same origin allowlist as ws-hub
+// (§17.2): foreign origins get 403, non-browser clients (no Origin
+// header) pass.
+func (s *Server) checkRelayOrigin(w http.ResponseWriter, r *http.Request) bool {
+	if ws.OriginCheckFunc(ws.AllowedOriginsFromEnv())(r) {
+		return true
+	}
+	w.Header().Set("Content-Type", "application/json")
+	http.Error(w, `{"error":"origin not allowed"}`, http.StatusForbidden)
+	return false
+}
+
+// relayWS dials the upstream before upgrading the client — an
+// unreachable upstream answers the client's handshake with a plain
+// **502 JSON** response — then transparently pumps frames in both
+// directions until either side closes.
+func (s *Server) relayWS(w http.ResponseWriter, r *http.Request, backend url.URL, name, addr string) {
+	up, resp, err := websocket.DefaultDialer.Dial(backend.String(), nil)
 	if err != nil {
-		s.log.Error().Err(err).Str("hub", s.wsHubAddr).Msg("ws relay: hub unreachable")
+		s.log.Error().Err(err).Str("upstream", addr).Msg("ws relay: " + name + " unreachable")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadGateway)
-		_, _ = w.Write([]byte(`{"error":"ws-hub unreachable"}`))
+		_, _ = fmt.Fprintf(w, `{"error":%q}`, name+" unreachable")
 		if resp != nil && resp.Body != nil {
 			resp.Body.Close()
 		}
@@ -370,12 +560,12 @@ func (s *Server) handleWSRelay(w http.ResponseWriter, r *http.Request) {
 
 	clientConn, err := relayUpgrader.Upgrade(w, r, nil)
 	if err != nil {
-		hubConn.Close() // Upgrade already wrote the HTTP error
+		up.Close() // Upgrade already wrote the HTTP error
 		return
 	}
 
 	clientDone := make(chan struct{})
-	hubDone := make(chan struct{})
+	upDone := make(chan struct{})
 	go func() {
 		defer close(clientDone)
 		for {
@@ -383,15 +573,15 @@ func (s *Server) handleWSRelay(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				return
 			}
-			if err := hubConn.WriteMessage(mt, data); err != nil {
+			if err := up.WriteMessage(mt, data); err != nil {
 				return
 			}
 		}
 	}()
 	go func() {
-		defer close(hubDone)
+		defer close(upDone)
 		for {
-			mt, data, err := hubConn.ReadMessage()
+			mt, data, err := up.ReadMessage()
 			if err != nil {
 				return
 			}
@@ -402,10 +592,10 @@ func (s *Server) handleWSRelay(w http.ResponseWriter, r *http.Request) {
 	}()
 	select {
 	case <-clientDone:
-	case <-hubDone:
+	case <-upDone:
 	}
 	clientConn.Close()
-	hubConn.Close()
+	up.Close()
 }
 
 func writeJSON(w http.ResponseWriter, v interface{}) {

@@ -1,10 +1,13 @@
 package api
 
 import (
+	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -26,6 +29,17 @@ func newTestServerWithHub(hubAddr string) *httptest.Server {
 	log := zerolog.Nop()
 	srv := NewServer(nil, log)
 	srv.wsHubAddr = hubAddr
+	return httptest.NewServer(srv.Handler())
+}
+
+// newTestServerWithUpstreams builds an API server wired to explicit
+// ws-hub, recorder and capture-control addresses.
+func newTestServerWithUpstreams(hub, recorder, capture string) *httptest.Server {
+	log := zerolog.Nop()
+	srv := NewServer(nil, log)
+	srv.wsHubAddr = hub
+	srv.recorderWSAddr = recorder
+	srv.captureCtrl = capture
 	return httptest.NewServer(srv.Handler())
 }
 
@@ -259,6 +273,241 @@ func TestUpdateSDRInvalidJSON(t *testing.T) {
 		t.Fatalf("put: %v", err)
 	}
 	resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", resp.StatusCode)
+	}
+}
+
+// --- /ws/audio relay (§2.2, §10.4, slice 5) ---
+
+func TestWSAudioRelayForwardsRecorderStream(t *testing.T) {
+	recTS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/ws/audio" {
+			http.NotFound(w, r)
+			return
+		}
+		if got := r.URL.Query().Get("signal"); got != "sig-1" {
+			t.Errorf("recorder got signal=%q, want sig-1", got)
+		}
+		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		// §10.4 framing: one text hello, then binary Opus packets.
+		if err := conn.WriteMessage(websocket.TextMessage,
+			[]byte(`{"type":"audio.meta","signalId":"sig-1","sampleRate":48000}`)); err != nil {
+			return
+		}
+		if err := conn.WriteMessage(websocket.BinaryMessage, []byte{0xF8, 0xAA, 0xBB}); err != nil {
+			return
+		}
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}))
+	defer recTS.Close()
+
+	recURL, err := url.Parse(recTS.URL)
+	if err != nil {
+		t.Fatalf("parse recorder url: %v", err)
+	}
+	ts := newTestServerWithUpstreams("127.0.0.1:1", recURL.Host, "127.0.0.1:1")
+	defer ts.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws/audio?signal=sig-1"
+	client, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial audio relay: %v", err)
+	}
+	defer client.Close()
+	client.SetReadDeadline(time.Now().Add(5 * time.Second))
+
+	mt, msg, err := client.ReadMessage()
+	if err != nil || mt != websocket.TextMessage || !strings.Contains(string(msg), "audio.meta") {
+		t.Fatalf("first frame = (%v, %q, %v), want text audio.meta hello", mt, msg, err)
+	}
+	mt, msg, err = client.ReadMessage()
+	if err != nil || mt != websocket.BinaryMessage || len(msg) != 3 {
+		t.Fatalf("second frame = (%v, %v, %v), want 3-byte binary Opus packet", mt, msg, err)
+	}
+}
+
+func TestWSAudioRelayRecorderUnreachable(t *testing.T) {
+	// Closed port: the relay must answer 502 JSON, not a handshake.
+	ts := newTestServerWithUpstreams("127.0.0.1:1", "127.0.0.1:1", "127.0.0.1:1")
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/ws/audio?signal=sig-1")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "recorder unreachable") {
+		t.Fatalf("body = %q, want recorder unreachable JSON", body)
+	}
+}
+
+func TestWSAudioRelayRejectsForeignOrigin(t *testing.T) {
+	ts := newTestServerWithUpstreams("127.0.0.1:1", "127.0.0.1:1", "127.0.0.1:1")
+	defer ts.Close()
+
+	header := http.Header{}
+	header.Set("Origin", "http://evil.example")
+	_, resp, err := websocket.DefaultDialer.Dial(
+		"ws"+strings.TrimPrefix(ts.URL, "http")+"/ws/audio?signal=sig-1", header)
+	if err == nil {
+		t.Fatal("expected dial failure for foreign origin")
+	}
+	if resp == nil || resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %v, want 403", resp)
+	}
+}
+
+// --- control-API proxy (§7.4, §13.1, §13.2.3) ---
+
+func TestRetuneCaptureForwardsFreqAndGain(t *testing.T) {
+	var mu sync.Mutex
+	var calls []string
+	capTS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		calls = append(calls, r.URL.Path+" "+string(body))
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer capTS.Close()
+	capURL, _ := url.Parse(capTS.URL)
+
+	log := zerolog.Nop()
+	srv := NewServer(nil, log)
+	srv.captureCtrl = capURL.Host
+
+	freq := uint64(145_550_000)
+	gain := 24.5
+	if fail := srv.retuneCapture(context.Background(), "S1", &freq, &gain); fail != nil {
+		t.Fatalf("retuneCapture: %v", fail)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(calls) != 2 {
+		t.Fatalf("calls = %v, want 2", calls)
+	}
+	if !strings.Contains(calls[0], "/api/v1/frequency") ||
+		!strings.Contains(calls[0], `"id":"S1"`) ||
+		!strings.Contains(calls[0], `"freq_mhz":145.55`) {
+		t.Fatalf("freq call = %q, want S1 at 145.55 MHz", calls[0])
+	}
+	if !strings.Contains(calls[1], "/api/v1/gain") ||
+		!strings.Contains(calls[1], `"gain_db":24.5`) {
+		t.Fatalf("gain call = %q, want 24.5 dB", calls[1])
+	}
+}
+
+func TestRetuneCaptureSkipsMetadataOnly(t *testing.T) {
+	var mu sync.Mutex
+	calls := 0
+	capTS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		calls++
+		mu.Unlock()
+	}))
+	defer capTS.Close()
+	capURL, _ := url.Parse(capTS.URL)
+
+	log := zerolog.Nop()
+	srv := NewServer(nil, log)
+	srv.captureCtrl = capURL.Host
+
+	// No freq/gain in the update: nothing must hit the control API.
+	if fail := srv.retuneCapture(context.Background(), "S1", nil, nil); fail != nil {
+		t.Fatalf("retuneCapture: %v", fail)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if calls != 0 {
+		t.Fatalf("control API calls = %d, want 0 for metadata-only update", calls)
+	}
+}
+
+func TestRetuneCaptureUnreachable(t *testing.T) {
+	log := zerolog.Nop()
+	srv := NewServer(nil, log)
+	srv.captureCtrl = "127.0.0.1:1"
+
+	freq := uint64(100)
+	fail := srv.retuneCapture(context.Background(), "S1", &freq, nil)
+	if fail == nil || fail.status != http.StatusBadGateway {
+		t.Fatalf("fail = %v, want 502 ctrlFailure", fail)
+	}
+}
+
+func TestRetuneCaptureUnknownID(t *testing.T) {
+	capTS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "unknown SDR id", http.StatusNotFound)
+	}))
+	defer capTS.Close()
+	capURL, _ := url.Parse(capTS.URL)
+
+	log := zerolog.Nop()
+	srv := NewServer(nil, log)
+	srv.captureCtrl = capURL.Host
+
+	freq := uint64(100)
+	fail := srv.retuneCapture(context.Background(), "S9", &freq, nil)
+	if fail == nil || fail.status != http.StatusNotFound {
+		t.Fatalf("fail = %v, want 404 ctrlFailure", fail)
+	}
+}
+
+func TestCaptureStatusProxiesAndFilters(t *testing.T) {
+	capTS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/status" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[{"id":"S1","active":true,"freq_hz":145550000},` +
+			`{"id":"S2","active":false,"freq_hz":0}]`))
+	}))
+	defer capTS.Close()
+	capURL, _ := url.Parse(capTS.URL)
+
+	log := zerolog.Nop()
+	srv := NewServer(nil, log)
+	srv.captureCtrl = capURL.Host
+
+	got, fail := srv.captureStatus(context.Background(), "S2")
+	if fail != nil {
+		t.Fatalf("captureStatus: %v", fail)
+	}
+	if got["id"] != "S2" || got["active"] != false {
+		t.Fatalf("status = %v, want the S2 entry", got)
+	}
+	if _, fail := srv.captureStatus(context.Background(), "S9"); fail == nil ||
+		fail.status != http.StatusNotFound {
+		t.Fatalf("fail = %v, want 404 for unknown id", fail)
+	}
+}
+
+func TestGetSDRStatusRequiresDB(t *testing.T) {
+	// §13 contract: every /api/* route answers 503 when the DB is
+	// down, the live-state proxy included.
+	ts := newTestServer()
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/sdrs/S1/status")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503", resp.StatusCode)
 	}

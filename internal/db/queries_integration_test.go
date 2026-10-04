@@ -330,3 +330,42 @@ func TestIntegrationRecordingsAndPurge(t *testing.T) {
 		t.Errorf("second delete err = %v, want ErrNotFound", err)
 	}
 }
+
+func TestIntegrationSDRNullLatLon(t *testing.T) {
+	// §12.1 allows NULL lat/lon on sdrs; reads must COALESCE them to
+	// 0 (the UpsertSDR "unlocated" convention) instead of failing the
+	// scan — a manual NULL row must not 500 GET /api/sdrs or the
+	// PUT /api/sdrs/{id} retune path (§13.1).
+	d := integrationPool(t)
+	ctx := context.Background()
+
+	if _, err := d.Pool.Exec(ctx,
+		`INSERT INTO sdrs (id, model, gain_db, freq_hz, active) VALUES ('null-loc-sdr', 'Simulator', 40, 0, true)`); err != nil {
+		t.Fatalf("insert null-lat sdr: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = d.Pool.Exec(ctx, `DELETE FROM sdrs WHERE id = 'null-loc-sdr'`)
+	})
+
+	got, err := d.GetSDR(ctx, "null-loc-sdr")
+	if err != nil {
+		t.Fatalf("get sdr with NULL lat/lon: %v", err)
+	}
+	if got.Lat != 0 || got.Lon != 0 {
+		t.Fatalf("lat/lon = %v/%v, want 0/0 (unlocated convention)", got.Lat, got.Lon)
+	}
+
+	sdrs, err := d.ListSDRs(ctx)
+	if err != nil {
+		t.Fatalf("list sdrs with NULL lat/lon row: %v", err)
+	}
+	found := false
+	for _, s := range sdrs {
+		if s.ID == "null-loc-sdr" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("null-loc-sdr missing from ListSDRs: %+v", sdrs)
+	}
+}

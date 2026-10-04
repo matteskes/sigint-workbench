@@ -52,15 +52,15 @@ and geospatial visualization.
 
 | Service | Language | Description |
 | ------- | -------- | ----------- |
-| `sdr-capture` | Go (cgo) | Reads SDR hardware, streams IQ over UDP; scan loop and control API *(planned)* |
+| `sdr-capture` | Go (cgo) | Reads SDR hardware, streams IQ over UDP; scan loop and control API |
 | `iq-ingest` | Go | Receives IQ streams, validates frames, fans out to consumers |
-| `signal-processor` | Go | DSP, classification (rules + ONNX), per-SDR location, persistence, event publishing; 2-SDR verification and TDOA multilateration *(planned)* |
-| `recorder` | Go | Audio demodulation (FM/AM), WAV + raw-IQ recording, live Opus audio *(planned)* |
-| `api-gateway` | Go | Single client ingress: REST API and recording file serving; `/ws` + `/ws/audio` relays *(planned)* |
+| `signal-processor` | Go | DSP, classification (rules + ONNX), per-SDR location, persistence, event publishing; 2-SDR verification delivered, TDOA multilateration *(planned)* |
+| `recorder` | Go | Audio demodulation (FM/AM), WAV + raw-IQ recording, live Opus audio |
+| `api-gateway` | Go | Single client ingress: REST API, recording file serving, `/ws` + `/ws/audio` relays, capture control proxy |
 | `ws-hub` | Go | Internal WebSocket event fan-out (not client-facing) |
 | `db` | PostGIS | Spatial database (PostgreSQL 16): signals, recordings, tracks |
 | `tiles` | tileserver-gl | Self-hosted OSM vector tiles |
-| `frontend` | SvelteKit | Interactive map + signal list; live data and audio player *(planned)* |
+| `frontend` | SvelteKit | Interactive map + signal list; live data delivered, audio player *(planned)* |
 
 > `cmd/classifier` and `cmd/location-service` are legacy stubs: their
 > logic is merged into `signal-processor` (D2) and they are scheduled

@@ -161,8 +161,11 @@ func (d *DB) GetRecordings(ctx context.Context, limit int, signalID string) ([]R
 
 // GetSDR returns a single SDR device by ID.
 func (d *DB) GetSDR(ctx context.Context, id string) (*SDRDevice, error) {
+	// lat/lon are NULL-allowed (§12.1); reads COALESCE them to 0 —
+	// the same "unlocated" convention the pipeline's UpsertSDR uses —
+	// so a manually inserted NULL row cannot 500 the API.
 	query := `
-		SELECT id, model, COALESCE(serial,''), lat, lon, gain_db, freq_hz, active
+		SELECT id, model, COALESCE(serial,''), COALESCE(lat,0), COALESCE(lon,0), gain_db, freq_hz, active
 		FROM sdrs
 		WHERE id = $1
 	`
@@ -179,8 +182,9 @@ func (d *DB) GetSDR(ctx context.Context, id string) (*SDRDevice, error) {
 
 // ListSDRs returns all registered SDR devices.
 func (d *DB) ListSDRs(ctx context.Context) ([]SDRDevice, error) {
+	// Same COALESCE convention as GetSDR (§12.1 NULL-allowed lat/lon).
 	query := `
-		SELECT id, model, COALESCE(serial,''), lat, lon, gain_db, freq_hz, active
+		SELECT id, model, COALESCE(serial,''), COALESCE(lat,0), COALESCE(lon,0), gain_db, freq_hz, active
 		FROM sdrs
 		ORDER BY id
 	`

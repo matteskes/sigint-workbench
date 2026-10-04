@@ -53,10 +53,10 @@ dashboard, and (planned) records decoded audio.
 
 ## 2. Architecture
 
-**Status: 4 of 6 services `[implemented]`, plus the `GET /ws`
-single-ingress relay (A3, §2.2); the merged classifier/location
-topology (D2) and the control-path retune proxy are `[planned]`
-(§13).**
+**Status: 4 of 6 services `[implemented]`, plus both single-ingress
+relays (A3, §2.2: `GET /ws`, `GET /ws/audio`) and the control-path
+retune proxy (§7.4, §13.1); the merged classifier/location topology
+(D2) is `[planned]` (§13).**
 
 ### 2.1 Topology (D2)
 
@@ -91,18 +91,19 @@ legacy. The target deployment runs exactly the six services above.
 
 `ws-hub` and the recorder MUST be reachable only from within the Docker
 network. The former in-process `/ws` hub inside `api-gateway` (no
-producers, dead code) was removed in Phase 1 (§13.2.4); `GET /ws`
-now transparently relays to `ws-hub` `:8081/ws` (`[implemented]`,
-A3): the hub is dialed before the client handshake, so an unreachable
-hub answers **502 JSON** (`{"error":"ws-hub unreachable"}`), and the
-same origin allowlist as ws-hub applies (foreign origins get **403**).
-The `/ws/audio` relay is `[planned]`; the recorder side it will
-target is `[implemented]` (§10.4: internal `ws://recorder:9012/ws/audio`).
+producers, dead code) was removed in Phase 1 (§13.2.4). Both relays
+are `[implemented]` (A3, Phase 2): `GET /ws` → `ws-hub:8081/ws` and
+`GET /ws/audio?signal=<id>` → `ws://recorder:9012/ws/audio` (§10.4).
+Each dials the upstream before the client handshake, so an
+unreachable upstream answers **502 JSON**
+(`{"error":"<upstream> unreachable"}`), and the same origin
+allowlist as ws-hub applies (foreign origins get **403**); frames
+pass through untouched.
 
-The frontend's nginx `location /ws/ → ws-hub:8081` rule MUST be replaced
-by a single `location / → api-gateway:8080` proxy after the relay lands,
-so all traffic, including both WebSocket paths, enters through the
-gateway.
+The frontend's nginx proxies `/api/` and `/ws` (the latter's prefix
+match covers both `/ws` and `/ws/audio`) to `api-gateway:8080`, so
+all API and WebSocket traffic enters through the gateway; static
+assets are served directly `[implemented]`.
 
 ### 2.3 Data & control flows
 
@@ -128,9 +129,11 @@ db (PostGIS :5432, internal) <── signal-processor, api-gateway
 - **Processor → hub:** HTTP POST of event JSON (queue + timeout;
   hub loss never back-pressures the DSP loop).
 - **Control path:** `api-gateway` → `sdr-capture` control API
-  `:9090` (tune/gain/status). This path is `[planned]`; today
-  `PUT /api/sdrs/{id}` only updates the database row and does not
-  retune hardware (see §13).
+  `:9090` (tune/gain/status) — `[implemented]` (Phase 2, §13.1):
+  `PUT /api/sdrs/{id}` forwards `freqHz`/`gainDb` so they retune
+  hardware, and `GET /api/sdrs/{id}/status` proxies live device
+  state; capture unreachable ⇒ `502`, never silently DB-only
+  (§13.2.3).
 
 ## 3. Deployment & Ports
 
@@ -163,9 +166,9 @@ published-port reduction is partially done — `db:5432` and
 | 9001 | UDP | capture → ingest (S2) | published (host-side dev) | `[implemented]` |
 | 9010 | UDP | processor IQ input | internal only | `[implemented]` |
 | 9011 | UDP | recorder IQ input | internal only | `[implemented]` — `CONSUMERS` fan-out; published for host-side dev |
-| 9012 | TCP | recorder live audio WS (`/ws/audio`) | internal only | `[implemented]` (§10.4, recorder side); gateway relay `[planned]` |
+| 9012 | TCP | recorder live audio WS (`/ws/audio`) | internal only | `[implemented]` (§10.4) — via the gateway `/ws/audio` relay |
 | 8081 | TCP | ws-hub (events) | internal only | `[implemented]` — via gateway `/ws` relay |
-| 9090 | TCP | capture control API | internal only | `[implemented]` — loopback bind in dev, unpublished in compose |
+| 9090 | TCP | capture control API | internal only | `[implemented]` — loopback bind in dev, unpublished in compose; gateway proxies tune/gain/status (§13.1) |
 | 5432 | TCP | db (PostGIS) | internal only | `[implemented]` — compose publish removed (`make db-migrate` / `exec psql` for host access) |
 
 The target surface exposed on the host is exactly: `8080`, `8082`,
@@ -554,6 +557,10 @@ A manual `frequency` command **pauses** that device's scan loop until
 the service restarts (v1 has no "resume scan" command; this is
 documented operator behavior).
 
+The gateway proxies into this API (§13.1): `PUT /api/sdrs/{id}`
+forwards `freqHz`/`gainDb` to `frequency`/`gain`, and
+`GET /api/sdrs/{id}/status` proxies `status` filtered to one device.
+
 ## 8. Dual-SDR Verification
 
 **Status: `[implemented]`. `signal-processor` pairs detections with
@@ -684,9 +691,9 @@ haversine distance between consecutive fixes,
 **Status: demodulators (incl. SSB), WAV encoder, and the streaming
 `WAVWriter` are `[implemented]`; in-band capture (D1) is
 `[implemented]` in `cmd/recorder` (§10.2); live Opus streaming (D1b,
-§10.3–§10.4) is `[implemented]` on the recorder side (internal
-`:9012/ws/audio` server + per-signal Opus mux); the gateway
-`/ws/audio` relay remains `[planned]` (awaits slice 5).**
+§10.3–§10.4) is `[implemented]` end to end — recorder-side per-signal
+mux + internal `:9012/ws/audio` server, relayed by the gateway's
+`GET /ws/audio` (§2.2).**
 
 ### 10.1 Demodulator contract
 
@@ -928,13 +935,11 @@ payload.
 
 ## 13. REST API
 
-**Status: endpoints in §13.1 `[implemented]` including the `GET /ws`
-relay (A3, Phase 2); the `/ws/audio` and control-API proxies are
-`[planned]` (the recorder endpoint the former targets is
-`[implemented]`, §10.4); §13.2 lists the `[gap]` fixes to existing
-endpoints —
-3 of 4 closed (items 1, 2, 4; item 1's `active` filter landed with
-§11.2 in Phase 2; item 3 awaits the control-API proxy).**
+**Status: all §13.1 endpoints `[implemented]` (Phase 2), including
+the `GET /ws` and `GET /ws/audio` relays (A3, §2.2) and the
+control-API proxy — `PUT /api/sdrs/{id}` forwards `freqHz`/`gainDb`
+and `GET /api/sdrs/{id}/status` proxies live state (§7.4); §13.2 gap
+fixes — all 4 closed (item 3 closed with the control-API proxy).**
 
 All routes are served by `api-gateway` on `:8080` (chi router).
 General contract:
@@ -963,10 +968,10 @@ General contract:
 | `GET /api/recordings` | `[implemented]` | `?limit` (default 50, capped 500) and `?signalId` filters; `startTime DESC` |
 | `GET /api/recordings/{id}/audio` | `[implemented]` | Streams the file (path-confined to `RECORDINGS_DIR`); `audio/wav` for wav; every other format (`iq`) serves as `application/octet-stream` (`flac` branch removed in Phase 1 — no FLAC support, §10.5) |
 | `GET /api/sdrs` | `[implemented]` | All SDR rows |
-| `PUT /api/sdrs/{id}` | `[implemented]` → target `[planned]` | Partial update (`model`, `serial`, `lat`, `lon`, `gainDb`, `freqHz`, `active`); **today DB-only** — target: also proxy to `sdr-capture` control API (§7.4) so `freqHz`/`gainDb` actually retune hardware |
+| `PUT /api/sdrs/{id}` | `[implemented]` | Partial update (`model`, `serial`, `lat`, `lon`, `gainDb`, `freqHz`, `active`); `freqHz`/`gainDb` are also forwarded to the `sdr-capture` control API (§7.4) so they retune hardware — capture unreachable ⇒ `502`, unknown device at capture ⇒ `404`; never silently DB-only (§13.2.3) |
 | `GET /ws` | `[implemented]` | Transparent bidirectional relay to `ws-hub:8081/ws` (§2.2, Phase 2); the hub is dialed before the client upgrade — hub down ⇒ `502` JSON `{"error":"ws-hub unreachable"}`; foreign origins ⇒ `403` (`ALLOWED_ORIGINS`, §17.2) |
-| `GET /ws/audio` | `[planned]` | Relay to recorder `:9012/ws/audio` (§10.4) |
-| `GET /api/sdrs/{id}/status` | `[planned]` | Proxy of capture control `GET /api/v1/status` (per-device live state) |
+| `GET /ws/audio` | `[implemented]` | Transparent relay to recorder `:9012/ws/audio?signal=<id>` (§10.4, Phase 2): one text `audio.meta` hello, then binary Opus packets pass untouched; recorder down ⇒ `502` JSON; foreign origins ⇒ `403` |
+| `GET /api/sdrs/{id}/status` | `[implemented]` | Proxy of capture control `GET /api/v1/status` filtered to the device (§7.4); capture down ⇒ `502`, unknown id ⇒ `404` |
 | `GET/POST /api/signals/{id}/annotations` | `[planned]` | List / add notes (§12.5) |
 
 ### 13.2 Gap fixes to existing endpoints
@@ -979,10 +984,10 @@ General contract:
 2. **`GET /api/recordings/{id}/audio`**: the `flac` content-type
    branch was removed (Phase 1 — FLAC unsupported, §10.5); `iq`
    files serve as `application/octet-stream`.
-3. **`PUT /api/sdrs/{id}`**: after the control-API proxy lands, a
-   `409` (or `502`) response with a clear error body is required
-   when the capture service is unreachable — never silently
-   DB-only. **Open** — awaits the control-API proxy (§13.1).
+3. **`PUT /api/sdrs/{id}`**: on a control-API failure the gateway
+   answers `502` (`404` when capture reports the id unknown) with a
+   clear error body — never silently DB-only. **Done** (control-API
+   proxy, Phase 2; the `502` variant was chosen).
 4. **`GET /ws`**: the in-process hub implementation was deleted from
    `api-gateway` entirely (Phase 1); the `ws.Hub` dependency moved
    out of the gateway — the hub lives only in the `ws-hub` service.
@@ -992,8 +997,8 @@ General contract:
 **Status: `ws-hub` + producer POST path + `GET /ws` client relay
 `[implemented]` (A3, §14.4.1); `sdr.status` producer
 `[implemented]` (§14.4.3); frontend data wiring `[implemented]`
-(§14.4.2); the `/ws/audio` relay is `[planned]` — the recorder
-endpoint it will relay to is `[implemented]` (§10.4).**
+(§14.4.2); the `/ws/audio` relay is `[implemented]` (Phase 2) and
+relays to the recorder endpoint (§10.4).**
 
 ### 14.1 Transport paths
 
@@ -1151,9 +1156,9 @@ gate.
 
 ## 16. Configuration Reference
 
-**Status: the YAML reference is normative and loaded — iq-ingest and
-signal-processor read their files with flag/env overrides (§16.1);
-the recorder (stub) and `fft.*` wiring (§5.7) remain `[planned]`.**
+**Status: the YAML reference is normative and loaded — iq-ingest,
+signal-processor, and the recorder read their files with flag/env
+overrides (§16.1); `fft.*` wiring (§5.7) remains `[planned]`.**
 
 ### 16.1 Config surface — `[implemented]` (recorder + `fft.*` remain)
 
@@ -1166,7 +1171,7 @@ built-in default):
 | iq-ingest | `config/iq-ingest.yaml` (`-config`/`CONFIG`); env `LISTEN_PORT`, `CONSUMERS` and flags `-port/-consumers` override |
 | signal-processor | `config/signal-processor.yaml` + `config/classifier.yaml` (`-processor-config`/`-classifier-config`); flags `-port/-threshold/-max-peaks/-model` and env `SIGNAL_TTL`, `SDR_CONFIG`, `MODEL_PATH`, `WS_HUB_URL` override |
 | recorder | `config/recorder.yaml` (`-config`); flags `-port/-ws-port/-dir` and env `RECORDER_PORT`, `RECORDER_WS_PORT`, `RECORDINGS_DIR` override |
-| api-gateway | env `RECORDINGS_DIR`, `ALLOWED_ORIGINS` (CORS allowlist, §17.2), `WS_HUB_ADDR` (`/ws` relay, §2.2) |
+| api-gateway | env `RECORDINGS_DIR`, `ALLOWED_ORIGINS` (CORS allowlist, §17.2), `WS_HUB_ADDR` (`/ws` relay, §2.2), `RECORDER_WS_ADDR` (`/ws/audio` relay, §10.4), `CAPTURE_CTRL_ADDR` (control proxy, §7.4) |
 
 **Target:** the YAML files in `config/` are the **single source of
 truth**; each service loads its own file (flags/env remain as
@@ -1388,9 +1393,9 @@ stores and the API client; `svelte-check` for types.
 
 | Phase | Scope | Exit criteria |
 | ------- | ------- | --------------- |
-| **0 — Core pipeline** (current) | capture → ingest → DSP → classify → persist → events; dashboard shell; CI | smoke-onnx green; this spec written |
+| **0 — Core pipeline** | capture → ingest → DSP → classify → persist → events; dashboard shell; CI | smoke-onnx green; this spec written |
 | **1 — Correctness** | D4 negative offsets; A1 unlocated signals; §6.5 class enum; dead `/ws` hub removal; FLAC-claim cleanup (code + README); CORS/origin tightening — all **done** | new tests per §17.3 green; docs match behavior |
-| **2 — Features** | **Delivered in Phase 2:** §15.3 RTL-SDR defect fixes; §10.1 real SSB + pair-aware registry; §11.2 active/TTL lifecycle; `sdr.status` producer (§14.4.3); `GET /ws` gateway relay (§2.2, A3); frontend data wiring (§14.4.2); YAML config loading + `min_confidence` enforcement (§16.1); **slices 1–3:** D3 scan loop + §7.4 control status; §8 dual-SDR verification with verified latch; recorder (D1 in-band WAV + §11.3 retention); first live `TEST_DATABASE_URL` integration run (§17.3). **Slice 4:** Opus live streaming (D1b recorder side, §10.3–§10.4: per-signal mux + `/ws/audio` server + `Dockerfile.recorder`). **Remaining `[planned]`:** `/ws/audio` relay; control-API proxy | §17.3 obligations green for delivered scope; dashboard live end-to-end |
+| **2 — Features** | §15.3 RTL-SDR defect fixes; §10.1 real SSB + pair-aware registry; §11.2 active/TTL lifecycle; `sdr.status` producer (§14.4.3); `GET /ws` gateway relay (§2.2, A3); frontend data wiring (§14.4.2); YAML config loading + `min_confidence` enforcement (§16.1); **slices 1–3:** D3 scan loop + §7.4 control status; §8 dual-SDR verification with verified latch; recorder (D1 in-band WAV + §11.3 retention); first live `TEST_DATABASE_URL` integration run (§17.3); **slice 4:** Opus live streaming recorder side (D1b, §10.3–§10.4: per-signal mux + `/ws/audio` server + `Dockerfile.recorder`); **slice 5:** `/ws/audio` gateway relay (§2.2, §10.4); control-API proxy — `PUT /api/sdrs/{id}` retune forwarding + `GET /api/sdrs/{id}/status` (§7.4, §13.1, §13.2.3) — **all delivered** | §17.3 obligations green; dashboard live end-to-end |
 | **3 — Hardware & fidelity** | RTL-SDR on-hardware validation (§15.3 defect fixes delivered in Phase 2); HackRF driver (H1/H2); power calibration contract (§5.6); `min_confidence` enforcement (§16.1) | 2 real SDRs verified end-to-end; calibration documented |
 | **4 — Deferred** | multi-host + NTP/PTP; TDOA multilateration; tracking (`tracks`, §9.4); annotations UI; `audio.level` feed | scoped separately |
 

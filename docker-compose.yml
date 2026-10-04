@@ -130,12 +130,19 @@ services:
       - DB_URL=${DB_URL:-postgres://sdr:sdr@db:5432/sdr?sslmode=disable}
       - RECORDINGS_DIR=/recordings
       - WS_HUB_ADDR=ws-hub:8081
+      # /ws/audio relay target (§10.4): the recorder's internal
+      # audio WS, reachable only on sdr-net.
+      - RECORDER_WS_ADDR=recorder:9012
+      # Control-API proxy (§7.4). In macOS dev capture runs natively
+      # on the host — set CAPTURE_CTRL_ADDR=host.docker.internal:9090
+      # in .env to reach it from the container.
+      - CAPTURE_CTRL_ADDR=${CAPTURE_CTRL_ADDR:-sdr-capture:9090}
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:5173}
       - LOG_LEVEL=${LOG_LEVEL:-info}
     volumes:
       - ./recordings:/recordings:ro
     networks: [sdr-net]
-    depends_on: [db, ws-hub]
+    depends_on: [db, ws-hub, recorder]
     restart: unless-stopped
 
   ws-hub:
