@@ -37,6 +37,9 @@ stop: ## Stop all services
 db-init: ## Initialize PostGIS schema
 	docker compose exec db psql -U sdr -d sdr -f /docker-entrypoint-initdb.d/init.sql
 
+db-migrate: ## Apply pending schema migrations (db/migrations, idempotent)
+	cat db/migrations/*.sql | docker compose exec -T db psql -U sdr -d sdr
+
 db-shell: ## Open psql shell
 	docker compose exec db psql -U sdr -d sdr
 

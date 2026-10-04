@@ -8,24 +8,33 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// UpsertSignal inserts or updates a signal.
+// UpsertSignal inserts or updates a signal. A re-observation always
+// re-activates the row (§11.2) and refreshes the classification
+// (modulation, subType, class, method) alongside the measurement
+// fields; first_seen is kept on conflict.
 func (d *DB) UpsertSignal(ctx context.Context, s *Signal) error {
 	query := `
-		INSERT INTO signals (id, frequency_hz, bandwidth_hz, modulation, sub_type, class,
-			confidence, power_dbm, location, accuracy_m, first_seen, last_seen, sdr_id, verified)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, ST_SetSRID(ST_MakePoint($9, $10), 4326),
-			$11, $12, $13, $14, $15)
+		INSERT INTO signals (id, frequency_hz, bandwidth_hz, modulation, sub_type, class, method,
+			confidence, power_dbm, location, accuracy_m, first_seen, last_seen, sdr_id, verified, active)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, ST_SetSRID(ST_MakePoint($10, $11), 4326),
+			$12, $13, $14, $15, $16, $17)
 		ON CONFLICT (id) DO UPDATE SET
 			last_seen = EXCLUDED.last_seen,
+			bandwidth_hz = EXCLUDED.bandwidth_hz,
+			modulation = EXCLUDED.modulation,
+			sub_type = EXCLUDED.sub_type,
+			class = EXCLUDED.class,
+			method = EXCLUDED.method,
 			confidence = EXCLUDED.confidence,
 			power_dbm = EXCLUDED.power_dbm,
 			location = EXCLUDED.location,
-			verified = EXCLUDED.verified
+			verified = EXCLUDED.verified,
+			active = TRUE
 	`
 	_, err := d.Pool.Exec(ctx, query,
-		s.ID, s.FreqHz, s.BandwidthHz, s.Modulation, s.SubType, s.Class,
+		s.ID, s.FreqHz, s.BandwidthHz, s.Modulation, s.SubType, s.Class, s.Method,
 		s.Confidence, s.PowerDBM, s.Lon, s.Lat, s.AccuracyM,
-		s.FirstSeen, s.LastSeen, s.SDRID, s.Verified,
+		s.FirstSeen, s.LastSeen, s.SDRID, s.Verified, s.Active,
 	)
 	return err
 }
@@ -33,14 +42,15 @@ func (d *DB) UpsertSignal(ctx context.Context, s *Signal) error {
 // GetSignals returns all active signals, optionally filtered by bounding box.
 // Signals with a NULL location (unlocated SDRs, §9.3) are always included;
 // only located signals are additionally bounded by the envelope.
+// Retired (inactive) rows are hidden (§11.2) but preserved in the table.
 func (d *DB) GetSignals(ctx context.Context, minLat, minLon, maxLat, maxLon float64) ([]Signal, error) {
 	query := `
 		SELECT id, frequency_hz, bandwidth_hz, COALESCE(modulation,''), COALESCE(sub_type,''),
-			COALESCE(class,''), confidence, COALESCE(power_dbm,0),
+			COALESCE(class,''), COALESCE(method,''), confidence, COALESCE(power_dbm,0),
 			ST_Y(location), ST_X(location), COALESCE(accuracy_m,0),
 			first_seen, last_seen, sdr_id, verified
 		FROM signals
-		WHERE location IS NULL OR location && ST_MakeEnvelope($1, $2, $3, $4, 4326)
+		WHERE active AND (location IS NULL OR location && ST_MakeEnvelope($1, $2, $3, $4, 4326))
 		ORDER BY last_seen DESC
 		LIMIT 500
 	`
@@ -54,29 +64,30 @@ func (d *DB) GetSignals(ctx context.Context, minLat, minLon, maxLat, maxLon floa
 	for rows.Next() {
 		var s Signal
 		if err := rows.Scan(&s.ID, &s.FreqHz, &s.BandwidthHz, &s.Modulation, &s.SubType,
-			&s.Class, &s.Confidence, &s.PowerDBM, &s.Lat, &s.Lon, &s.AccuracyM,
+			&s.Class, &s.Method, &s.Confidence, &s.PowerDBM, &s.Lat, &s.Lon, &s.AccuracyM,
 			&s.FirstSeen, &s.LastSeen, &s.SDRID, &s.Verified); err != nil {
 			return nil, err
 		}
+		s.Active = true
 		signals = append(signals, s)
 	}
 	return signals, rows.Err()
 }
 
-// GetSignal returns a single signal by ID.
+// GetSignal returns a single signal by ID (active or retired).
 func (d *DB) GetSignal(ctx context.Context, id string) (*Signal, error) {
 	query := `
 		SELECT id, frequency_hz, bandwidth_hz, COALESCE(modulation,''), COALESCE(sub_type,''),
-			COALESCE(class,''), confidence, COALESCE(power_dbm,0),
+			COALESCE(class,''), COALESCE(method,''), confidence, COALESCE(power_dbm,0),
 			ST_Y(location), ST_X(location), COALESCE(accuracy_m,0),
-			first_seen, last_seen, sdr_id, verified
+			first_seen, last_seen, sdr_id, verified, active
 		FROM signals
 		WHERE id = $1
 	`
 	var s Signal
 	err := d.Pool.QueryRow(ctx, query, id).Scan(&s.ID, &s.FreqHz, &s.BandwidthHz, &s.Modulation, &s.SubType,
-		&s.Class, &s.Confidence, &s.PowerDBM, &s.Lat, &s.Lon, &s.AccuracyM,
-		&s.FirstSeen, &s.LastSeen, &s.SDRID, &s.Verified)
+		&s.Class, &s.Method, &s.Confidence, &s.PowerDBM, &s.Lat, &s.Lon, &s.AccuracyM,
+		&s.FirstSeen, &s.LastSeen, &s.SDRID, &s.Verified, &s.Active)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, ErrNotFound
@@ -231,13 +242,37 @@ func (d *DB) UpdateSDR(ctx context.Context, s *SDRDevice) error {
 	return nil
 }
 
-// DeleteSignal removes a signal by ID.
+// DeleteSignal removes a signal by ID. The sweep path does NOT use
+// this (it deactivates, §11.2); deletion is reserved for the
+// §11.2 archive purge.
 func (d *DB) DeleteSignal(ctx context.Context, id string) error {
 	_, err := d.Pool.Exec(ctx, `DELETE FROM signals WHERE id = $1`, id)
 	if err != nil {
 		return fmt.Errorf("db: delete signal: %w", err)
 	}
 	return nil
+}
+
+// DeactivateSignal flags one signal inactive (§11.2). The row is
+// preserved for history; missing rows are not an error.
+func (d *DB) DeactivateSignal(ctx context.Context, id string) error {
+	_, err := d.Pool.Exec(ctx, `UPDATE signals SET active = FALSE WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("db: deactivate signal: %w", err)
+	}
+	return nil
+}
+
+// DeactivateAllSignals flags every active signal inactive. Called at
+// processor startup: rows left active by a previous process would
+// otherwise linger as zombies (§11.2); live signals are re-activated
+// by their next upsert. Returns the number of rows deactivated.
+func (d *DB) DeactivateAllSignals(ctx context.Context) (int64, error) {
+	tag, err := d.Pool.Exec(ctx, `UPDATE signals SET active = FALSE WHERE active`)
+	if err != nil {
+		return 0, fmt.Errorf("db: deactivate all signals: %w", err)
+	}
+	return tag.RowsAffected(), nil
 }
 
 // InsertRecording inserts a recording entry.

@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS signals (
     modulation      TEXT,
     sub_type        TEXT,
     class           TEXT,
+    method          TEXT NOT NULL DEFAULT '',
     confidence      REAL DEFAULT 0,
     power_dbm       REAL,
     location        GEOGRAPHY(POINT, 4326),
@@ -32,7 +33,8 @@ CREATE TABLE IF NOT EXISTS signals (
     first_seen      TIMESTAMPTZ DEFAULT now(),
     last_seen       TIMESTAMPTZ DEFAULT now(),
     sdr_id          TEXT REFERENCES sdrs(id),
-    verified        BOOLEAN DEFAULT FALSE
+    verified        BOOLEAN DEFAULT FALSE,
+    active          BOOLEAN NOT NULL DEFAULT TRUE
 );
 
 CREATE INDEX IF NOT EXISTS idx_signals_location ON signals USING GIST(location);
@@ -40,6 +42,8 @@ CREATE INDEX IF NOT EXISTS idx_signals_freq ON signals(frequency_hz);
 CREATE INDEX IF NOT EXISTS idx_signals_class ON signals(class);
 CREATE INDEX IF NOT EXISTS idx_signals_last_seen ON signals(last_seen DESC);
 CREATE INDEX IF NOT EXISTS idx_signals_sdr ON signals(sdr_id);
+-- Partial index backing the live-signal views (§11.2): only active rows.
+CREATE INDEX IF NOT EXISTS idx_signals_active ON signals(last_seen DESC) WHERE active;
 
 -- ─── Signal Recordings ───
 CREATE TABLE IF NOT EXISTS recordings (

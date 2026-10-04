@@ -121,12 +121,14 @@ func (p *publisher) publish(ev signalEvent, now time.Time) {
 	mod := ""
 	subType := ""
 	class := ""
+	method := ""
 	conf := 0.0
 	bw := int32(0)
 	if ev.Class != nil {
 		mod = ev.Class.Modulation
 		subType = ev.Class.SubType
 		class = ev.Class.Source
+		method = ev.Class.Method
 		conf = ev.Class.Confidence
 		bw = int32(ev.Bandwidth)
 	}
@@ -142,6 +144,7 @@ func (p *publisher) publish(ev signalEvent, now time.Time) {
 		Modulation:  mod,
 		SubType:     subType,
 		Class:       class,
+		Method:      method,
 		Confidence:  conf,
 		PowerDBM:    ev.PowerDB,
 		Lat:         lat,
@@ -149,6 +152,7 @@ func (p *publisher) publish(ev signalEvent, now time.Time) {
 		FirstSeen:   first,
 		LastSeen:    now,
 		SDRID:       ev.SDRID,
+		Active:      true,
 	}
 
 	if p.db != nil {
@@ -167,8 +171,10 @@ func (p *publisher) publish(ev signalEvent, now time.Time) {
 	p.queue(typ, sig)
 }
 
-// sweep removes signals that have been idle longer than the TTL,
-// deleting their database rows and emitting signal.removed events.
+// sweep retires signals that have been idle longer than the TTL,
+// flagging their database rows inactive (rows are preserved for
+// history, §11.2) and emitting signal.removed events (same client
+// semantics as before: "no longer live").
 func (p *publisher) sweep(ctx context.Context) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
@@ -191,8 +197,8 @@ func (p *publisher) sweep(ctx context.Context) {
 			for _, id := range removed {
 				if p.db != nil {
 					cctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-					if err := p.db.DeleteSignal(cctx, id); err != nil {
-						log.Printf("delete signal %s: %v", id, err)
+					if err := p.db.DeactivateSignal(cctx, id); err != nil {
+						log.Printf("deactivate signal %s: %v", id, err)
 					}
 					cancel()
 				}
@@ -330,6 +336,18 @@ func main() {
 		} else {
 			defer database.Close()
 			log.Printf("connected to database")
+			// Startup reconciliation (§11.2): rows still flagged active
+			// belong to a previous process — deactivate them so restarts
+			// never leave zombie live signals. Anything still transmitting
+			// is re-activated by its next upsert.
+			rctx, rcancel := context.WithTimeout(context.Background(), 5*time.Second)
+			n, err := database.DeactivateAllSignals(rctx)
+			rcancel()
+			if err != nil {
+				log.Printf("reconcile active signals: %v", err)
+			} else if n > 0 {
+				log.Printf("reconcile: deactivated %d stale signal(s) from previous run", n)
+			}
 		}
 	}
 

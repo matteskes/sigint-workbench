@@ -11,6 +11,7 @@ type Signal struct {
 	Modulation  string    `json:"modulation" db:"modulation"`
 	SubType     string    `json:"subType" db:"sub_type"`
 	Class       string    `json:"class" db:"class"`
+	Method      string    `json:"method" db:"method"` // "rules" or "onnx"
 	Confidence  float64   `json:"confidence" db:"confidence"`
 	PowerDBM    float64   `json:"powerDbm" db:"power_dbm"`
 	Lat         *float64  `json:"lat" db:"lat"`
@@ -20,6 +21,7 @@ type Signal struct {
 	LastSeen    time.Time `json:"lastSeen" db:"last_seen"`
 	SDRID       string    `json:"sdrId" db:"sdr_id"`
 	Verified    bool      `json:"verified" db:"verified"`
+	Active      bool      `json:"active" db:"active"` // §11.2 lifecycle
 }
 
 // Recording represents a recorded signal capture.

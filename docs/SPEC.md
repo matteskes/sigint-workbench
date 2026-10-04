@@ -786,10 +786,9 @@ coarse (≤ 10 Hz) level feed and is not emitted in v1.
 
 ## 11. Recordings & Retention
 
-**Status: sweep/TTL `[implemented]` (hard delete); the
-inactive-flag model, archive purge, and file retention are
-`[planned]` (D6). Recording trigger/writer is `[planned]` (recorder
-stub).**
+**Status: sweep/TTL `[implemented]` (inactive-flag model, §11.2);
+archive purge and file retention are `[planned]` (D6). Recording
+trigger/writer is `[planned]` (recorder stub).**
 
 ### 11.1 Recording trigger
 
@@ -804,13 +803,15 @@ independently.
 
 - **Sweep interval:** 5 s (processor).
 - **TTL:** a signal not re-observed for `SIGNAL_TTL` (default
-  **30 s**) is retired.
-  - *Today (`[gap]`):* row is **hard-deleted** and
-    `signal.removed` is emitted.
-  - *Target:* row is flagged `active = false` (new column,
-    `DEFAULT TRUE`); `signal.removed` is still emitted (same
-    semantics for clients: "no longer live"); the row is
-    **preserved** for history.
+  **30 s**) is retired: the row is flagged `active = false`
+  (`[implemented]` — column `DEFAULT TRUE` + partial index
+  `idx_signals_active`); `signal.removed` is still emitted (same
+  semantics for clients: "no longer live"); the row is
+  **preserved** for history. Processor startup deactivates rows
+  left active by a previous process (restart reconciliation), so
+  live views never show zombies; still-transmitting signals are
+  re-activated by their next upsert. Existing databases apply
+  `db/migrations/001_signals_active.sql` (`make db-migrate`).
 - **Active views:** `GET /api/signals` and the dashboard list show
   only `active = true` rows.
 - **Archive purge:** rows inactive for **30 days** are deleted by a
@@ -828,8 +829,9 @@ independently.
 
 ## 12. Data Model
 
-**Status: schema `[implemented]` (`db/init.sql`); the `active` and
-`method` columns are `[planned]` (D6, §6.5).**
+**Status: schema `[implemented]` (`db/init.sql`; existing databases
+add `active`/`method` via `db/migrations/001_signals_active.sql`,
+`make db-migrate`).**
 
 PostGIS 16 / Postgres 16, extensions `postgis` + `uuid-ossp`.
 Applied automatically on first start via
@@ -864,11 +866,12 @@ Applied automatically on first start via
 | first_seen / last_seen | TIMESTAMPTZ | upsert semantics: first_seen kept, last_seen refreshed |
 | sdr_id | TEXT → sdrs(id) | |
 | verified | BOOLEAN | default false, §8 |
-| active | BOOLEAN | **`[planned]`** — D6 lifecycle |
-| method | TEXT | **`[planned]`** — `rules`/`onnx`; currently event-only, not persisted |
+| active | BOOLEAN | `[implemented]` — D6 lifecycle; partial index `idx_signals_active` (`last_seen DESC WHERE active`) |
+| method | TEXT | `[implemented]` — `rules`/`onnx`; refreshed on every upsert |
 
 Indexes: GIST on `location`; B-tree on `frequency_hz`, `class`,
-`last_seen DESC`, `sdr_id`.
+`last_seen DESC`, `sdr_id`; partial `idx_signals_active` on
+`last_seen DESC WHERE active`.
 
 ### 12.3 `recordings`
 
