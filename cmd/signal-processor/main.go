@@ -1,8 +1,10 @@
 // signal-processor - FFT, peak detection, band identification, classification.
 //
-// Receives IQ frames over UDP from iq-ingest, runs the DSP pipeline:
+// Receives IQ frames over UDP from iq-ingest, assembles fft.size IQ
+// pairs from consecutive same-source frames (§5.7), and runs the DSP
+// pipeline:
 //
-//	IQ int16 -> float64 -> IQ FFT -> peak detect -> band ID -> classify
+//	IQ int16 -> float64 -> window -> IQ FFT -> peak detect -> band ID -> classify
 //
 // Detected signals are logged to stdout in a structured format,
 // upserted to the PostGIS database (when DB_URL is set), and
@@ -695,6 +697,19 @@ func main() {
 		minConfidence = 0.5 // classifier.yaml documents 0.5 as the default
 	}
 
+	// FFT geometry (§5.7): fft.size assembles that many IQ pairs per
+	// FFT from consecutive same-source frames (0 = legacy per-frame);
+	// fft.window is applied before the FFT, "rectangular" matching the
+	// unwindowed ONNX training (models/train.py).
+	fftSize := procCfg.FFT.Size
+	if fftSize != 0 && (fftSize < 64 || fftSize > 16384 || fftSize&(fftSize-1) != 0) {
+		log.Fatalf("fft.size %d: want a power of two in 64..16384 pairs (0 = per-frame)", fftSize)
+	}
+	fftWindow, err := dsp.ParseWindow(procCfg.FFT.Window)
+	if err != nil {
+		log.Fatalf("%v", err)
+	}
+
 	// DSP components
 	peakDetector := &dsp.PeakDetector{
 		ThresholdDB: thresholdDB,
@@ -778,6 +793,13 @@ func main() {
 	defer conn.Close()
 	log.Printf("listening on UDP :%d  threshold=%.0f dB  max_peaks=%d",
 		listenPort, thresholdDB, maxPeaks)
+	if fftSize != 0 {
+		log.Printf("fft: %d-pair buffers, %s window (§5.7)",
+			fftSize, procCfg.FFT.Window)
+	} else {
+		log.Printf("fft: per-frame (fft.size unset), %s window",
+			procCfg.FFT.Window)
+	}
 
 	// Buffer
 	buf := make([]byte, sdr.IQHeaderSize+sdr.MaxIQSamplesPerFrame*4)
@@ -798,6 +820,15 @@ func main() {
 
 	// Throttle: log + emit at most once per 2 seconds per SDR+freq
 	lastEmit := make(map[string]time.Time)
+
+	// §5.7: assemble fft.size pairs from consecutive same-source frames
+	// before the FFT; the assembler keeps one partial per SDR, so
+	// interleaved devices and retunes never mix. Nil keeps the legacy
+	// one-FFT-per-frame behavior.
+	var assembler *dsp.FFTAssembler
+	if fftSize != 0 {
+		assembler = dsp.NewFFTAssembler(fftSize)
+	}
 
 	// Main loop
 	for {
@@ -821,7 +852,21 @@ func main() {
 		// §14.4.3: per-frame SDR observation drives sdr.status events.
 		pub.observeFrame(frame.SDRID, frame.FreqHz, time.Now())
 
-		events := processFrame(frame, peakDetector, classifier)
+		var events []signalEvent
+		if assembler != nil {
+			assembler.Offer(frame.SDRID, frame.FreqHz, frame.Samples,
+				func(assembled []int16) {
+					// Carry the assembled buffer in the last
+					// contributing frame's header (same sdr/freq/rate).
+					merged := *frame
+					merged.Samples = assembled
+					events = processFrame(&merged, peakDetector,
+						classifier, fftWindow)
+				})
+		} else {
+			events = processFrame(frame, peakDetector, classifier,
+				fftWindow)
+		}
 
 		// §5.6: decorate each event with calibrated power before
 		// logging/publishing (no-op without calibration_offset_db).
@@ -843,8 +888,10 @@ func main() {
 	}
 }
 
-// processFrame runs the DSP pipeline on one IQ frame.
-func processFrame(frame *sdr.IQFrame, pd *dsp.PeakDetector, classifier frameClassifier) []signalEvent {
+// processFrame runs the DSP pipeline on one IQ frame (for §5.7
+// assembled buffers: one fft.size record carried in a frame header).
+func processFrame(frame *sdr.IQFrame, pd *dsp.PeakDetector,
+	classifier frameClassifier, win dsp.WindowKind) []signalEvent {
 	pairs := len(frame.Samples) / 2
 	if pairs < 64 {
 		return nil
@@ -855,6 +902,10 @@ func processFrame(frame *sdr.IQFrame, pd *dsp.PeakDetector, classifier frameClas
 	for i, v := range frame.Samples {
 		iqFloat[i] = float64(v) / 32768.0
 	}
+
+	// Window (§5.7); rectangular is a no-op, leaving the spectrum
+	// byte-identical to the unwindowed pipeline/training data.
+	dsp.ApplyWindow(iqFloat, win)
 
 	// IQ FFT
 	result, err := dsp.ComputeIQFFT(iqFloat, frame.SampleRate)

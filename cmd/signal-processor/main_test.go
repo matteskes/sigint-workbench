@@ -331,7 +331,7 @@ func TestProcessFrameBelowCenterOffset(t *testing.T) {
 		center = uint64(10_000_000)
 		offset = -2_000_000.0 // below center, within (-fs/2, 0) at 4.096 Msps
 	)
-	events := processFrame(pipelineFrame(t, center, offset, 0), pd, rules)
+	events := processFrame(pipelineFrame(t, center, offset, 0), pd, rules, dsp.WindowRectangular)
 	if len(events) == 0 {
 		t.Fatal("no events for below-center tone")
 	}
@@ -355,12 +355,69 @@ func TestProcessFrameClampsBelowZero(t *testing.T) {
 		center = uint64(500_000)
 		offset = -2_000_000.0 // center+offset < 0 -> must clamp to 0
 	)
-	events := processFrame(pipelineFrame(t, center, offset, 0), pd, rules)
+	events := processFrame(pipelineFrame(t, center, offset, 0), pd, rules, dsp.WindowRectangular)
 	if len(events) == 0 {
 		t.Fatal("no events")
 	}
 	if events[0].PeakHz != 0 {
 		t.Fatalf("PeakHz = %d, want 0 (clamped)", events[0].PeakHz)
+	}
+}
+
+// §5.7: the assembled wire path — four 1024-pair frames concatenated
+// by dsp.FFTAssembler — must produce the same events as one
+// 4096-pair frame carrying the same samples (same peak, same power:
+// the FFT runs once on identical bytes).
+func TestAssembledFramesMatchSingleFrame(t *testing.T) {
+	pd := &dsp.PeakDetector{ThresholdDB: -60, MinSpacing: 10, TopN: 20}
+	rules := classify.NewRuleClassifier()
+	const (
+		center = uint64(10_000_000)
+		rate   = 4_096_000.0
+	)
+	build := func(frameIdx int) []int16 {
+		samples := make([]int16, 2*1024)
+		for i := 0; i < 1024; i++ {
+			n := i + frameIdx*1024
+			ph := 2 * math.Pi * float64(n) / 4 // one cycle per 4 pairs
+			samples[2*i] = int16(8000 * math.Cos(ph))
+			samples[2*i+1] = int16(8000 * math.Sin(ph))
+		}
+		return samples
+	}
+	single := &sdr.IQFrame{
+		SDRID: "sdr0", FreqHz: center, SampleRate: uint32(rate),
+	}
+	for f := 0; f < 4; f++ {
+		single.Samples = append(single.Samples, build(f)...)
+	}
+	want := processFrame(single, pd, rules, dsp.WindowRectangular)
+	if len(want) == 0 {
+		t.Fatal("no events from single 4096-pair frame")
+	}
+
+	var got []signalEvent
+	asm := dsp.NewFFTAssembler(4096)
+	for f := 0; f < 4; f++ {
+		fr := &sdr.IQFrame{
+			SDRID: "sdr0", FreqHz: center, SampleRate: uint32(rate),
+			Samples: build(f),
+		}
+		asm.Offer(fr.SDRID, fr.FreqHz, fr.Samples, func(buf []int16) {
+			m := *fr
+			m.Samples = buf
+			got = processFrame(&m, pd, rules, dsp.WindowRectangular)
+		})
+	}
+	if len(got) == 0 {
+		t.Fatal("no events from assembled 4x1024-pair path")
+	}
+	if got[0].PeakHz != want[0].PeakHz {
+		t.Fatalf("PeakHz = %d, want %d", got[0].PeakHz, want[0].PeakHz)
+	}
+	if got[0].PowerDB != want[0].PowerDB {
+		t.Fatalf("PowerDB = %v, want %v (identical bytes must give "+
+			"identical power)", got[0].PowerDB, want[0].PowerDB)
 	}
 }
 

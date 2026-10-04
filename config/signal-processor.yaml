@@ -7,10 +7,23 @@ peak_detection:
   min_spacing_bins: 10
   max_peaks: 20
 
-# FFT settings
+# FFT settings (§5.7, wired)
 fft:
-  size: 4096          # FFT bin count (power of 2)
-  window: hann        # hann | hamming | blackman | rectangular
+  # IQ pairs per assembled FFT buffer. Frames arrive as <=1024-pair
+  # UDP packets; consecutive same-source frames (keyed by sdr_id +
+  # tuned frequency) are concatenated until this many pairs are ready.
+  # 4096 pairs = 2048 one-sided bins at 1 kHz — the geometry the ONNX
+  # model was trained on (models/train.py NFFT).
+  # Unnormalized FFT power scales with size: the -60 dB peak threshold
+  # and the §5.6 calibration offsets are valid only at the calibrated
+  # geometry — changing size forces a rtl-calibrate re-run
+  # (docs/HARDWARE.md §6.2, -fft-size).
+  size: 4096
+  # Window applied before the FFT. rectangular matches the unwindowed
+  # ONNX training; hann | hamming | blackman change the spectrum shape
+  # and power scale, so switching requires retraining the model
+  # (train.py must mirror the window) AND a §6.2 recalibration.
+  window: rectangular
 
 # Scan parameters
 scan:

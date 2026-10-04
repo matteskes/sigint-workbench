@@ -7,8 +7,12 @@
 // The measurement matches the live pipeline exactly — int16/32768
 // normalization, the wrapped ComputeIQFFT spectrum, and the
 // strongest-bin power_db that signal-processor would report for the
-// same 1024-pair frame (§5.2/§5.4) — so the offset computed here is
-// the offset the pipeline needs, with no scale conversion.
+// same fft-size geometry (§5.2/§5.4/§5.7; -fft-size, default 4096,
+// matching config/signal-processor.yaml) — so the offset computed
+// here is the offset the pipeline needs, with no scale conversion.
+// It is valid only at that geometry: unnormalized FFT power scales
+// with the record size, so an fft.* change on either side invalidates
+// the offset until §6.2 is re-run.
 //
 //	power_dbm = power_db − applied_gain_db + calibration_offset_db
 //		⇒ offset = expected_dbm − mean_power_db + gain_db   (§5.6)
@@ -21,6 +25,7 @@
 //
 //	rtl-calibrate -freq 98700000 -expected-dbm -40 [-index 0]
 //	    [-gain 40] [-duration 30s] [-rate 2400000] [-tune-offset 250000]
+//	    [-fft-size 4096] [-pairs 1024] [-stride 10]
 //
 // Build (real hardware — cgo, librtlsdr):
 //
@@ -59,6 +64,9 @@ func main() {
 	rate := flag.Uint("rate", 2_400_000, "sample rate in Hz")
 	pairs := flag.Int("pairs", 1024,
 		"IQ pairs per frame (pipeline wire limit: 1024)")
+	fftSize := flag.Int("fft-size", 4096,
+		"IQ pairs per averaged FFT (§5.7) — keep equal to the "+
+			"signal-processor's fft.size or the offset is wrong")
 	tuneOffset := flag.Float64("tune-offset", 250_000,
 		"tune this many Hz BELOW the carrier so it lands away from the "+
 			"DC spike (0 = tune dead-on)")
@@ -78,6 +86,11 @@ func main() {
 		fmt.Fprintf(os.Stderr,
 			"rtl-calibrate: -pairs must be 64..%d (pipeline frame sizes)\n",
 			sdr.MaxIQSamplesPerFrame)
+		os.Exit(2)
+	}
+	if *fftSize < 64 || *fftSize > 16384 || *fftSize&(*fftSize-1) != 0 {
+		fmt.Fprintln(os.Stderr,
+			"rtl-calibrate: -fft-size must be a power of two in 64..16384 pairs (§5.7)")
 		os.Exit(2)
 	}
 	if *rate == 0 || *stride < 1 {
@@ -128,8 +141,9 @@ func main() {
 		"DC guard ±%.0f kHz)\n",
 		float64(center)/1e6, *tuneOffset/1e3, dcGuardHz/1e3)
 	fmt.Printf("chain:   gain %.1f dB applied (%.1f dB requested), "+
-		"rate %.2f MHz, %d pairs/frame, FFT every %dth frame\n",
-		applied, *gain, float64(*rate)/1e6, *pairs, *stride)
+		"rate %.2f MHz, %d pairs/frame read, %d-pair FFTs, "+
+		"measure every %dth FFT\n",
+		applied, *gain, float64(*rate)/1e6, *pairs, *fftSize, *stride)
 	fmt.Printf("window:  %s (Ctrl-C reports the partial window)\n",
 		*duration)
 	fmt.Println()
@@ -138,8 +152,13 @@ func main() {
 	signal.Notify(interrupt, syscall.SIGINT, syscall.SIGTERM)
 
 	buf := make([]int16, *pairs*2)
-	iq := make([]float64, *pairs*2)
+	iq := make([]float64, *fftSize*2)
 	deadline := time.Now().Add(*duration)
+
+	// §5.7: every read feeds the assembly; only every Nth completed
+	// fft-size FFT is measured (CPU relief, same statistics). The
+	// (id, freq) key is constant for the whole run.
+	asm := dsp.NewFFTAssembler(*fftSize)
 
 	var powers []float64
 	frames, ffts, shortReads := 0, 0, 0
@@ -164,33 +183,36 @@ measure:
 			shortReads++
 			continue
 		}
-		if frames%*stride != 0 {
-			continue
-		}
-		for i, v := range buf {
-			iq[i] = float64(v) / 32768.0
-		}
-		res, err := dsp.ComputeIQFFT(iq, uint32(*rate))
-		if err != nil || res == nil {
-			continue
-		}
-		peak, _, ok := PeakPowerDB(res.PowerDB, res.Frequencies, dcGuardHz)
-		if !ok {
-			continue
-		}
-		powers = append(powers, peak)
-		ffts++
+		asm.Offer("cal", uint64(*freq), buf, func(chunk []int16) {
+			ffts++
+			if (ffts-1)%*stride != 0 {
+				return
+			}
+			for i, v := range chunk {
+				iq[i] = float64(v) / 32768.0
+			}
+			res, err := dsp.ComputeIQFFT(iq, uint32(*rate))
+			if err != nil || res == nil {
+				return
+			}
+			peak, _, ok := PeakPowerDB(res.PowerDB, res.Frequencies, dcGuardHz)
+			if !ok {
+				return
+			}
+			powers = append(powers, peak)
+		})
 	}
 
-	report(*freq, *expected, *gain, applied, fullScaleDB(*pairs), interrupted,
+	report(*freq, *expected, *gain, applied, fullScaleDB(*fftSize), interrupted,
 		frames, ffts, shortReads, powers)
 }
 
 // fullScaleDB is the strongest-bin power_db a full-scale sinusoid
-// produces through the §5.2/§5.4 scale (iq normalized to ±1, N-point
-// wrapped FFT): 20·log10(N/2) ≈ 54.2 dB for 1024-pair frames.
-// Advisories are keyed to this, not to 0 dB.
-func fullScaleDB(pairs int) float64 { return 20 * math.Log10(float64(pairs)/2) }
+// produces through the §5.2/§5.4 scale (iq normalized to ±1, N-pair
+// record, wrapped FFT): 20·log10(N/2) ≈ 54.2 dB for 1024 pairs,
+// ≈ 60.2 dB for the 4096-pair §5.7 buffers. Advisories are keyed to
+// this, not to 0 dB.
+func fullScaleDB(n int) float64 { return 20 * math.Log10(float64(n)/2) }
 
 // powerAdvisories returns the measurement-quality lines printed after
 // a run: clipping risk when the strongest bin sits within 3 dB of

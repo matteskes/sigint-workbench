@@ -5,10 +5,11 @@
 // Frames are built the way models/train.py build_dataset and the Go E2E tests
 // do: a tone (pure for CW, piecewise-constant deviation for WFM) at an offset
 // from the carrier, scaled so its strongest FFT bin sits 25 dB above the 1e-6
-// per-sample noise floor *at the frame's own size* (the ONNX model was trained
-// in the 18-30 dB SNR range), plus Gaussian noise. Frames are sized to the
-// 1024-pair UDP wire limit, so the processor's 1024-point FFT still sees a
-// 25 dB-SNR signal.
+// per-sample noise floor *at the pipeline's assembled FFT geometry* (§5.7:
+// 4096 pairs — the ONNX model was trained in the 18-30 dB SNR range there),
+// plus Gaussian noise. Frames are sized to the 1024-pair UDP wire limit and
+// concatenated by the processor, so the tone is scaled ~6 dB quieter than
+// frame-size scaling to land at 25 dB SNR once assembled.
 //
 // Usage:
 //
@@ -35,6 +36,11 @@ const (
 	sampleRate = 4_096_000
 	// snrDB keeps the synthetic tone inside the 18-30 dB training range.
 	snrDB = 25.0
+	// assembledPairs is the pipeline's fft.size (§5.7,
+	// config/signal-processor.yaml): frames concatenate to this many
+	// IQ pairs before the FFT, so the tone is SNR-scaled at that
+	// geometry, not at the 1024-pair wire frame size.
+	assembledPairs = 4096
 )
 
 func main() {
@@ -69,17 +75,6 @@ func main() {
 		offsetHz = *offsetFlag // §17.3: allow a below-center (negative) tone
 	}
 
-	frame, err := buildFrame(centerHz, offsetHz, devHz, *nfft, *id)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "build frame: %v\n", err)
-		os.Exit(1)
-	}
-	payload, err := frame.Encode()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "encode frame: %v\n", err)
-		os.Exit(1)
-	}
-
 	dst, err := net.ResolveUDPAddr("udp", *addr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "resolve %s: %v\n", *addr, err)
@@ -92,7 +87,21 @@ func main() {
 	}
 	defer conn.Close()
 
+	// A fresh noise realization per send: the §5.7 processor
+	// concatenates consecutive frames, so repeating one identical
+	// payload would make the assembled noise periodic — a spectral
+	// comb no real SDR produces, which the peak detector duly fires on.
 	for i := 0; i < *count; i++ {
+		frame, err := buildFrame(centerHz, offsetHz, devHz, *nfft, *id, i+1)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "build frame: %v\n", err)
+			os.Exit(1)
+		}
+		payload, err := frame.Encode()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "encode frame: %v\n", err)
+			os.Exit(1)
+		}
 		if _, err := conn.Write(payload); err != nil {
 			fmt.Fprintf(os.Stderr, "send: %v\n", err)
 			os.Exit(1)
@@ -109,11 +118,15 @@ func main() {
 }
 
 // buildFrame builds a synthetic IQFrame (tone + 1e-6 per-sample noise power),
-// scaled so its strongest FFT bin is snrDB above the noise floor at the frame's
-// own size. This mirrors models/train.py build_dataset and the Go E2E helpers.
-func buildFrame(centerHz uint64, offsetHz, devHz float64, nfft int, sdrID string) (*sdr.IQFrame, error) {
+// scaled so its strongest FFT bin is snrDB above the noise floor at the
+// pipeline's assembled FFT geometry (assembledPairs, §5.7) — a 1024-pair
+// frame is scaled ~6 dB quieter than frame-size scaling, because assembling
+// lifts the tone bin more than the noise floor. nonce varies the noise
+// realization between frames of one burst. Mirrors models/train.py
+// build_dataset and the Go E2E helpers.
+func buildFrame(centerHz uint64, offsetHz, devHz float64, nfft int, sdrID string, nonce int) (*sdr.IQFrame, error) {
 	const sigma = 7.0711e-4 // sqrt(1e-6 / 2) per I or Q sample
-	rng := rand.New(rand.NewSource(1))
+	rng := rand.New(rand.NewSource(int64(nonce)))
 
 	// Piecewise-constant-frequency tone (CW when devHz == 0, else FM).
 	ph, step := 0.0, 2*math.Pi*offsetHz/sampleRate
@@ -128,8 +141,6 @@ func buildFrame(centerHz uint64, offsetHz, devHz float64, nfft int, sdrID string
 		ph += step
 	}
 
-	// Scale the tone so its peak bin is snrDB above the noise floor (the
-	// unnormalized FFT power floor is 10*log10(nfft * 1e-6)).
 	res, err := dsp.ComputeIQFFT(tone, sampleRate)
 	if err != nil || res == nil {
 		return nil, fmt.Errorf("tone FFT: %w", err)
@@ -140,7 +151,13 @@ func buildFrame(centerHz uint64, offsetHz, devHz float64, nfft int, sdrID string
 			peak = p
 		}
 	}
-	target := 10*math.Log10(float64(nfft)*1e-6) + snrDB
+	// Scale the tone so its peak bin is snrDB above the noise floor at
+	// the assembled FFT geometry (§5.7): the processor concatenates
+	// frames to assembledPairs before the FFT, which lifts the tone
+	// +20*log10(assembled/nfft) relative to this frame's own FFT while
+	// the noise floor reference follows the assembled size.
+	target := 10*math.Log10(float64(assembledPairs)*1e-6) + snrDB -
+		20*math.Log10(float64(assembledPairs)/float64(nfft))
 	gain := math.Pow(10, (target-peak)/20)
 
 	samples := make([]int16, nfft*2)

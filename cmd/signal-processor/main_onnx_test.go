@@ -33,7 +33,7 @@ func TestProcessFrameONNX(t *testing.T) {
 	// CW: 1.5 MHz offset on a 14.5 MHz frame -> 16 MHz peak. (Bin 1500:
 	// well past the first 20 low-bin noise peaks, so this also guards the
 	// PeakDetector against crowding a strong high-bin signal out of TopN.)
-	events := processFrame(pipelineFrame(t, 14_500_000, 1.5e6, 0), pd, clf)
+	events := processFrame(pipelineFrame(t, 14_500_000, 1.5e6, 0), pd, clf, dsp.WindowRectangular)
 	if len(events) == 0 {
 		t.Fatal("no events from CW frame")
 	}
@@ -53,7 +53,7 @@ func TestProcessFrameONNX(t *testing.T) {
 	// WFM: 800 kHz offset on a 100 MHz frame, Carson width ~140 kHz.
 	// Carrier bin 800 is inside the training carrier range (train.py
 	// picks bins 250..2047-bw); 100.8 MHz is in the WFM band 88-108 MHz.
-	events = processFrame(pipelineFrame(t, 100_000_000, 800_000, 70_000), pd, clf)
+	events = processFrame(pipelineFrame(t, 100_000_000, 800_000, 70_000), pd, clf, dsp.WindowRectangular)
 	if len(events) == 0 {
 		t.Fatal("no events from WFM frame")
 	}

@@ -252,7 +252,7 @@ sequence number exists in v1; `timestamp` is the only ordering hint.
 
 ## 5. DSP Pipeline
 
-**Status: `[implemented]` except §5.7 (FFT config, `[gap]`).**
+**Status: `[implemented]`.**
 
 ### 5.1 Per-frame processing (`signal-processor`)
 
@@ -400,11 +400,21 @@ calibration is switched on.
   (selection sort; n is small).
 - AGC (used for live audio level, §10.6): target peak **0.95**,
   attack **1 sample**, release **50 samples**, hard-clip at ±1.0.
-- **Gap:** `config/signal-processor.yaml` documents `fft.size: 4096`
-  and `fft.window: hann`, but the pipeline uses the frame size as-is
-  (≤ 1024 pairs) and **no windowing**. Until wired, that YAML block is
-  aspirational; the normative values are "frame length, rectangular
-  window".
+- **FFT geometry (wired):** `fft.size` (default 4096 pairs) is the
+  assembled FFT record length: consecutive ≤ 1024-pair frames from one
+  SDR are concatenated until `size` pairs are ready (a retune starts a
+  new record — a device has one tuner, so its partial is discarded;
+  UDP loss inside a record is a spectral discontinuity, not an error —
+  §4.3 has no sequence number). `fft.window` is applied before the
+  FFT; the shipped value is `rectangular`, matching the unwindowed
+  ONNX training (models/train.py). Any other window requires
+  retraining the model with the same window AND a §6.2 recalibration.
+- **Geometry coupling:** the FFT is unnormalized, so absolute power
+  scales with the record length (+3 dB noise floor, +6 dB tone bin per
+  doubling). The §5.4 −60 dB threshold and the §5.6 calibration
+  offsets are valid only at the calibrated geometry: changing `fft.*`
+  forces a rtl-calibrate re-run (docs/HARDWARE.md §6.2 mirrors the
+  geometry via `-fft-size`).
 - Noise-floor estimates feed the §8 verification SNR. Under §5.6
   calibration the floor transforms identically to the peaks
   (same gain + offset), so SNR is calibration-invariant.
@@ -1238,7 +1248,7 @@ CI or the dev environment):
 
 **Status: the YAML reference is normative and loaded — iq-ingest,
 signal-processor, and the recorder read their files with flag/env
-overrides (§16.1); `fft.*` wiring (§5.7) remains `[planned]`.**
+overrides (§16.1); `fft.*` is wired (§5.7).**
 
 ### 16.1 Config surface — `[implemented]`
 
@@ -1265,8 +1275,9 @@ Known YAML-vs-behavior conflicts:
   the rules classification (whose `method` stays `rules`).
 - `recorder.yaml` `audio.format` — resolved (Phase 1): `flac`
   removed; only `wav` is documented (§10.5).
-- `signal-processor.yaml` `fft.*` — see §5.7 (not wired,
-  `[planned]`).
+- `signal-processor.yaml` `fft.*` — resolved (§5.7): `size` assembles
+  the FFT record from ≤ 1024-pair wire frames; `window` ships as
+  `rectangular` for ONNX-model parity.
 - `sdr-capture.yaml` `driver: simulator` — resolved (Phase 3,
   slice 0): the loader accepts `simulator`; the two-device dev
   fixture `config/sdr-capture.sim.yaml` shares one ingest port

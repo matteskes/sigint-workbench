@@ -273,17 +273,19 @@ One run per dongle (example for index 0):
 
 ```bash
 ./bin/rtl-calibrate -index 0 -freq 98700000 \
-  -expected-dbm -40 -gain 40 -duration 30s
+  -expected-dbm -40 -gain 40 -duration 30s -fft-size 4096
 ```
 
 The tool tunes 250 kHz below the carrier (`-tune-offset`) so the
 carrier lands away from the RTL2832U DC spike, excludes ±20 kHz around
-baseband 0 regardless, reads frames at the pipeline's own 1024-pair
-size, and computes the strongest-bin `power_db` exactly like
-signal-processor (§5.2: the same /32768 normalization and
-`ComputeIQFFT`), so the offset it prints is the offset the pipeline
-needs with no scale conversion. It averages per-frame peak `power_db`
-over the window and solves §5.6 for the offset:
+baseband 0 regardless, assembles reads at the pipeline's own FFT
+geometry (`-fft-size`, default 4096 pairs — keep it equal to the
+`fft.size` the signal-processor config sets, §5.7), and computes the
+strongest-bin `power_db` exactly like signal-processor (§5.2: the same
+/32768 normalization, window, and `ComputeIQFFT`), so the offset it
+prints is the offset the pipeline needs with no scale conversion. It
+averages per-buffer peak `power_db` over the measurement window and
+solves §5.6 for the offset:
 
 ```text
 calibration_offset_db = expected_dbm − mean_power_db + gain_db
@@ -308,7 +310,10 @@ Act on the warnings it prints:
 2. Keep `default_gain` at the calibrated value. The tuner applies the
    nearest supported gain step and the sub-dB delta is absorbed into
    the offset, so the number is only valid at this gain; re-run §6.2
-   if the operating gain changes.
+   if the operating gain changes. The offset is likewise valid only
+   at the FFT geometry it was measured with — unnormalized spectra
+   scale with `fft.size` (§5.7) — so re-run §6.2 after any `fft.*`
+   change on either side.
 3. Restart the capture process (§4 topology — native
    `./bin/sdr-capture`; Docker Desktop macOS UDP note applies to the
    rest of the chain) and verify end to end: the signal-processor
