@@ -394,6 +394,43 @@ notes in SPEC, successes flip the §15 and §17.4 statuses.
 ```
 
 ```text
+### 2026-10-04 (session 2) — Mac Studio (M5 Max), macOS 26 (Darwin 27.0)
+
+- §5.7 fft.* wired end to end: signal-processor assembles 4096-pair
+  records (rectangular window) from the 1024-pair wire frames;
+  rtl-calibrate gained -fft-size (default 4096); ONNX became reachable
+  on the native bench via `make ort-lib` + a -tags onnx build
+  (a35aea39, b40bef96)
+- recalibration at the 4096 geometry (mandatory after an fft.* change,
+  §6.3): 96.5 MHz FM, est. −35 dBm, gain 40 → 40.2 applied, 30 s
+  windows, 0 short reads, ~17.5k assembled FFTs per run (reads/4
+  exactly — assembly working): index 0 = −55.61 dB (stddev 2.56; the
+  first run's stddev 4.16 tripped the §6.2 advisory — FM program
+  content, clean on re-run); index 1 = −55.68 dB (stddev 2.62); the
+  front ends agree within 0.07 dB
+- shift vs. the morning's 1024-pair offsets (−48.00/−47.66): −7.6 dB
+  on BOTH devices — the strongest-bin power of the wideband carrier
+  rises with record size, exactly the geometry coupling §5.7 documents
+  (an un-recalibrated pipeline would have reported every carrier
+  ~7.6 dB hot in dBm)
+- offsets applied to config/sdr-capture.yaml; capture + the native
+  signal-processor restarted (-tags onnx, ORT_LIBRARY_PATH from
+  make ort-lib): startup shows "loaded ONNX classifier …" and
+  "fft: 4096-pair buffers, rectangular window (§5.7)"
+- V4 pass (gateway /api/signals: method onnx, powerCalibrated true,
+  plausible dBm — closes this morning's rules-only note); V5 pass
+  (both dongles parked on 96.5 via POST /api/v1/frequency →
+  verified=true latched from both sdr_ids); V6 pass (gain 30 →
+  29.7 applied, §5.6 poll reflected it, restored 40 → 40.2);
+  V7 pass (10 min at the 4096 geometry: 120 x 5 s stats samples,
+  4666–4688 pkt/s in and out, 0 dropped)
+- environment note (pre-existing, not a V-check): the tiles container
+  crash-loops — ./tiles/data is mounted :ro and empty, so
+  tileserver-gl cannot write zurich_switzerland.mbtiles (EROFS);
+  fetch the mbtiles per setup or mount rw before using the map view
+```
+
+```text
 ### YYYY-MM-DD — <host>, <OS>
 
 - hardware: index 0 = <model>/<serial>, index 1 = <model>/<serial>

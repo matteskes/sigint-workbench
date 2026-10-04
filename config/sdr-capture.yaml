@@ -24,7 +24,7 @@ sdrs:
     # the UI shows dBm. Measure the offset against a known reference
     # (docs/HARDWARE.md §6 — bin/rtl-calibrate computes it); until
     # then leave it unset (relative dB).
-    calibration_offset_db: -48.0  # §6.2 2026-10-04, 96.5 MHz, gain 40.2 applied
+    calibration_offset_db: -55.61  # §6.2 2026-10-04 recal @ fft-size 4096 (96.5 MHz FM, gain 40.2 applied)
     # Location (optional) — used by signal-processor to geo-locate
     # single-receiver signals on the map. Set lat+lon together.
     # lat: 40.7128
@@ -36,7 +36,7 @@ sdrs:
     default_freq: 121500000    # 121.5 MHz (guard frequency)
     default_gain: 40
     default_bw: 2400000
-    calibration_offset_db: -47.66  # §6.2 2026-10-04, 96.5 MHz, gain 40.2 applied
+    calibration_offset_db: -55.68  # §6.2 2026-10-04 recal @ fft-size 4096 (96.5 MHz FM, gain 40.2 applied)
     mode: monitor
     stream_host: localhost
     stream_port: 9000          # shared with rtlsdr-0 — frames carry sdr_id

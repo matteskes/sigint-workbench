@@ -8,7 +8,9 @@ Pipeline (mirrors the Go pipeline exactly):
      matching config/signal-processor.yaml (fft.size: 4096).
   2. Per frame: complex FFT (unnormalized DFT, one-sided N/2 bins,
      10*log10(|C|^2)) — a line-by-line mirror of
-     dsp.ComputeIQFFT (internal/dsp/fft.go).
+     dsp.ComputeIQFFT (internal/dsp/fft.go). No window is applied:
+     fft.window ships as rectangular (§5.7) — keep this script and
+     the pipeline in lockstep, or retrain AND recalibrate (§6.2).
   3. Feature extraction — a line-by-line mirror of
      classify.ExtractFeatures / ToVector (internal/classify/features.go):
      6 scalars + 128 normalized spectral bins = 134 float32.
