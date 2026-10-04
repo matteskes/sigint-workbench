@@ -3,11 +3,6 @@
 Real-time multi-SDR signal monitoring, classification, recording,
 and geospatial visualization.
 
-> **Status:** the core pipeline (capture → ingest → DSP →
-> classification → persistence → events) is implemented; items
-> marked *(planned)* below are locked in [`docs/SPEC.md`](docs/SPEC.md)
-> — see its roadmap (§17.4).
-
 ## Features
 
 - **Dual-SDR wideband scanning** with cross-verification *(planned)*
