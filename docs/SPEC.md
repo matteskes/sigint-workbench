@@ -1240,7 +1240,7 @@ CI or the dev environment):
 signal-processor, and the recorder read their files with flag/env
 overrides (§16.1); `fft.*` wiring (§5.7) remains `[planned]`.**
 
-### 16.1 Config surface — `[implemented]` (recorder + `fft.*` remain)
+### 16.1 Config surface — `[implemented]`
 
 Runtime configuration is a **layered surface** (flag > env > YAML >
 built-in default):

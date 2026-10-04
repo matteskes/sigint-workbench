@@ -37,10 +37,12 @@ func PeakPowerDB(powerDB, freqHz []float64, dcGuardHz float64) (peakDB float64, 
 //	offset = expected_dbm − mean_power_db + gain_db
 //
 // so that power_db − gain + offset reproduces expected_dbm. gain_db is
-// the REQUESTED tuner gain — the figure sdr-capture reports on its
-// §7.4 status endpoint and signal-processor uses as applied_gain_db —
-// not the nearest implemented tuner step; the sub-dB delta between the
-// two is absorbed into the offset (docs/HARDWARE.md §6.3).
+// the APPLIED tuner gain the driver reports (AppliedGainDB, §15.3
+// defect 1) — the figure sdr-capture serves on its §7.4 status
+// endpoint and signal-processor uses as applied_gain_db. The requested
+// value may snap to a different tuner step, so the caller must pass
+// the applied figure; passing the requested one instead shifts the
+// offset by that step delta (docs/HARDWARE.md §6.3).
 func ImpliedOffset(expectedDBM, meanPowerDB, gainDB float64) float64 {
 	return expectedDBM - meanPowerDB + gainDB
 }
