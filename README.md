@@ -118,6 +118,15 @@ make setup
 
 # 3. Set Up Map Tiles
 ./tiles/setup-tiles.sh california 10 16
+#    Full-region render (needs `brew install tilemaker`; downloads a
+#    Geofabrik PBF). Skipping this leaves tiles/data empty and the
+#    tiles container crash-loops — its /data mount is read-only, so
+#    it cannot fetch its own sample data. Minimal fallback instead:
+#    curl -fsSL -o tiles/data/zurich_switzerland.mbtiles \
+#      https://github.com/maptiler/tileserver-gl/releases/download/v1.3.0/zurich_switzerland.mbtiles
+#    Custom regions serve under their file stem, so set
+#    VITE_TILE_URL=http://localhost:8082/data/<region>/{z}/{x}/{y}.pbf
+#    in frontend/.env for those.
 
 # 4a. macOS Development
 make dev
