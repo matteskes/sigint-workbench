@@ -73,23 +73,6 @@ services:
     depends_on: [iq-ingest, ws-hub]
     restart: unless-stopped
 
-  classifier:
-    # Same ONNX-enabled image; entrypoint overridden to the
-    # standalone classifier binary.
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.classifier
-    entrypoint: ["/classifier"]
-    command: ["-model", "/models/classifier.onnx"]
-    volumes:
-      - ./models:/models:ro
-      - ./config/classifier.yaml:/config.yaml:ro
-    environment:
-      - LOG_LEVEL=${LOG_LEVEL:-info}
-    networks: [sdr-net]
-    depends_on: [signal-processor]
-    restart: unless-stopped
-
   recorder:
     # Opus-enabled build (cgo + libopus on debian:bookworm-slim, §10.4)
     build:
@@ -104,18 +87,6 @@ services:
       - ./config/recorder.yaml:/config.yaml:ro
     environment:
       - RECORDER_CONFIG=/config.yaml
-      - DB_URL=${DB_URL:-postgres://sdr:sdr@db:5432/sdr?sslmode=disable}
-      - LOG_LEVEL=${LOG_LEVEL:-info}
-    networks: [sdr-net]
-    depends_on: [classifier, db]
-    restart: unless-stopped
-
-  location-service:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.services
-      args: { SERVICE: location-service }
-    environment:
       - DB_URL=${DB_URL:-postgres://sdr:sdr@db:5432/sdr?sslmode=disable}
       - LOG_LEVEL=${LOG_LEVEL:-info}
     networks: [sdr-net]

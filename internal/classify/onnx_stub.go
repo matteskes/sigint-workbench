@@ -3,9 +3,9 @@
 // Package classify — ONNX classifier stub (default build).
 //
 // Without the `onnx` build tag the classifier cannot run inference;
-// callers (signal-processor, cmd/classifier) fall back to the rule
-// classifier. The stub keeps the same exported surface so the rest of
-// the codebase builds identically in both modes.
+// signal-processor falls back to the rule classifier. The stub
+// keeps the same exported surface so the rest of the codebase
+// builds identically in both modes.
 package classify
 
 import (

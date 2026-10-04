@@ -138,7 +138,7 @@ make deploy
 
 ```text
 sigint-workbench/
-├── cmd/                    # One main.go per service (8 binaries)
+├── cmd/                    # One main.go per service (6 services + bench tools)
 ├── internal/
 │   ├── sdr/                # SDR interface, drivers, UDP protocol
 │   ├── dsp/                # FFT, peak detection, filters, AGC

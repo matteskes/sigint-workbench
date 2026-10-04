@@ -53,10 +53,10 @@ dashboard, and records decoded audio.
 
 ## 2. Architecture
 
-**Status: 4 of 6 services `[implemented]`, plus both single-ingress
-relays (A3, §2.2: `GET /ws`, `GET /ws/audio`) and the control-path
-retune proxy (§7.4, §13.1); the merged classifier/location topology
-(D2) is `[planned]` (§13).**
+**Status: all six services `[implemented]` — D2 complete (the legacy
+`classifier`/`location-service` stubs and compose entries are
+removed) — plus both single-ingress relays (A3, §2.2: `GET /ws`,
+`GET /ws/audio`) and the control-path retune proxy (§7.4, §13.1).**
 
 ### 2.1 Topology (D2)
 
@@ -66,9 +66,8 @@ The system consists of **six application services**:
    per-device control API, scan loop.
 2. `iq-ingest` — UDP receive, frame validation, fan-out to consumers.
 3. `signal-processor` — DSP, classification, location, verification,
-   persistence, event publishing. **Absorbs the `classifier` and
-   `location-service` binaries (D2); both are now legacy stubs and are
-   scheduled for removal.**
+   persistence, event publishing. **Absorbed the former `classifier`
+   and `location-service` binaries (D2) — both stubs are removed.**
 4. `recorder` — audio demodulation, recording, live audio streaming.
 5. `api-gateway` — the **single client ingress (A3)**: REST API plus
    WebSocket relays for both event and audio streams.
@@ -77,9 +76,10 @@ The system consists of **six application services**:
 Infrastructure (not application services): `db` (PostGIS), `tiles`
 (tileserver-gl), `frontend` (nginx-served SvelteKit SPA).
 
-The current tree still ships 8 `cmd/` binaries. `cmd/classifier` and
-`cmd/location-service` are near-empty stubs; their compose entries are
-legacy. The target deployment runs exactly the six services above.
+The tree ships exactly the six service binaries above (D2 complete;
+the former `classifier`/`location-service` stubs and their compose
+entries are removed), plus bench tools (`rtl-list`, `rtl-calibrate`)
+and the `smoke-frames` ONNX fixture.
 
 ### 2.2 Single client ingress (A3)
 
@@ -152,8 +152,6 @@ published-port reduction is partially done — `db:5432` and
 - **Prod (Linux):** everything, including `sdr-capture`, runs in Docker
   (`--profile prod`); the SDR device is passed through into the
   `sdr-capture` container.
-- The `classifier` and `location-service` compose entries are legacy
-  stubs (D2); target deployments remove them.
 
 ### 3.2 Port map (target)
 
@@ -1499,7 +1497,7 @@ stores and the API client; `svelte-check` for types.
 | **1 — Correctness** | D4 negative offsets; A1 unlocated signals; §6.5 class enum; dead `/ws` hub removal; FLAC-claim cleanup (code + README); CORS/origin tightening — all **done** | new tests per §17.3 green; docs match behavior |
 | **2 — Features** | §15.3 RTL-SDR defect fixes; §10.1 real SSB + pair-aware registry; §11.2 active/TTL lifecycle; `sdr.status` producer (§14.4.3); `GET /ws` gateway relay (§2.2, A3); frontend data wiring (§14.4.2); YAML config loading + `min_confidence` enforcement (§16.1); **slices 1–3:** D3 scan loop + §7.4 control status; §8 dual-SDR verification with verified latch; recorder (D1 in-band WAV + §11.3 retention); first live `TEST_DATABASE_URL` integration run (§17.3); **slice 4:** Opus live streaming recorder side (D1b, §10.3–§10.4: per-signal mux + `/ws/audio` server + `Dockerfile.recorder`); **slice 5:** `/ws/audio` gateway relay (§2.2, §10.4); control-API proxy — `PUT /api/sdrs/{id}` retune forwarding + `GET /api/sdrs/{id}/status` (§7.4, §13.1, §13.2.3) — **all delivered** | §17.3 obligations green; dashboard live end-to-end |
 | **3 — Hardware & fidelity** | RTL-SDR on-hardware validation (§15.3 defect fixes delivered in Phase 2); HackRF driver (H1/H2) — **delivered, compile-validated** (§15.4); power calibration contract (§5.6) — **delivered** (contract + mechanism + honesty flag; measuring each SDR's physical offset → docs/HARDWARE.md runbook, slice 3); **slice 0:** multi-SDR sim enablement — `driver: simulator` accepted via YAML + two-device shared-ingest-port rehearsal (§16.1, §16.4) — **delivered**; `min_confidence` enforcement (§16.1) — **delivered in Phase 2**; **slice 3:** RTL-SDR on-hardware validation runbook + calibration tooling — docs/HARDWARE.md, cmd/rtl-list, cmd/rtl-calibrate (§15.3, §5.6) — **delivered and executed 2026-10-04** (V1–V8 pass, offsets applied); **fft fidelity:** §5.7 `fft.size`/`fft.window` wired end-to-end — signal-processor assembles 4096-pair records, rtl-calibrate `-fft-size`, ONNX inference reachable on the native bench (`make ort-lib`, `-tags onnx`) — **delivered 2026-10-04** (offsets recalibrated at the 4096 geometry per §6.3; §8 session 2) | 2 real SDRs verified end-to-end; calibration documented — **met 2026-10-04** (RTL-SDR half; HackRF deferred, no hardware) |
-| **4 — Deferred** | multi-host + NTP/PTP; TDOA multilateration; tracking (`tracks`, §9.4); annotations UI; `audio.level` feed | scoped separately |
+| **4 — Deferred** | **in progress** — **slice 0:** D2 stub removal (`cmd/classifier`, `cmd/location-service`, compose entries; `Dockerfile.classifier` builds signal-processor only) — **delivered**; **slice 1:** annotations — `GET/POST /api/signals/{id}/annotations` + frontend UI (§12.5, §13.1); **slice 2:** `audio.level` coarse feed recorder → hub → frontend (§10.6, §14.2); **slice 3:** tracking — populate `tracks` from consecutive placements (§9.4, §12.4); **slice 4:** TDOA design — normative §9.5 + §4 frame v2 sample-accurate timing (design review gate); **slice 5:** TDOA engine — simulator first (injected offsets), then 3-SDR on-air fix; **slice 6:** multi-host + NTP/PTP — remote capture hosts, sync-quality reporting (§16) | per-slice; slices 4–5: TDOA fix on a known on-air transmitter; slice 6: second capture host with NTP/PTP sync-quality reporting |
 
 ## Appendix A — Decision Register
 
@@ -1512,7 +1510,7 @@ defaults — they have no separate normative surface.)
 | ---- | ---------- | ----------- |
 | D1 | Audio: hybrid — in-band capture by default (recorder demodulates peaks from the shared IQ stream, no retuning) | §10.2 |
 | D1b | Optional dedicated-tune monitor per SDR; live audio = Opus binary over WS | §10.3, §10.4 |
-| D2 | Topology: classifier + location-service merged into signal-processor; dead in-process WS hub removed ⇒ 6 services | §2.1, §2.2 |
+| D2 | Topology: classifier + location-service merged into signal-processor; dead in-process WS hub removed ⇒ 6 services — **delivered 2026-10-04** (stubs + compose entries removed) | §2.1, §2.2 |
 | D3 | Normative scanner loop in sdr-capture (step/dwell); 2-SDR verification asynchronous | §7, §8 |
 | D4 | FFT bins above fs/2 wrapped to negative offsets (below-center blind spot) | §5.3 |
 | D6 | Retention: TTL → `active=false` (no hard delete); 30-day archive purge; recordings 30 days / 50 GB | §11 |

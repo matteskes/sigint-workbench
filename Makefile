@@ -11,7 +11,7 @@ dev: ## Start full dev environment (macOS: native SDR capture + Docker services)
 	@echo "=== Starting sdr-capture ==="
 	@./bin/sdr-capture -config config/sdr-capture.yaml &
 	@echo "=== Starting Docker services ==="
-	docker compose up -d iq-ingest signal-processor classifier recorder location-service api-gateway ws-hub db tiles
+	docker compose up -d iq-ingest signal-processor recorder api-gateway ws-hub db tiles
 	@echo "=== Starting frontend dev server ==="
 	cd frontend && npm run dev
 

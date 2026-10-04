@@ -13,8 +13,8 @@ geospatial visualization.
   `[planned]`, `[gap]`. Change code and docs together.
 - Services live in `cmd/` (one main.go each): `sdr-capture`,
   `iq-ingest`, `signal-processor`, `recorder`, `api-gateway`,
-  `ws-hub`. `cmd/classifier` and `cmd/location-service` are legacy
-  stubs scheduled for removal (D2).
+  `ws-hub`. Also in `cmd/`: bench tools `rtl-list`, `rtl-calibrate`
+  (need librtlsdr) and the `smoke-frames` ONNX smoke fixture.
 - Shared logic lives in `internal/`: `sdr`, `dsp`, `audio`,
   `classify`, `location`, `db`, `api`, `ws`, `config`, `record`.
 - Frontend: SvelteKit 2 + Svelte 5 + TypeScript + Tailwind 4 +
