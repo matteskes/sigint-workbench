@@ -21,7 +21,7 @@ import (
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
-	CheckOrigin:     func(r *http.Request) bool { return true },
+	CheckOrigin:     ws.OriginCheckFunc(ws.AllowedOriginsFromEnv()),
 }
 
 // eventTypes is the set of event types the hub accepts.

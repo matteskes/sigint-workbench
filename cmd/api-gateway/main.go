@@ -13,7 +13,6 @@ import (
 
 	"sigint-workbench/internal/api"
 	"sigint-workbench/internal/db"
-	"sigint-workbench/internal/ws"
 )
 
 func main() {
@@ -38,12 +37,8 @@ func main() {
 		defer database.Close()
 	}
 
-	// Create WebSocket hub
-	hub := ws.NewHub()
-	go hub.Run()
-
 	// Create and start API server
-	server := api.NewServer(database, hub, log)
+	server := api.NewServer(database, log)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)

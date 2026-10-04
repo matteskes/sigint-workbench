@@ -88,9 +88,9 @@ legacy. The target deployment runs exactly the six services above.
 - `GET /ws/audio` → the recorder's internal audio WS.
 
 `ws-hub` and the recorder MUST be reachable only from within the Docker
-network. The existing in-process `/ws` implementation inside
-`api-gateway` (a hub with no producers) is dead code and MUST be
-removed — this is the "dead /ws hub" gap.
+network. The former in-process `/ws` hub inside `api-gateway` (no
+producers, dead code) was removed in Phase 1 (§13.2.4); `GET /ws`
+currently answers **501** until the relay ships (Phase 2).
 
 The frontend's nginx `location /ws/ → ws-hub:8081` rule MUST be replaced
 by a single `location / → api-gateway:8080` proxy after the relay lands,
@@ -769,8 +769,8 @@ Per recording event the recorder writes, in parallel:
   rate.
 
 **FLAC is not supported and MUST NOT be claimed** (the README's
-"raw IQ + decoded audio (WAV/FLAC)" is a false claim — see README
-realignment). File names:
+former "raw IQ + decoded audio (WAV/FLAC)" claim was removed in the
+README realignment). File names:
 `<signalId>-<unix-ts>.{wav,iq}` under
 `recordings/<sdrId>/<YYYY-MM-DD>/`.
 
@@ -905,7 +905,7 @@ payload.
 
 **Status: endpoints in §13.1 `[implemented]`; the two relays and
 tuning proxy are `[planned]` (A3); §13.2 lists the `[gap]` fixes to
-existing endpoints.**
+existing endpoints — 2 of 4 closed in Phase 1.**
 
 All routes are served by `api-gateway` on `:8080` (chi router).
 General contract:
@@ -916,9 +916,11 @@ General contract:
   `/health` still answers).
 - DB-backed handlers run with a **5 s** request timeout; expiry
   surfaces as `500`.
-- CORS: `*` origin, methods GET/POST/PUT/DELETE/OPTIONS,
-  `AllowCredentials: false` (`[gap]` — tighten to the frontend
-  origin, §17.2).
+- CORS: origins from the `ALLOWED_ORIGINS` env (comma-separated;
+  default `http://localhost:3000` and `http://localhost:5173`; unset
+  vs set-but-empty semantics in §17.2), methods
+  GET/POST/PUT/DELETE/OPTIONS, `AllowCredentials: false`
+  (`[implemented]` — the `*` wildcard was removed, Phase 1).
 - Errors: `{"error":"<message>"}` with 400/404/500/503 as
   appropriate.
 
@@ -930,10 +932,10 @@ General contract:
 | `GET /api/signals` | `[implemented]` | Active signals; bbox filter `?minLat&minLon&maxLat&maxLon` (all default → whole world); **max 500 rows**; ordered `last_seen DESC` |
 | `GET /api/signals/{id}` | `[implemented]` | One signal or `404` |
 | `GET /api/recordings` | `[implemented]` | `?limit` (default 50, capped 500) and `?signalId` filters; `startTime DESC` |
-| `GET /api/recordings/{id}/audio` | `[implemented]` | Streams the file (path-confined to `RECORDINGS_DIR`); `audio/wav` for wav; the `flac` branch is unreachable (no FLAC support, §10.5) and MUST be removed |
+| `GET /api/recordings/{id}/audio` | `[implemented]` | Streams the file (path-confined to `RECORDINGS_DIR`); `audio/wav` for wav; every other format (`iq`) serves as `application/octet-stream` (`flac` branch removed in Phase 1 — no FLAC support, §10.5) |
 | `GET /api/sdrs` | `[implemented]` | All SDR rows |
 | `PUT /api/sdrs/{id}` | `[implemented]` → target `[planned]` | Partial update (`model`, `serial`, `lat`, `lon`, `gainDb`, `freqHz`, `active`); **today DB-only** — target: also proxy to `sdr-capture` control API (§7.4) so `freqHz`/`gainDb` actually retune hardware |
-| `GET /ws` | `[gap]` → `[planned]` | Today: in-process hub, **no producers, dead**. Target: transparent relay to `ws-hub:8081/ws` (§2.2) |
+| `GET /ws` | `[planned]` | Dead in-process hub removed (Phase 1); today the route answers `501`. Target: transparent relay to `ws-hub:8081/ws` (§2.2) |
 | `GET /ws/audio` | `[planned]` | Relay to recorder `:9012/ws/audio` (§10.4) |
 | `GET /api/sdrs/{id}/status` | `[planned]` | Proxy of capture control `GET /api/v1/status` (per-device live state) |
 | `GET/POST /api/signals/{id}/annotations` | `[planned]` | List / add notes (§12.5) |
@@ -944,16 +946,16 @@ General contract:
    the D6 column lands, and MUST include unlocated signals
    (`location IS NULL`) — those rows are simply without `lat`/`lon`
    (A1, §9.3).
-2. **`GET /api/recordings/{id}/audio`**: remove the `flac`
-   content-type branch; `iq` files serve as
-   `application/octet-stream`.
+2. **`GET /api/recordings/{id}/audio`**: the `flac` content-type
+   branch was removed (Phase 1 — FLAC unsupported, §10.5); `iq`
+   files serve as `application/octet-stream`.
 3. **`PUT /api/sdrs/{id}`**: after the control-API proxy lands, a
    `409` (or `502`) response with a clear error body is required
    when the capture service is unreachable — never silently
    DB-only.
-4. **`GET /ws`**: delete the in-process hub implementation from
-   `api-gateway` entirely (the `ws.Hub` dependency moves out of the
-   gateway; the hub lives only in the `ws-hub` service).
+4. **`GET /ws`**: the in-process hub implementation was deleted from
+   `api-gateway` entirely (Phase 1); the `ws.Hub` dependency moved
+   out of the gateway — the hub lives only in the `ws-hub` service.
 
 ## 14. WebSocket Events
 
@@ -1006,8 +1008,9 @@ payload-by-`id` upsert on `new`/`update`, delete on `removed`.
 
 ### 14.4 Gap fixes
 
-1. Remove the dead in-process `/ws` hub from `api-gateway`
-   (§13.2.4) and ship the two relays (§2.2).
+1. The dead in-process `/ws` hub was removed from `api-gateway`
+   (§13.2.4, Phase 1); shipping the two relays (§2.2) remains
+   `[planned]`.
 2. Frontend: `+page.svelte` must bootstrap via
    `$lib/api/client.ts` (`fetchSignals`, `fetchSDRs`) and open the
    event socket; `SignalList`/`MapView`/`SDRControl` render from the
@@ -1111,7 +1114,7 @@ Runtime configuration today is a **mixed surface**:
 | iq-ingest | env `LISTEN_PORT`, `CONSUMERS` (csv `host:port,...`) | `config/iq-ingest.yaml` |
 | signal-processor | flags `-port/-threshold/-max-peaks/-config/-model`, env `SIGNAL_TTL`, `SDR_CONFIG`, `MODEL_PATH`, `WS_HUB_URL` | `config/signal-processor.yaml`, `config/classifier.yaml` |
 | recorder | (stub — nothing) | `config/recorder.yaml` |
-| api-gateway | env `RECORDINGS_DIR` | — |
+| api-gateway | env `RECORDINGS_DIR`, `ALLOWED_ORIGINS` (CORS allowlist, §17.2) | — |
 
 **Target:** the YAML files in `config/` are the **single source of
 truth**; each service MUST load its own file (flags/env remain as
@@ -1123,8 +1126,8 @@ Known YAML-vs-behavior conflicts to resolve when wiring:
 - `classifier.yaml` `onnx.min_confidence: 0.5` — **not enforced** by
   the ONNX path today (argmax always wins). Either enforce
   (low-confidence → rules fallback) or document as advisory.
-- `recorder.yaml` `audio.format: wav | flac` — FLAC does not exist
-  (§10.5); remove `flac` from the documented options.
+- `recorder.yaml` `audio.format` — resolved (Phase 1): `flac`
+  removed; only `wav` is documented (§10.5).
 - `signal-processor.yaml` `fft.*` — see §5.7 (not wired).
 
 ### 16.2 `sdr-capture.yaml` (loaded)
@@ -1170,7 +1173,7 @@ Stats log interval: 5 s. Buffer: 256 frames.
 
 ```textrecordings_dir        string  /recordings
 audio.sample_rate     int     48000
-audio.format          string  wav          (flac: remove, §10.5)
+audio.format          string  wav          (wav only; FLAC unsupported, §10.5)
 audio.channels        int     1
 iq.enabled            bool    true         (raw int16 interleaved)
 iq.max_duration_s     int     300
@@ -1229,11 +1232,15 @@ removed from compose with the stubs (D2).
 - **Exposed surface (target, A3):** only `8080`, `8082`, `3000`
   (TCP) and UDP `9000`/`9001`. DB, hub, capture control, and
   recorder are network-internal (§3.2).
-- **`[gap]` CORS:** the gateway allows `*` origins; tighten to the
-  frontend origin (or rely on the nginx proxy and remove CORS for
-  same-origin).
-- **`[gap]` WS origin check:** `CheckOrigin` is `true` for all
-  origins; align with the CORS decision.
+- **`[implemented]` CORS:** the gateway allowlists origins via
+  `ALLOWED_ORIGINS` (default: the frontend origins
+  `http://localhost:3000` / `http://localhost:5173`; set-but-empty
+  denies all cross-origin — same-origin deployments behind the nginx
+  proxy need no exceptions). The `*` wildcard is gone (Phase 1).
+- **`[implemented]` WS origin check:** `ws-hub`'s `CheckOrigin`
+  allows only same-origin or `ALLOWED_ORIGINS`-listed origins (and
+  no-`Origin` non-browser clients) — aligned with the CORS decision
+  (Phase 1; the gateway's in-process hub is gone).
 - **Path safety:** recording file serving is confined to
   `RECORDINGS_DIR` (prefix check) — keep this invariant.
 - **TX prohibition (H2):** no driver may transmit; enforced by
@@ -1298,7 +1305,7 @@ stores and the API client; `svelte-check` for types.
 | Phase | Scope | Exit criteria |
 | ------- | ------- | --------------- |
 | **0 — Core pipeline** (current) | capture → ingest → DSP → classify → persist → events; dashboard shell; CI | smoke-onnx green; this spec written |
-| **1 — Correctness** | D4 negative offsets; A1 unlocated signals; §6.5 class enum; dead `/ws` hub removal; FLAC-claim cleanup (code + README); CORS/origin tightening | new tests per §17.3 green; docs match behavior |
+| **1 — Correctness** | D4 negative offsets; A1 unlocated signals; §6.5 class enum; dead `/ws` hub removal; FLAC-claim cleanup (code + README); CORS/origin tightening — all **done** | new tests per §17.3 green; docs match behavior |
 | **2 — Features** | D3 scan loop; §8 verification in processor; recorder (D1 in-band + D6 retention); Opus live streaming (D1b) + gateway relays (§2.2); frontend data wiring; control-API proxy + `sdr.status` events | §17.3 feature obligations all green; dashboard live end-to-end |
 | **3 — Hardware & fidelity** | RTL-SDR defect fixes (§15.3) + on-hardware validation; HackRF driver (H1/H2); power calibration contract (§5.6); SSB Hilbert (§10.1); `min_confidence` enforcement (§16.1) | 2 real SDRs verified end-to-end; calibration documented |
 | **4 — Deferred** | multi-host + NTP/PTP; TDOA multilateration; tracking (`tracks`, §9.4); annotations UI; `audio.level` feed | scoped separately |

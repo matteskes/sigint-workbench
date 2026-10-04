@@ -13,7 +13,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/cors"
-	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog"
 
 	"sigint-workbench/internal/db"
@@ -24,25 +23,21 @@ import (
 type Server struct {
 	router chi.Router
 	db     *db.DB
-	hub    *ws.Hub
 	log    zerolog.Logger
 
 	recordingsDir string
-	wsUpgrader    websocket.Upgrader
 }
 
 // NewServer creates a new API server.
-func NewServer(database *db.DB, hub *ws.Hub, log zerolog.Logger) *Server {
+func NewServer(database *db.DB, log zerolog.Logger) *Server {
 	dir := os.Getenv("RECORDINGS_DIR")
 	if dir == "" {
 		dir = "recordings"
 	}
 	s := &Server{
-		db:              database,
-		hub:             hub,
-		log:             log,
-		recordingsDir:   dir,
-		wsUpgrader:      websocket.Upgrader{ReadBufferSize: 1024, WriteBufferSize: 1024, CheckOrigin: func(*http.Request) bool { return true }},
+		db:            database,
+		log:           log,
+		recordingsDir: dir,
 	}
 	s.buildRoutes()
 	return s
@@ -52,7 +47,13 @@ func (s *Server) buildRoutes() {
 	s.router = chi.NewRouter()
 
 	s.router.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{"*"},
+		// AllowOriginFunc (not AllowedOrigins) is deliberate: in
+		// go-chi/cors v1.2.1 an empty AllowedOrigins list silently
+		// degrades to allow-all, and the func form also gives us the
+		// deny-all behavior for set-but-empty ALLOWED_ORIGINS.
+		AllowOriginFunc: func(r *http.Request, origin string) bool {
+			return ws.CheckOrigin(ws.AllowedOriginsFromEnv(), r, origin)
+		},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
 		AllowCredentials: false,
@@ -77,8 +78,9 @@ func (s *Server) buildRoutes() {
 	s.router.Get("/api/sdrs", s.handleGetSDRs)
 	s.router.Put("/api/sdrs/{id}", s.handleUpdateSDR)
 
-	// WebSocket
-	s.router.Get("/ws", s.handleWebSocket)
+	// WebSocket event relay to ws-hub is [planned] (A3); the former
+	// in-process hub had no producers and was removed (SPEC §13.2.4).
+	s.router.Get("/ws", s.handleWSRelayPending)
 
 	// Metrics (Prometheus)
 	// s.router.Get("/metrics", promhttp.Handler().ServeHTTP)
@@ -220,15 +222,18 @@ func (s *Server) handleGetRecordingAudio(w http.ResponseWriter, r *http.Request)
 		http.Error(w, `{"error":"file not found"}`, http.StatusNotFound)
 		return
 	}
-	switch rec.FileFormat {
-	case "wav":
-		w.Header().Set("Content-Type", "audio/wav")
-	case "flac":
-		w.Header().Set("Content-Type", "audio/flac")
-	default:
-		w.Header().Set("Content-Type", "application/octet-stream")
-	}
+	w.Header().Set("Content-Type", audioContentType(rec.FileFormat))
 	http.ServeFile(w, r, fpath)
+}
+
+// audioContentType maps a recordings.file_format to its HTTP
+// Content-Type: only wav is decoded audio, everything else (iq) is
+// raw bytes. FLAC is not supported (SPEC §10.5).
+func audioContentType(format string) string {
+	if format == "wav" {
+		return "audio/wav"
+	}
+	return "application/octet-stream"
 }
 
 // handleGetSDRs returns all registered SDRs.
@@ -319,22 +324,12 @@ func (s *Server) handleUpdateSDR(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, existing)
 }
 
-// handleWebSocket upgrades to WebSocket for real-time events.
-func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
-	conn, err := s.wsUpgrader.Upgrade(w, r, nil)
-	if err != nil {
-		return
-	}
-	s.hub.Register(conn)
-	// Read loop (discard client messages for now)
-	go func() {
-		defer s.hub.Unregister(conn)
-		for {
-			if _, _, err := conn.ReadMessage(); err != nil {
-				return
-			}
-		}
-	}()
+// handleWSRelayPending answers /ws until the transparent relay to
+// ws-hub (A3) ships in Phase 2.
+func (s *Server) handleWSRelayPending(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusNotImplemented)
+	_, _ = w.Write([]byte(`{"error":"websocket relay not implemented yet (A3); events are served by ws-hub :8081/ws"}`))
 }
 
 func writeJSON(w http.ResponseWriter, v interface{}) {

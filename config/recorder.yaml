@@ -4,7 +4,7 @@ recordings_dir: /recordings
 # Audio encoding
 audio:
   sample_rate: 48000
-  format: wav          # wav | flac
+  format: wav          # wav only — FLAC is not supported (docs/SPEC.md §10.5)
   channels: 1
 
 # IQ recording (optional, for later analysis)
