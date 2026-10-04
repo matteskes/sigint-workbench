@@ -161,7 +161,7 @@ published-port reduction is partially done — `db:5432` and
 | 9000 | UDP | capture → ingest (S1) | published (host-side dev) | `[implemented]` |
 | 9001 | UDP | capture → ingest (S2) | published (host-side dev) | `[implemented]` |
 | 9010 | UDP | processor IQ input | internal only | `[implemented]` |
-| 9011 | UDP | recorder IQ input | internal only | `[planned]` |
+| 9011 | UDP | recorder IQ input | internal only | `[implemented]` — `CONSUMERS` fan-out; published for host-side dev |
 | 8081 | TCP | ws-hub (events) | internal only | `[implemented]` — via gateway `/ws` relay |
 | 9090 | TCP | capture control API | internal only | `[implemented]` — loopback bind in dev, unpublished in compose |
 | 5432 | TCP | db (PostGIS) | internal only | `[implemented]` — compose publish removed (`make db-migrate` / `exec psql` for host access) |
@@ -490,9 +490,11 @@ gnss, wifi, unknown
 
 ## 7. Scanning
 
-**Status: `[planned]` (D3). Config keys exist
-(`scan.step_hz`, `scan.dwell_ms`); no scan loop is implemented in
-`sdr-capture` today — it holds one tuning until commanded.**
+**Status: `[implemented]` (D3). `sdr-capture` runs the §7.1 loop for
+`scanner`/`both` devices — `scan.*` config with §7.1 defaults, range
+defaulted to and clamped into the driver capability range at startup.
+The §7.4 control surface (manual tune pauses the loop; per-device
+`scanning`/`scan_paused` status) is live.**
 
 ### 7.1 Scan loop (normative)
 
@@ -552,10 +554,11 @@ documented operator behavior).
 
 ## 8. Dual-SDR Verification
 
-**Status: verifier logic `[implemented]` (`internal/location/verify.go`);
-its integration into `signal-processor` is `[planned]` (D2/D3 —
-`location-service` was never wired; a `verified` flag already exists
-in the schema and UI).**
+**Status: `[implemented]`. `signal-processor` pairs detections with
+`location.PairTracker` (sliding window, §8.2 decision table) on every
+publish; a verified pair latches `signals.verified` — sticky across
+re-observations (`UpsertSignal` OR-latch, §8) — records `verifications`
+evidence rows, and re-broadcasts full `signal.update` payloads.**
 
 ### 8.1 Where it runs (target)
 
@@ -676,9 +679,10 @@ haversine distance between consecutive fixes,
 
 ## 10. Audio
 
-**Status: demodulators (incl. SSB) + WAV encoder `[implemented]`
-(library only — `cmd/recorder` is a stub); in-band capture, dedicated
-monitor mode, and live Opus streaming are `[planned]` (D1/D1b).**
+**Status: demodulators (incl. SSB), WAV encoder, and the streaming
+`WAVWriter` are `[implemented]`; in-band capture (D1) is
+`[implemented]` in `cmd/recorder` (§10.2); the dedicated-tune monitor
+and live Opus streaming (D1b) remain `[planned]`.**
 
 ### 10.1 Demodulator contract
 
@@ -796,8 +800,10 @@ coarse (≤ 10 Hz) level feed and is not emitted in v1.
 ## 11. Recordings & Retention
 
 **Status: sweep/TTL `[implemented]` (inactive-flag model, §11.2);
-archive purge and file retention are `[planned]` (D6). Recording
-trigger/writer is `[planned]` (recorder stub).**
+in-band recording trigger/writer is `[implemented]` in `cmd/recorder`
+(§10.2: silence-hysteresis sessions, demodulator-registry gated);
+archive purge and file retention are `[implemented]` (§11.3
+`SelectPurge` + `PurgeInactiveSignals`, 30 days / 50 GB).**
 
 ### 11.1 Recording trigger
 
@@ -1302,7 +1308,7 @@ removed from compose with the stubs (D2).
 | `internal/dsp` | FFT bin placement, peak detector (threshold/spacing/TopN), bandwidth walk, noise floor, band table, AGC |
 | `internal/classify` | rule table (all rows), feature-vector layout (134 dims, log2-kHz dim 0), ONNX E2E (real inference on the committed model) |
 | `internal/location` | verifier decision table (§8.2), UUIDv5 stability, track movement |
-| `internal/db` | migrations + upsert idempotency (Postgres via testcontainer/local); `TEST_DATABASE_URL`-gated integration suite (TTL deactivate/reactivate, `GetSignals(active)` filtering, SDR activation, verifications) |
+| `internal/db` | migrations + upsert idempotency (Postgres via testcontainer/local); `TEST_DATABASE_URL`-gated integration suite (TTL deactivate/reactivate, `GetSignals(active)` filtering, SDR activation, verifications + verified latch, recordings/retention purge). **First live run green (2026-10-03)** — see §17.3 below |
 | `internal/ws` | hub subscribe/broadcast, allowlist drop |
 
 **ONNX real-inference guard:** the CI `go` job downloads ORT
@@ -1316,20 +1322,29 @@ the ONNX test is skipped silently.
 `SIGNAL` lines. This is the end-to-end proof: UDP → FFT → peak →
 features → ONNX → log.
 
-**DB integration suite (live database, gated) — pending first run:**
-`internal/db/queries_integration_test.go` is skipped unless
-`TEST_DATABASE_URL` is set, and it truncates its tables — point it
-at a disposable database only. It landed in Phase 2 with the Docker
-daemon unavailable, so its live run (plus the full `docker compose
-up` smoke test) is still outstanding. When Docker is back: `make
-db-migrate` (runs psql via `docker compose exec`, no published port
-needed), temporarily publish `db:5432` (compose keeps it
-internal-only per §3.2/A3) for the host-run suite:
+**DB integration suite (live database, gated) — first live run green
+(2026-10-03):** `internal/db/queries_integration_test.go` is skipped
+unless `TEST_DATABASE_URL` is set, and it truncates its tables —
+point it at a disposable database only. All 6 `TestIntegration*` tests
+pass against a fresh `postgis/postgis:16-3.4` container (they caught
+two real bugs now fixed: `ST_Y/ST_X(geography)` have no overloads in
+PostGIS 3.4 — queries cast `location::geometry`; and `InsertRecording`
+sent `""`/NULL for `id` instead of letting `gen_random_uuid()` fire).
+Because compose keeps `db` internal-only (§3.2/A3), the host-run
+suite needs a temporary bridge, e.g.:
+`docker run --rm -d --name sdr-db-forward --network
+sigint-workbench_sdr-net -p 127.0.0.1:5432:5432 alpine/socat
+tcp-listen:5432,fork,reuseaddr tcp:db:5432`, then:
 
 ```text
 TEST_DATABASE_URL='postgres://sdr:sdr@localhost:5432/sdr?sslmode=disable' \
 go test ./internal/db/ -run TestIntegration -v
 ```
+
+`make db-migrate` (psql via `docker compose exec`) still works without
+any published port. A stale `db-data` volume predating the current
+`init.sql` must be reset (`docker compose down -v`) before the first
+run — init scripts execute only on first volume init.
 
 **CI matrix (`.github/workflows/ci.yml`, 4 jobs):**
 
@@ -1362,7 +1377,7 @@ stores and the API client; `svelte-check` for types.
 | ------- | ------- | --------------- |
 | **0 — Core pipeline** (current) | capture → ingest → DSP → classify → persist → events; dashboard shell; CI | smoke-onnx green; this spec written |
 | **1 — Correctness** | D4 negative offsets; A1 unlocated signals; §6.5 class enum; dead `/ws` hub removal; FLAC-claim cleanup (code + README); CORS/origin tightening — all **done** | new tests per §17.3 green; docs match behavior |
-| **2 — Features** | **Delivered in Phase 2:** §15.3 RTL-SDR defect fixes; §10.1 real SSB + pair-aware registry; §11.2 active/TTL lifecycle; `sdr.status` producer (§14.4.3); `GET /ws` gateway relay (§2.2, A3); frontend data wiring (§14.4.2); YAML config loading + `min_confidence` enforcement (§16.1). **Remaining `[planned]`:** D3 scan loop; §8 verification in processor; recorder (D1 in-band + D6 retention); Opus live streaming (D1b); `/ws/audio` relay; control-API proxy | §17.3 obligations green for delivered scope; dashboard live end-to-end |
+| **2 — Features** | **Delivered in Phase 2:** §15.3 RTL-SDR defect fixes; §10.1 real SSB + pair-aware registry; §11.2 active/TTL lifecycle; `sdr.status` producer (§14.4.3); `GET /ws` gateway relay (§2.2, A3); frontend data wiring (§14.4.2); YAML config loading + `min_confidence` enforcement (§16.1); **slices 1–3:** D3 scan loop + §7.4 control status; §8 dual-SDR verification with verified latch; recorder (D1 in-band WAV + §11.3 retention); first live `TEST_DATABASE_URL` integration run (§17.3). **Remaining `[planned]`:** Opus live streaming (D1b); `/ws/audio` relay; control-API proxy | §17.3 obligations green for delivered scope; dashboard live end-to-end |
 | **3 — Hardware & fidelity** | RTL-SDR on-hardware validation (§15.3 defect fixes delivered in Phase 2); HackRF driver (H1/H2); power calibration contract (§5.6); `min_confidence` enforcement (§16.1) | 2 real SDRs verified end-to-end; calibration documented |
 | **4 — Deferred** | multi-host + NTP/PTP; TDOA multilateration; tracking (`tracks`, §9.4); annotations UI; `audio.level` feed | scoped separately |
 
