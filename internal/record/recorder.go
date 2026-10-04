@@ -190,6 +190,19 @@ func (r *Recorder) OpenSessions() int {
 	return len(r.sessions)
 }
 
+// Levels returns a snapshot of the latest coarse audio level per open
+// session (§10.6). Finalized/discarded sessions drop out of the map,
+// so their level events simply stop.
+func (r *Recorder) Levels() map[string]float64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make(map[string]float64, len(r.sessions))
+	for id, sess := range r.sessions {
+		out[id] = sess.level
+	}
+	return out
+}
+
 // Close finalizes every open session immediately.
 func (r *Recorder) Close() int {
 	r.mu.Lock()

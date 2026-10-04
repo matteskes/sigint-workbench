@@ -7,6 +7,7 @@
 	import SDRControl from '$lib/components/control/SDRControl.svelte';
 	import { selectedSignal, signals, upsertSignal, removeSignal, type Signal } from '$lib/stores/signals';
 	import { sdrs, applySDRStatus, type SDRStatus } from '$lib/stores/sdrs';
+	import { applyAudioLevel, pruneSignalLevels, clearSignalLevel } from '$lib/stores/audio';
 	import { fetchSignals, fetchSDRs, connectWebSocket, type WSEvent } from '$lib/api/client';
 
 	// Full (re)sync from the REST API — on boot and after every
@@ -28,10 +29,17 @@
 				upsertSignal(ev.payload as Signal);
 				break;
 			case 'signal.removed':
-				if (ev.payload?.id) removeSignal(ev.payload.id);
+				if (ev.payload?.id) {
+					removeSignal(ev.payload.id);
+					clearSignalLevel(ev.payload.id);
+				}
 				break;
 			case 'sdr.status':
 				applySDRStatus(ev.payload as SDRStatus);
+				break;
+			case 'audio.level':
+				// §10.6: coarse level per actively demodulated signal.
+				if (ev.payload?.signalId) applyAudioLevel(ev.payload.signalId, ev.payload.level ?? 0);
 				break;
 		}
 	}
@@ -56,8 +64,12 @@
 		};
 		connect();
 
+		// audio.level entries expire when their feed stops (§10.6).
+		const levelPrune = setInterval(() => pruneSignalLevels(), 500);
+
 		return () => {
 			disposed = true;
+			clearInterval(levelPrune);
 			ws?.close();
 		};
 	});

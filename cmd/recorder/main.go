@@ -9,7 +9,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -25,7 +27,45 @@ import (
 	"sigint-workbench/internal/db"
 	"sigint-workbench/internal/record"
 	"sigint-workbench/internal/sdr"
+	"sigint-workbench/internal/ws"
 )
+
+// publishLevels posts a coarse audio.level event per open session at
+// most 10 times per second (§10.6). Hub errors are logged at most
+// once per 30 s and never stop the recorder.
+func publishLevels(ctx context.Context, rec *record.Recorder, hubURL string) {
+	client := &http.Client{Timeout: time.Second}
+	ticker := time.NewTicker(100 * time.Millisecond) // 10 Hz cap (§10.6)
+	defer ticker.Stop()
+
+	var lastErrLog time.Time
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			for id, lvl := range rec.Levels() {
+				payload, err := json.Marshal(map[string]any{"signalId": id, "level": lvl})
+				if err != nil {
+					continue
+				}
+				body, err := json.Marshal(ws.Event{Type: "audio.level", Payload: payload})
+				if err != nil {
+					continue
+				}
+				resp, err := client.Post(hubURL+"/api/events", "application/json", bytes.NewReader(body))
+				if err != nil {
+					if time.Since(lastErrLog) > 30*time.Second {
+						lastErrLog = time.Now()
+						log.Printf("audio.level: hub unreachable (%v)", err)
+					}
+					continue
+				}
+				resp.Body.Close()
+			}
+		}
+	}
+}
 
 func main() {
 	cfgPath := flag.String("config", config.GetEnv("RECORDER_CONFIG", "config/recorder.yaml"), "recorder YAML config")
@@ -143,6 +183,14 @@ func main() {
 		stop()
 		rx.Close()
 	}()
+
+	// §10.6 audio.level: when WS_HUB_URL is set, publish a coarse
+	// (≤ 10 Hz) level event per actively demodulated signal to the
+	// ws-hub ingest. Unset disables the feed — same convention as the
+	// signal-processor's event publishing.
+	if hubURL := os.Getenv("WS_HUB_URL"); hubURL != "" {
+		go publishLevels(ctx, rec, hubURL)
+	}
 
 	// Frame consumer: feed the shared IQ stream to the recorder.
 	go func() {

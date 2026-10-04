@@ -841,10 +841,14 @@ README realignment). File names:
 
 ### 10.6 Levels
 
-Live level metering uses the §5.7 AGC constants (target 0.95,
-attack 1, release 50) on the demodulated float32 stream; the
-`audio.level` WS event type is reserved in the hub allowlist for a
-coarse (≤ 10 Hz) level feed and is not emitted in v1.
+Live level metering `[implemented]` (Phase 4): every actively
+demodulated signal (an open §10.2 session) runs the §5.7 AGC
+constants (target 0.95, attack 1, release 50) on its demodulated
+float32 stream; the post-AGC RMS — clamped to [0,1] — is published as
+a coarse (≤ 10 Hz) `audio.level` event, one per demodulated signal.
+The recorder publishes when `WS_HUB_URL` is set (§16.2); unset
+disables the feed. Signals that are not being demodulated emit
+nothing.
 
 ## 11. Recordings & Retention
 
@@ -1068,7 +1072,7 @@ counted):
 | `signal.update` | full Signal object | throttled refresh (§5.8) incl. `verified` flips |
 | `signal.removed` | `{"id":"<uuid>"}` | TTL expiry (§11.2) — client removes from live list |
 | `sdr.status` | SDRDevice object (§12.1) | device active/frequency change |
-| `audio.level` | `{"signalId":"<uuid>","level":<0..1>}` | reserved, not emitted in v1 |
+| `audio.level` | `{"signalId":"<uuid>","level":<0..1>}` | coarse post-AGC RMS level, ≤ 10 Hz, one event per actively demodulated signal (§10.6) |
 
 Full-object payloads (not deltas) make clients stateless: apply
 payload-by-`id` upsert on `new`/`update`, delete on `removed`.
@@ -1262,7 +1266,7 @@ built-in default):
 | sdr-capture | `config/sdr-capture.yaml` (via `-config`), flags `-sim/-freq/-gain/-listen` |
 | iq-ingest | `config/iq-ingest.yaml` (`-config`/`CONFIG`); env `LISTEN_PORT`, `CONSUMERS` and flags `-port/-consumers` override |
 | signal-processor | `config/signal-processor.yaml` + `config/classifier.yaml` (`-processor-config`/`-classifier-config`); flags `-port/-threshold/-max-peaks/-model` and env `SIGNAL_TTL`, `SDR_CONFIG`, `MODEL_PATH`, `WS_HUB_URL` override |
-| recorder | `config/recorder.yaml` (`-config`); flags `-port/-ws-port/-dir` and env `RECORDER_PORT`, `RECORDER_WS_PORT`, `RECORDINGS_DIR` override |
+| recorder | `config/recorder.yaml` (`-config`); flags `-port/-ws-port/-dir` and env `RECORDER_PORT`, `RECORDER_WS_PORT`, `RECORDINGS_DIR`, `WS_HUB_URL` (§10.6 `audio.level` publisher; unset = disabled) override |
 | api-gateway | env `RECORDINGS_DIR`, `ALLOWED_ORIGINS` (CORS allowlist, §17.2), `WS_HUB_ADDR` (`/ws` relay, §2.2), `RECORDER_WS_ADDR` (`/ws/audio` relay, §10.4), `CAPTURE_CTRL_ADDR` (control proxy, §7.4) |
 
 **Target:** the YAML files in `config/` are the **single source of
@@ -1501,7 +1505,7 @@ stores and the API client; `svelte-check` for types.
 | **1 — Correctness** | D4 negative offsets; A1 unlocated signals; §6.5 class enum; dead `/ws` hub removal; FLAC-claim cleanup (code + README); CORS/origin tightening — all **done** | new tests per §17.3 green; docs match behavior |
 | **2 — Features** | §15.3 RTL-SDR defect fixes; §10.1 real SSB + pair-aware registry; §11.2 active/TTL lifecycle; `sdr.status` producer (§14.4.3); `GET /ws` gateway relay (§2.2, A3); frontend data wiring (§14.4.2); YAML config loading + `min_confidence` enforcement (§16.1); **slices 1–3:** D3 scan loop + §7.4 control status; §8 dual-SDR verification with verified latch; recorder (D1 in-band WAV + §11.3 retention); first live `TEST_DATABASE_URL` integration run (§17.3); **slice 4:** Opus live streaming recorder side (D1b, §10.3–§10.4: per-signal mux + `/ws/audio` server + `Dockerfile.recorder`); **slice 5:** `/ws/audio` gateway relay (§2.2, §10.4); control-API proxy — `PUT /api/sdrs/{id}` retune forwarding + `GET /api/sdrs/{id}/status` (§7.4, §13.1, §13.2.3) — **all delivered** | §17.3 obligations green; dashboard live end-to-end |
 | **3 — Hardware & fidelity** | RTL-SDR on-hardware validation (§15.3 defect fixes delivered in Phase 2); HackRF driver (H1/H2) — **delivered, compile-validated** (§15.4); power calibration contract (§5.6) — **delivered** (contract + mechanism + honesty flag; measuring each SDR's physical offset → docs/HARDWARE.md runbook, slice 3); **slice 0:** multi-SDR sim enablement — `driver: simulator` accepted via YAML + two-device shared-ingest-port rehearsal (§16.1, §16.4) — **delivered**; `min_confidence` enforcement (§16.1) — **delivered in Phase 2**; **slice 3:** RTL-SDR on-hardware validation runbook + calibration tooling — docs/HARDWARE.md, cmd/rtl-list, cmd/rtl-calibrate (§15.3, §5.6) — **delivered and executed 2026-10-04** (V1–V8 pass, offsets applied); **fft fidelity:** §5.7 `fft.size`/`fft.window` wired end-to-end — signal-processor assembles 4096-pair records, rtl-calibrate `-fft-size`, ONNX inference reachable on the native bench (`make ort-lib`, `-tags onnx`) — **delivered 2026-10-04** (offsets recalibrated at the 4096 geometry per §6.3; §8 session 2) | 2 real SDRs verified end-to-end; calibration documented — **met 2026-10-04** (RTL-SDR half; HackRF deferred, no hardware) |
-| **4 — Deferred** | **in progress** — **slice 0:** D2 stub removal (`cmd/classifier`, `cmd/location-service`, compose entries; `Dockerfile.classifier` builds signal-processor only) — **delivered**; **slice 1:** annotations — `GET/POST /api/signals/{id}/annotations` + SignalDetail notes UI — **delivered**; **slice 2:** `audio.level` coarse feed recorder → hub → frontend (§10.6, §14.2); **slice 3:** tracking — populate `tracks` from consecutive placements (§9.4, §12.4); **slice 4:** TDOA design — normative §9.5 + §4 frame v2 sample-accurate timing (design review gate); **slice 5:** TDOA engine — simulator first (injected offsets), then 3-SDR on-air fix; **slice 6:** multi-host + NTP/PTP — remote capture hosts, sync-quality reporting (§16) | per-slice; slices 4–5: TDOA fix on a known on-air transmitter; slice 6: second capture host with NTP/PTP sync-quality reporting |
+| **4 — Deferred** | **in progress** — **slice 0:** D2 stub removal (`cmd/classifier`, `cmd/location-service`, compose entries; `Dockerfile.classifier` builds signal-processor only) — **delivered**; **slice 1:** annotations — `GET/POST /api/signals/{id}/annotations` + SignalDetail notes UI — **delivered**; **slice 2:** `audio.level` coarse feed recorder → hub → frontend — **delivered** (scope settled: one event per actively demodulated §10.2 session); **slice 3:** tracking — populate `tracks` from consecutive placements (§9.4, §12.4); **slice 4:** TDOA design — normative §9.5 + §4 frame v2 sample-accurate timing (design review gate); **slice 5:** TDOA engine — simulator first (injected offsets), then 3-SDR on-air fix; **slice 6:** multi-host + NTP/PTP — remote capture hosts, sync-quality reporting (§16) | per-slice; slices 4–5: TDOA fix on a known on-air transmitter; slice 6: second capture host with NTP/PTP sync-quality reporting |
 
 ## Appendix A — Decision Register
 

@@ -88,6 +88,8 @@ services:
     environment:
       - RECORDER_CONFIG=/config.yaml
       - DB_URL=${DB_URL:-postgres://sdr:sdr@db:5432/sdr?sslmode=disable}
+      # §10.6: coarse audio.level feed to the hub (≤ 10 Hz).
+      - WS_HUB_URL=http://ws-hub:8081
       - LOG_LEVEL=${LOG_LEVEL:-info}
     networks: [sdr-net]
     depends_on: [db]

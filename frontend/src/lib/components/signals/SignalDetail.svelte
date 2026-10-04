@@ -2,7 +2,9 @@
 	import { fetchAnnotations, addAnnotation } from '$lib/api/client';
 	import type { Annotation } from '$lib/api/client';
 	import type { Signal } from '$lib/stores/signals';
+	import { signalLevels } from '$lib/stores/audio';
 	import AudioPlayer from '../audio/AudioPlayer.svelte';
+	import VUMeter from '../audio/VUMeter.svelte';
 
 	let { signal }: { signal: Signal } = $props();
 
@@ -141,6 +143,15 @@
 			</span>
 		{/if}
 	</div>
+
+	<!-- Live level (§10.6 audio.level — shown only while the
+		recorder actively demodulates this signal) -->
+	{#if $signalLevels[signal.id]}
+		<div>
+			<div class="text-xs text-slate-500">Level</div>
+			<VUMeter level={$signalLevels[signal.id].level} />
+		</div>
+	{/if}
 
 	<!-- Audio -->
 	<div class="border-t border-slate-700 pt-3">

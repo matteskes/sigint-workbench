@@ -17,6 +17,7 @@ import (
 
 	"sigint-workbench/internal/audio"
 	"sigint-workbench/internal/db"
+	"sigint-workbench/internal/dsp"
 	"sigint-workbench/internal/sdr"
 )
 
@@ -27,11 +28,13 @@ type Session struct {
 	Demod  audio.Demodulator
 
 	mixer    mixer // phase-continuous frequency shifter
+	agc      *dsp.AGC
 	file     *os.File
 	wav      *audio.WAVWriter
 	start    time.Time
 	lastFeed time.Time
 	path     string
+	level    float64 // latest coarse level 0..1 (§10.6)
 }
 
 // sessionFileBase builds the recording file name:
@@ -68,6 +71,7 @@ func newSession(reg *audio.Registry, dir string, sig db.Signal, at time.Time) (*
 	return &Session{
 		Signal:   sig,
 		Demod:    demod,
+		agc:      dsp.NewAGC(), // §10.6 metering: target 0.95, attack 1, release 50
 		file:     f,
 		wav:      wav,
 		start:    at,
@@ -90,8 +94,40 @@ func (s *Session) Feed(frame *sdr.IQFrame, offsetHz float64) ([]float32, error) 
 		return nil, fmt.Errorf("record: demodulate %s: %w", s.Signal.ID, err)
 	}
 	s.lastFeed = time.Now()
+	s.level = audioLevel(s.agc, aud)
 	return aud, s.wav.Write(aud)
 }
+
+// audioLevel meters one demodulated chunk: the §5.7 AGC (target 0.95,
+// attack 1, release 50) runs on the demodulated float32 stream and the
+// chunk's post-AGC RMS — clamped to [0,1] — is the coarse level
+// published as audio.level (§10.6). The AGC instance lives on the
+// session so gain continuity is kept across frames.
+func audioLevel(agc *dsp.AGC, aud []float32) float64 {
+	if len(aud) == 0 {
+		return 0
+	}
+	buf := make([]float64, len(aud))
+	for i, v := range aud {
+		buf[i] = float64(v)
+	}
+	out := agc.Process(buf)
+	var sum float64
+	for _, v := range out {
+		sum += v * v
+	}
+	rms := math.Sqrt(sum / float64(len(out)))
+	if rms < 0 {
+		return 0
+	}
+	if rms > 1 {
+		return 1
+	}
+	return rms
+}
+
+// Level returns the session's latest coarse audio level (§10.6).
+func (s *Session) Level() float64 { return s.level }
 
 // finalize closes the WAV and returns the recording row to persist.
 func (s *Session) finalize() (db.Recording, error) {

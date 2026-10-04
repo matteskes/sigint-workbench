@@ -40,6 +40,34 @@ func testFrame(centerHz uint64, n int) *sdr.IQFrame {
 	}
 }
 
+// TestAudioLevelFeed covers the §10.6 meter tap: an open session
+// produces a bounded level, and finalizing the session removes it.
+func TestAudioLevelFeed(t *testing.T) {
+	rec := NewRecorder(Config{Dir: t.TempDir()}, nil)
+	sig := testSignal()
+	tracked := []db.Signal{sig}
+	frame := testFrame(sig.FreqHz, 4096) // signal at frame center → in band
+
+	for i := 0; i < 10; i++ {
+		rec.ObserveFrame(frame, tracked)
+	}
+
+	lvl, ok := rec.Levels()[sig.ID]
+	if !ok {
+		t.Fatalf("no level entry for open session: %v", rec.Levels())
+	}
+	if lvl <= 0 || lvl > 1 {
+		t.Fatalf("level = %v, want in (0, 1]", lvl)
+	}
+
+	// Closing the recorder finalizes every session; the level map
+	// must empty out (events stop when demodulation stops).
+	rec.Close()
+	if remaining := rec.Levels(); len(remaining) != 0 {
+		t.Fatalf("levels after close = %v, want empty", remaining)
+	}
+}
+
 func TestMixerShiftsToneToDC(t *testing.T) {
 	// A complex exponential at +100 kHz must land on DC after shifting
 	// by -100 kHz: the samples become (mostly) real and constant.
