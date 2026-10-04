@@ -36,12 +36,15 @@ import (
 
 // RTLSDR implements the SDR interface for RTL2832U-based dongles.
 type RTLSDR struct {
-	mu      sync.Mutex
-	dev     *C.rtlsdr_dev_t
-	index   uint32
-	meta    SDRMetadata
-	closed  bool
-	readBuf []byte // reusable u8 scratch for ReadIQ (guarded by mu)
+	mu        sync.Mutex
+	dev       *C.rtlsdr_dev_t
+	index     uint32
+	meta      SDRMetadata
+	closed    bool
+	readBuf   []byte    // reusable u8 scratch for ReadIQ (guarded by mu)
+	gainTable []float64 // supported tuner gains in dB, queried once (guarded by mu)
+	gainDB    float64   // last applied manual gain (guarded by mu)
+	gainSet   bool      // manual gain applied — false while auto/unset (guarded by mu)
 }
 
 // NewRTLSDR creates a new RTL-SDR device at the given USB index.
@@ -164,8 +167,14 @@ func (r *RTLSDR) SetSampleRate(hz uint32) error {
 }
 
 // SetGain sets the RF gain in dB. The tuner is switched to manual
-// gain mode (librtlsdr takes gain in tenths of dB); a negative
-// value enables automatic gain instead.
+// gain mode (librtlsdr takes gain in tenths of dB); a negative value
+// enables automatic gain instead. Manual gains are validated against
+// the tuner's supported gain table: requests within 3 dB of a
+// supported step snap to that step and the applied figure is what
+// AppliedGainDB reports; anything further is rejected — the r82xx
+// silently clamps out-of-table values to its maximum, which would
+// leave the hardware at half the configured gain while §7.4/§5.6
+// report the configured figure (§15.3 defect 4).
 func (r *RTLSDR) SetGain(db float64) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -176,16 +185,63 @@ func (r *RTLSDR) SetGain(db float64) error {
 		if C.rtlsdr_set_tuner_gain_mode(r.dev, 0) < 0 {
 			return fmt.Errorf("rtl-sdr: set_tuner_gain_mode(auto) failed")
 		}
+		r.gainSet = false
 		return nil
 	}
 	if C.rtlsdr_set_tuner_gain_mode(r.dev, 1) < 0 {
 		return fmt.Errorf("rtl-sdr: set_tuner_gain_mode(manual) failed")
 	}
-	tenths := C.int(db * 10)
-	if C.rtlsdr_set_tuner_gain(r.dev, tenths) < 0 {
-		return fmt.Errorf("rtl-sdr: set_tuner_gain(%.1f dB) failed (tuner may not support that gain)", db)
+	applied, err := r.applyGainLocked(db)
+	if err != nil {
+		return err
 	}
+	r.gainDB = applied
+	r.gainSet = true
 	return nil
+}
+
+// applyGainLocked validates db against the tuner's supported gain
+// table (queried from the device once and cached) and applies the
+// nearest supported step. Returns the applied gain.
+func (r *RTLSDR) applyGainLocked(db float64) (float64, error) {
+	if r.gainTable == nil {
+		r.gainTable = []float64{}
+		if n := C.rtlsdr_get_tuner_gains(r.dev, nil); n > 0 {
+			buf := make([]C.int, n)
+			if C.rtlsdr_get_tuner_gains(r.dev, &buf[0]) == n {
+				for _, g := range buf {
+					r.gainTable = append(r.gainTable, float64(g)/10)
+				}
+			}
+		}
+	}
+	applied, ok := nearestGain(r.gainTable, db)
+	if !ok {
+		return 0, fmt.Errorf(
+			"rtl-sdr: tuner gain %.1f dB not supported (nearest supported step %.1f dB); "+
+				"pick a supported step — the tuner would silently run at %.1f dB "+
+				"while the config and §5.6 dBm claim %.1f dB",
+			db, applied, applied, db)
+	}
+	if C.rtlsdr_set_tuner_gain(r.dev, C.int(applied*10)) < 0 {
+		return 0, fmt.Errorf("rtl-sdr: set_tuner_gain(%.1f dB) failed", applied)
+	}
+	return applied, nil
+}
+
+// AppliedGainDB reports the manual gain currently applied to the
+// tuner — the snapped-to-step figure the hardware actually runs at,
+// not the requested one. ok is false while auto gain is active or no
+// manual gain has been applied yet (§5.6 calibration is invalid with
+// auto gain anyway). Part of the optional interface sdr-capture uses
+// to keep the §7.4 status and §5.6 applied_gain_db honest.
+func (r *RTLSDR) AppliedGainDB() (float64, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.dev == nil || !r.gainSet {
+		return 0, false
+	}
+	return r.gainDB, true
 }
 
 // ReadIQ reads interleaved I/Q samples. The dongle delivers one
@@ -235,4 +291,12 @@ func (r *RTLSDR) ReadIQ(buf []int16) (int, error) {
 // Metadata returns the device metadata.
 func (r *RTLSDR) Metadata() SDRMetadata {
 	return r.meta
+}
+
+// DeviceCount returns the number of RTL-SDR devices attached to the
+// host without opening any of them (librtlsdr enumerates by USB
+// index). Used by cmd/rtl-list; built only with the rtlsdr tag — the
+// stub returns 0.
+func DeviceCount() int {
+	return int(C.rtlsdr_get_device_count())
 }

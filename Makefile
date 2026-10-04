@@ -1,4 +1,4 @@
-.PHONY: help dev build-capture build-capture-hw build-prod test frontend-test db-init clean
+.PHONY: help dev build-capture build-capture-hw build-hw-tools build-prod test frontend-test db-init clean
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -20,6 +20,10 @@ build-capture: ## Build native macOS sdr-capture binary
 
 build-capture-hw: ## Build native sdr-capture with hardware drivers (rtlsdr + hackrf; needs librtlsdr + libhackrf)
 	CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build -tags "rtlsdr,hackrf" -o bin/sdr-capture ./cmd/sdr-capture
+
+build-hw-tools: ## Build RTL-SDR bench tools (rtl-list + rtl-calibrate; needs librtlsdr)
+	CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build -tags rtlsdr -o bin/rtl-list ./cmd/rtl-list
+	CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build -tags rtlsdr -o bin/rtl-calibrate ./cmd/rtl-calibrate
 
 build-capture-linux: ## Cross-compile sdr-capture for Linux (requires C cross-compiler)
 	CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC=aarch64-linux-gnu-gcc go build -o bin/sdr-capture-linux ./cmd/sdr-capture

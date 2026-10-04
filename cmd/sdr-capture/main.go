@@ -129,14 +129,29 @@ func resolveScanRange(cfg sdr.ScanConfig, meta sdr.SDRMetadata) (min, max uint64
 	return min, max, min < max
 }
 
+// appliedGainDB reports the gain the hardware actually applied for a
+// requested figure. Drivers that snap requests onto a supported step
+// (RTL-SDR, §15.3 defect 4) are queried via the optional
+// AppliedGainDB interface, so the §7.4 status, the startup log line
+// and §5.6 applied_gain_db all track the hardware rather than the
+// config. Drivers without the interface report the request as before.
+func appliedGainDB(dev sdr.SDR, requested float64) float64 {
+	if a, ok := dev.(interface{ AppliedGainDB() (float64, bool) }); ok {
+		if g, ok := a.AppliedGainDB(); ok {
+			return g
+		}
+	}
+	return requested
+}
+
 func (s *sdrSlot) setGain(db float64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.device.SetGain(db); err != nil {
 		return err
 	}
-	s.gainDB = db
-	log.Printf("[%s] gain -> %.1f dB", s.cfg.ID, db)
+	s.gainDB = appliedGainDB(s.device, db)
+	log.Printf("[%s] gain -> %.1f dB", s.cfg.ID, s.gainDB)
 	return nil
 }
 
@@ -406,6 +421,8 @@ func main() {
 			log.Fatalf("%s: set gain: %v", sc.ID, err)
 		}
 
+		gainDB := appliedGainDB(device, sc.DefaultGain)
+
 		streamer, err := sdr.NewIQStreamer(sc.StreamHost, sc.StreamPort)
 		if err != nil {
 			log.Fatalf("streamer %s: %v", sc.ID, err)
@@ -416,7 +433,7 @@ func main() {
 			device:   device,
 			streamer: streamer,
 			freqHz:   sc.DefaultFreq,
-			gainDB:   sc.DefaultGain,
+			gainDB:   gainDB,
 		}
 		// §7.1: scanner-mode devices are driven by the D3 sweep loop.
 		if sc.Mode == "scanner" || sc.Mode == "both" {
@@ -434,7 +451,7 @@ func main() {
 		slots = append(slots, slot)
 		log.Printf("%s: %s  %.4f MHz  %.1f dB  %.2f MHz  -> %s:%d",
 			sc.ID, meta.Model,
-			float64(sc.DefaultFreq)/1e6, sc.DefaultGain,
+			float64(sc.DefaultFreq)/1e6, gainDB,
 			float64(sc.DefaultBW)/1e6, sc.StreamHost, sc.StreamPort)
 	}
 

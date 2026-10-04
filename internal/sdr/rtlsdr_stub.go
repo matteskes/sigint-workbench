@@ -16,10 +16,14 @@ func NewRTLSDR(id string, usbIndex int) (*RTLSDR, error) {
 // RTLSDR is a placeholder when the rtlsdr build tag is not set.
 type RTLSDR struct{}
 
-func (r *RTLSDR) Open() error                  { return fmt.Errorf("rtl-sdr: built without rtlsdr support") }
-func (r *RTLSDR) Close() error                 { return nil }
-func (r *RTLSDR) SetFrequency(hz uint64) error { return fmt.Errorf("rtl-sdr: unavailable") }
-func (r *RTLSDR) SetSampleRate(hz uint32) error { return fmt.Errorf("rtl-sdr: unavailable") }
-func (r *RTLSDR) SetGain(db float64) error     { return fmt.Errorf("rtl-sdr: unavailable") }
+func (r *RTLSDR) Open() error                     { return fmt.Errorf("rtl-sdr: built without rtlsdr support") }
+func (r *RTLSDR) Close() error                    { return nil }
+func (r *RTLSDR) SetFrequency(hz uint64) error    { return fmt.Errorf("rtl-sdr: unavailable") }
+func (r *RTLSDR) SetSampleRate(hz uint32) error   { return fmt.Errorf("rtl-sdr: unavailable") }
+func (r *RTLSDR) SetGain(db float64) error        { return fmt.Errorf("rtl-sdr: unavailable") }
+func (r *RTLSDR) AppliedGainDB() (float64, bool)  { return 0, false }
 func (r *RTLSDR) ReadIQ(buf []int16) (int, error) { return 0, fmt.Errorf("rtl-sdr: unavailable") }
-func (r *RTLSDR) Metadata() SDRMetadata        { return SDRMetadata{ID: "rtlsdr", Model: "N/A"} }
+func (r *RTLSDR) Metadata() SDRMetadata           { return SDRMetadata{ID: "rtlsdr", Model: "N/A"} }
+
+// DeviceCount reports 0 when built without the rtlsdr tag.
+func DeviceCount() int { return 0 }

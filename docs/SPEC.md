@@ -377,8 +377,8 @@ Out-of-table frequencies report band `Unknown`.
   `POST /api/v1/gain` change stays honest. `calibration_offset_db`
   is the per-device offset from the sdr-capture config (§16.2),
   measured against a known reference (a signal generator or calibrated
-  receiver — measuring it is hardware work for the Phase 3 hardware
-  slice, not part of this contract).
+  receiver — measuring it is bench work, runbook and tooling in
+  docs/HARDWARE.md, not part of this contract).
 
 **Honesty flag.** A signal is calibrated **iff** its SDR config
 contains `calibration_offset_db` — presence of the key, not its value
@@ -1100,10 +1100,13 @@ payload-by-`id` upsert on `new`/`update`, delete on `removed`.
 ## 15. Hardware
 
 **Status: simulator `[implemented]`; RTL-SDR driver
-`[implemented]` (build tag; §15.3 defect fixes compile-validated,
-on-hardware validation `[planned]`); HackRF driver `[implemented]`
+`[implemented]` (build tag; §15.3 defect fixes fixed and
+hardware-validated on the bench 2026-10-04 — V1–V8 pass,
+per-device §5.6 calibration applied; run log: docs/HARDWARE.md §8);
+HackRF driver `[implemented]`
 (build tag; compile-validated, hardware-unverified; on-hardware
-validation `[planned]`) (H1/H2).**
+validation `[planned]`, deferred until hardware is available —
+checklist: docs/HARDWARE.md §7) (H1/H2).**
 
 ### 15.1 Driver contract
 
@@ -1128,7 +1131,7 @@ this interface.
 | Driver | Build tag | Freq range | Max BW | TX | Status |
 | -------- | ----------- | ------------ | -------- | ---- | -------- |
 | Simulator | (none) | 24 MHz – 1.7 GHz (declared) | 10 MHz | no | `[implemented]` — the CI testbed |
-| RTL-SDR (RTL2832U) | `rtlsdr` (cgo, librtlsdr) | 24 MHz – 1.7 GHz | 3.2 MHz | no | `[implemented]` — §15.3 fixes compile-validated, hardware-unverified |
+| RTL-SDR (RTL2832U) | `rtlsdr` (cgo, librtlsdr) | 24 MHz – 1.7 GHz | 3.2 MHz | no | `[implemented]` — §15.3 fixes hardware-validated 2026-10-04 (docs/HARDWARE.md §8) |
 | HackRF One | `hackrf` (cgo, libhackrf) | **1 MHz – 7250 MHz** (H1) | ≤ **56 MSPS** (H1; practical cap ≈ 20 MSPS) | hardware has TX; **prohibited** | `[implemented]` — compile-validated, hardware-unverified |
 
 **Simulator normative defaults** (testbed fixture): center set per
@@ -1145,10 +1148,11 @@ Note the AM fixture sits at a **negative** offset: with today's
 one-sided FFT (§5.3 gap) it is invisible — the simulator is the
 canonical reproducer for the D4 fix.
 
-### 15.3 RTL-SDR defect fixes (`[implemented]`, hardware-unverified)
+### 15.3 RTL-SDR defect fixes (`[implemented]`, hardware-validated)
 
-All three defects are fixed and compile-validated with
-`go build -tags rtlsdr ./cmd/sdr-capture` (no hardware in CI):
+All four defects are fixed, compile-validated with
+`go build -tags rtlsdr ./cmd/sdr-capture`, and hardware-validated on
+the bench (2026-10-04; run log: docs/HARDWARE.md §8):
 
 1. **Byte/element confusion in `ReadIQ`:** `rtlsdr_read_sync` is now
    given `len(buf)` **bytes** — the RTL2832U delivers one unsigned
@@ -1167,13 +1171,27 @@ All three defects are fixed and compile-validated with
    dB; negative dB selects auto gain) and `read_sync` return values
    are checked and surfaced; `sdr-capture` aborts startup if the
    initial frequency/rate/gain applies fail.
+4. **Silent gain snap** (found by the V8 check on hardware,
+   docs/HARDWARE.md §5): the r82xx tuner accepts any
+   `rtlsdr_set_tuner_gain` figure and silently clamps out-of-table
+   requests to its maximum (~49.6 dB) — startup proceeded at half
+   the configured gain while status reported the configured figure,
+   a ~49 dB error in §5.6 dBm. `SetGain` now queries the tuner's
+   supported gain table, rejects a request more than 3 dB from the
+   nearest supported step (so `sdr-capture` aborts startup), snaps
+   nearer requests to that step, and reports the applied figure —
+   not the request — via `AppliedGainDB` to the §7.4 status and
+   §5.6 `applied_gain_db` (cmd/rtl-calibrate computes its offset
+   from the applied figure for the same reason).
 
 The cgo bindings were rewritten against the real librtlsdr ABI
 (`rtlsdr_dev_t **` out-param from `rtlsdr_open`, argument-less
 `rtlsdr_get_device_count`, `rtlsdr_get_device_usb_strings`, 4-arg
 `rtlsdr_read_sync`) — the previous file referenced functions that do
-not exist in the library. On-hardware validation remains a Phase 3
-gate.
+not exist in the library. On-hardware validation passed on the bench
+2026-10-04: V1–V8 all pass and both dongles' §5.6 offsets are
+measured and applied (bench procedure, checklist and run log:
+docs/HARDWARE.md; tooling: cmd/rtl-list and cmd/rtl-calibrate).
 
 ### 15.4 HackRF (H1/H2) — `[implemented]`, hardware-unverified
 
@@ -1213,7 +1231,8 @@ CI or the dev environment):
   `Dockerfile.sdr-capture` ships the combined build with `libhackrf0`
   at runtime; macOS dev: `make build-capture-hw`.
 - On-hardware validation (sweep, 2-SDR verification, throughput near
-  the 20 MSPS practical cap) remains a Phase 3 exit gate.
+  the 20 MSPS practical cap) remains a Phase 3 exit gate — deferred
+  until hardware is available; checklist in docs/HARDWARE.md §7.
 
 ## 16. Configuration Reference
 
@@ -1468,7 +1487,7 @@ stores and the API client; `svelte-check` for types.
 | **0 — Core pipeline** | capture → ingest → DSP → classify → persist → events; dashboard shell; CI | smoke-onnx green; this spec written |
 | **1 — Correctness** | D4 negative offsets; A1 unlocated signals; §6.5 class enum; dead `/ws` hub removal; FLAC-claim cleanup (code + README); CORS/origin tightening — all **done** | new tests per §17.3 green; docs match behavior |
 | **2 — Features** | §15.3 RTL-SDR defect fixes; §10.1 real SSB + pair-aware registry; §11.2 active/TTL lifecycle; `sdr.status` producer (§14.4.3); `GET /ws` gateway relay (§2.2, A3); frontend data wiring (§14.4.2); YAML config loading + `min_confidence` enforcement (§16.1); **slices 1–3:** D3 scan loop + §7.4 control status; §8 dual-SDR verification with verified latch; recorder (D1 in-band WAV + §11.3 retention); first live `TEST_DATABASE_URL` integration run (§17.3); **slice 4:** Opus live streaming recorder side (D1b, §10.3–§10.4: per-signal mux + `/ws/audio` server + `Dockerfile.recorder`); **slice 5:** `/ws/audio` gateway relay (§2.2, §10.4); control-API proxy — `PUT /api/sdrs/{id}` retune forwarding + `GET /api/sdrs/{id}/status` (§7.4, §13.1, §13.2.3) — **all delivered** | §17.3 obligations green; dashboard live end-to-end |
-| **3 — Hardware & fidelity** | RTL-SDR on-hardware validation (§15.3 defect fixes delivered in Phase 2); HackRF driver (H1/H2) — **delivered, compile-validated** (§15.4); power calibration contract (§5.6) — **delivered** (contract + mechanism + honesty flag; measuring each SDR's physical offset → Phase 3 hardware slice runbook); **slice 0:** multi-SDR sim enablement — `driver: simulator` accepted via YAML + two-device shared-ingest-port rehearsal (§16.1, §16.4) — **delivered**; `min_confidence` enforcement (§16.1) — **delivered in Phase 2** | 2 real SDRs verified end-to-end; calibration documented |
+| **3 — Hardware & fidelity** | RTL-SDR on-hardware validation (§15.3 defect fixes delivered in Phase 2); HackRF driver (H1/H2) — **delivered, compile-validated** (§15.4); power calibration contract (§5.6) — **delivered** (contract + mechanism + honesty flag; measuring each SDR's physical offset → docs/HARDWARE.md runbook, slice 3); **slice 0:** multi-SDR sim enablement — `driver: simulator` accepted via YAML + two-device shared-ingest-port rehearsal (§16.1, §16.4) — **delivered**; `min_confidence` enforcement (§16.1) — **delivered in Phase 2**; **slice 3:** RTL-SDR on-hardware validation runbook + calibration tooling — docs/HARDWARE.md, cmd/rtl-list, cmd/rtl-calibrate (§15.3, §5.6) — **delivered and executed 2026-10-04** (V1–V8 pass, offsets applied) | 2 real SDRs verified end-to-end; calibration documented — **met 2026-10-04** (RTL-SDR half; HackRF deferred, no hardware) |
 | **4 — Deferred** | multi-host + NTP/PTP; TDOA multilateration; tracking (`tracks`, §9.4); annotations UI; `audio.level` feed | scoped separately |
 
 ## Appendix A — Decision Register
@@ -1486,7 +1505,7 @@ defaults — they have no separate normative surface.)
 | D3 | Normative scanner loop in sdr-capture (step/dwell); 2-SDR verification asynchronous | §7, §8 |
 | D4 | FFT bins above fs/2 wrapped to negative offsets (below-center blind spot) | §5.3 |
 | D6 | Retention: TTL → `active=false` (no hard delete); 30-day archive purge; recordings 30 days / 50 GB | §11 |
-| H1 | Hardware: RTL-SDR + simulator now; HackRF 1–7250 MHz, ≤ 56 MSPS, delivered (compile-validated, hardware-unverified) | §15.1, §15.3, §15.4 |
+| H1 | Hardware: RTL-SDR + simulator now; HackRF 1–7250 MHz, ≤ 56 MSPS, delivered; RTL-SDR hardware-validated, HackRF hardware-unverified | §15.1, §15.3, §15.4 |
 | H2 | TX prohibited by policy; drivers report `hasTX=false` | §1.2, §15.4, §17.2 |
 | A1 | Unlocated signals are listed & verified, never silently dropped (map omits them) | §9.3 |
 | A3 | Single client ingress: api-gateway proxies `/ws` and `/ws/audio`; hub + recorder internal-only | §2.2, §3.2 |

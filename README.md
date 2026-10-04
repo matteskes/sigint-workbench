@@ -167,6 +167,7 @@ sigint-workbench/
 | `make build-capture` | Build native macOS sdr-capture |
 | `make build-capture-hw` | Build sdr-capture with rtlsdr + hackrf drivers |
 | `make build-capture-linux` | Cross-compile sdr-capture for Linux |
+| `make build-hw-tools` | Build RTL-SDR bench tools (rtl-list, rtl-calibrate) |
 | `make build-prod` | Build all Docker images |
 | `make deploy` | Start production stack (Linux) |
 | `make stop` | Stop all Docker services |
@@ -207,6 +208,12 @@ go build -tags "rtlsdr,hackrf" -o bin/sdr-capture ./cmd/sdr-capture
 - HackRF: `serial` selects the device (omit to use the first found);
   RX-only by policy (SPEC H2 — the driver never links the transmit
   API, and a guard test enforces it).
+
+For device enumeration, on-hardware validation, and power calibration
+(§5.6), see [docs/HARDWARE.md](docs/HARDWARE.md). `cmd/rtl-list`
+prints the USB index, product and serial of each dongle;
+`cmd/rtl-calibrate` measures `calibration_offset_db` against a known
+on-air carrier. Build both with `make build-hw-tools`.
 
 Without the tag, selecting that driver in YAML aborts startup with a
 clear "built without … support" error. Install the libraries first:

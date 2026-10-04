@@ -22,8 +22,9 @@ sdrs:
     # Power calibration (§5.6): presence of calibration_offset_db marks
     # this SDR calibrated — power_dbm = power_db − gain + offset, and
     # the UI shows dBm. Measure the offset against a known reference
-    # (see SPEC §15.3 runbook); until then leave it unset (relative dB).
-    # calibration_offset_db: -12.5
+    # (docs/HARDWARE.md §6 — bin/rtl-calibrate computes it); until
+    # then leave it unset (relative dB).
+    calibration_offset_db: -48.0  # §6.2 2026-10-04, 96.5 MHz, gain 40.2 applied
     # Location (optional) — used by signal-processor to geo-locate
     # single-receiver signals on the map. Set lat+lon together.
     # lat: 40.7128
@@ -35,9 +36,10 @@ sdrs:
     default_freq: 121500000    # 121.5 MHz (guard frequency)
     default_gain: 40
     default_bw: 2400000
+    calibration_offset_db: -47.66  # §6.2 2026-10-04, 96.5 MHz, gain 40.2 applied
     mode: monitor
     stream_host: localhost
-    stream_port: 9001
+    stream_port: 9000          # shared with rtlsdr-0 — frames carry sdr_id
 
 # Example: HackRF One (requires building sdr-capture with
 # -tags "rtlsdr,hackrf"; without the tag, startup aborts with a clear

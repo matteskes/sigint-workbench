@@ -748,7 +748,17 @@ func main() {
 	pub := newPublisher(database, wsHubURL, loadLocations(*configPath), ttl)
 	pub.initSDRs(loadSDRs(*configPath))
 	if apiPort := loadAPIPort(*configPath); apiPort != 0 {
-		statusURL := fmt.Sprintf("http://localhost:%d/api/v1/status", apiPort)
+		// §5.6 gain polling host: where the capture control API lives
+		// relative to THIS process. Default localhost covers the
+		// all-native (or single-container) layouts; CAPTURE_API_HOST
+		// overrides for split topologies — compose defaults it to the
+		// sdr-capture service (Linux prod), and macOS dev sets
+		// host.docker.internal in .env (capture runs natively there).
+		captureHost := os.Getenv("CAPTURE_API_HOST")
+		if captureHost == "" {
+			captureHost = "localhost"
+		}
+		statusURL := fmt.Sprintf("http://%s:%d/api/v1/status", captureHost, apiPort)
 		pub.startGainPolling(statusURL)
 		log.Printf("gain polling (§5.6) -> %s every %v", statusURL, gainPollInterval)
 	}

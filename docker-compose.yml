@@ -58,6 +58,11 @@ services:
       - LISTEN_PORT=9010
       - DB_URL=${DB_URL:-postgres://sdr:sdr@db:5432/sdr?sslmode=disable}
       - WS_HUB_URL=http://ws-hub:8081
+      # §5.6 gain polling: host part of the capture control-API URL
+      # (port comes from the shared sdr-capture.yaml api_port). Compose
+      # default = the sdr-capture service (Linux prod); macOS dev sets
+      # CAPTURE_API_HOST=host.docker.internal in .env (native capture).
+      - CAPTURE_API_HOST=${CAPTURE_API_HOST:-sdr-capture}
       - SDR_CONFIG=/config/sdr-capture.yaml
       - PROCESSOR_CONFIG=/config/signal-processor.yaml
       - CLASSIFIER_CONFIG=/config/classifier.yaml
@@ -162,6 +167,12 @@ services:
   # ─── Infrastructure ───
   db:
     image: postgis/postgis:16-3.4
+    ports:
+      # Dev/bench only (127.0.0.1): native signal-processor during
+      # hardware validation (docs/HARDWARE.md §4 — macOS Docker drops
+      # high-rate UDP, so ingest+processor run natively there) needs a
+      # host-side DB. Production stays internal-only (§3.2).
+      - "127.0.0.1:5432:5432"
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-sdr}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sdr}
