@@ -804,11 +804,11 @@ history, §11.2), and emits a coarse `track.update` event (movement
 summary + last fix, ≤ 1 Hz, §14.2). REST: `GET /api/signals/{id}/track`
 returns the persisted path (§13.1).
 
-### 9.5 TDOA multilateration — **DRAFT, slice 4**
+### 9.5 TDOA multilateration — **APPROVED 2026-10-04, slice 4**
 
-**This section is a draft for Phase 4 slice 4 (§17.4) and is pending
-design review. Implementation is slice 5 (§17.4) — simulator first,
-then on-air validation. Nothing here is implemented yet.**
+**Design review passed 2026-10-04 (the §17.4 slice 4 gate).
+Implementation is slice 5 (§17.4) — simulator first, then wiring,
+then on-air validation.**
 
 TDOA locates a signal from the **difference** of its arrival time at
 pairs of receivers. It complements §9.3 (single-SDR placement from
@@ -845,7 +845,11 @@ model already carries the enum).
    independent baselines the engine solves the nonlinear
    least-squares (Gauss–Newton, seeded from the §9.3 SDR-position
    estimate when available); with exactly 2 receivers it publishes
-   the locus endpoints only.
+   the locus endpoints only. The hyperbola itself is unbounded, so
+   the endpoints are a viewing convention, not a measurement: the
+   branch implied by the sign of τᵢⱼ is clipped to a
+   `locus_radius_m` circle about the baseline midpoint (default 3×
+   the pair's baseline length).
 4. **Quality reporting.** Every fix carries: `residual_ns`
    (post-solve RMS time residual), `pairs_used`,
    `max_baseline_m`, and the clock `sync_quality` of the involved
@@ -894,18 +898,26 @@ model already carries the enum).
 
 **Validation path (slice 5, §17.4):** simulator first, and
 N-generic from day one — a 5-receiver virtual network with
-randomized geometry, per-pair injected delays + noise, and one
-deliberately corrupted pair, must recover the known transmitter
-position within the accuracy budget **and** reject the corrupted
-pair via outlier rejection. The 2-receiver locus-only case is
-exercised as the degenerate solve. On-air validation follows
-against a known continuous transmitter (2× RTL-SDR + HackRF,
-docs/HARDWARE.md §7), single-host first.
+randomized geometry, analytically synthesized geometry-true delays
+(exact to sub-sample by construction), a deterministic seeded
+multitone waveform at a stated simulator SNR (**20 dB**), and one
+receiver given a deliberately wrong anchor offset — its pairs
+inherit the error — must recover the known transmitter position
+within the accuracy budget **and** reject the corrupted pairs via
+outlier rejection; a solver-level test additionally corrupts
+exactly one pair's measurement and asserts that pair alone is
+dropped. The 2-receiver locus-only case is exercised as the
+degenerate solve, including the endpoint-clipping convention above,
+as is a mixed-rate solve (engine-side resample per the
+prerequisite). On-air validation follows against a known continuous
+transmitter (2× RTL-SDR + HackRF, docs/HARDWARE.md §7), single-host
+first.
 
-### 9.6 TDOA engine wiring — **DRAFT, slice 5**
+### 9.6 TDOA engine wiring — **APPROVED 2026-10-04, slice 5**
 
-**This section is a draft for Phase 4 slice 5 (§17.4) and is
-pending design review. Nothing here is implemented yet.**
+**Design review passed 2026-10-04. The engine (`internal/tdoa`) and
+its simulator land under slice 5; wiring, §4.5 v2 delivery, and
+on-air validation follow.**
 
 **Placement.** The engine is a pure-Go package `internal/tdoa`
 with three parts: `Buffer` (per-receiver contiguous-run store —
@@ -959,14 +971,17 @@ persists. Budgets are config, not constants.
 `tdoa.window_ms` (10), `tdoa.buffer_horizon_ms` (500),
 `tdoa.pair_cap` (15), `tdoa.outlier_sigma` (3),
 `tdoa.accuracy_budget_m` (200), `tdoa.overwrite_placement` (true,
-covariance-gated).
+covariance-gated), `tdoa.locus_radius_m` (0 ⇒ 3× the pair's
+baseline).
 
 **Testing obligations (§17.3):** the §9.5 validation gate as
-tests — deterministic-seed generator (baseband tone,
-geometry-true per-pair delays, AWGN, one corrupted pair; assert
-fix-within-budget + rejection), 2-receiver locus case, v2
-encode/decode round-trip + v1/v2 mixed acceptance + gap counters,
-live-DB migration test for the new columns.
+tests — deterministic-seed generator (seeded multitone,
+analytically exact delays, AWGN at the stated SNR, anchor-offset
+corruption plus solver-level single-pair corruption; assert
+fix-within-budget + rejection), 2-receiver locus case (endpoint
+clipping), mixed-rate resample solve, v2 encode/decode round-trip +
+v1/v2 mixed acceptance + gap counters, live-DB migration test for
+the new columns.
 
 ## 10. Audio
 
