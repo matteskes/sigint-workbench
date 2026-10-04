@@ -1292,7 +1292,7 @@ removed from compose with the stubs (D2).
 | `internal/dsp` | FFT bin placement, peak detector (threshold/spacing/TopN), bandwidth walk, noise floor, band table, AGC |
 | `internal/classify` | rule table (all rows), feature-vector layout (134 dims, log2-kHz dim 0), ONNX E2E (real inference on the committed model) |
 | `internal/location` | verifier decision table (§8.2), UUIDv5 stability, track movement |
-| `internal/db` | migrations + upsert idempotency (Postgres via testcontainer/local) |
+| `internal/db` | migrations + upsert idempotency (Postgres via testcontainer/local); `TEST_DATABASE_URL`-gated integration suite (TTL deactivate/reactivate, `GetSignals(active)` filtering, SDR activation, verifications) |
 | `internal/ws` | hub subscribe/broadcast, allowlist drop |
 
 **ONNX real-inference guard:** the CI `go` job downloads ORT
@@ -1305,6 +1305,21 @@ the ONNX test is skipped silently.
 (100.800 MHz on 100 MHz), and greps the log for the expected
 `SIGNAL` lines. This is the end-to-end proof: UDP → FFT → peak →
 features → ONNX → log.
+
+**DB integration suite (live database, gated) — pending first run:**
+`internal/db/queries_integration_test.go` is skipped unless
+`TEST_DATABASE_URL` is set, and it truncates its tables — point it
+at a disposable database only. It landed in Phase 2 with the Docker
+daemon unavailable, so its live run (plus the full `docker compose
+up` smoke test) is still outstanding. When Docker is back: `make
+db-migrate` (runs psql via `docker compose exec`, no published port
+needed), temporarily publish `db:5432` (compose keeps it
+internal-only per §3.2/A3) for the host-run suite:
+
+```text
+TEST_DATABASE_URL='postgres://sdr:sdr@localhost:5432/sdr?sslmode=disable' \
+go test ./internal/db/ -run TestIntegration -v
+```
 
 **CI matrix (`.github/workflows/ci.yml`, 4 jobs):**
 
