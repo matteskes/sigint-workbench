@@ -179,3 +179,67 @@ func TestIntegrationActivePartialIndex(t *testing.T) {
 		t.Errorf("idx_signals_active exists = %v, want true (apply db/migrations/001_signals_active.sql)", n == 1)
 	}
 }
+
+func TestIntegrationVerification(t *testing.T) {
+	// §8: verification evidence rows are recorded per signal and the
+	// signals.verified flag is sticky across re-observations.
+	d := integrationPool(t)
+	ctx := context.Background()
+
+	partner := &SDRDevice{ID: "test-sdr-2", Model: "Test SDR 2", Serial: "0002", GainDB: 40, FreqHz: 146_520_000, Active: true}
+	if err := d.UpsertSDR(ctx, partner); err != nil {
+		t.Fatalf("upsert partner sdr: %v", err)
+	}
+
+	id := "22222222-2222-2222-2222-222222222222"
+	if err := d.UpsertSignal(ctx, integrationSignal(id, "rules")); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	// An unverified re-observation must not set the flag.
+	if err := d.UpsertSignal(ctx, integrationSignal(id, "rules")); err != nil {
+		t.Fatalf("re-upsert: %v", err)
+	}
+	if s, err := d.GetSignal(ctx, id); err != nil {
+		t.Fatalf("get: %v", err)
+	} else if s.Verified {
+		t.Fatalf("verified = true before any verification, want false")
+	}
+
+	// The two-SDR verifier flips the flag and records the evidence.
+	if err := d.MarkVerified(ctx, id); err != nil {
+		t.Fatalf("mark verified: %v", err)
+	}
+	ver := &Verification{SignalID: id, SDR1: "test-sdr", SDR2: "test-sdr-2", Verified: true, Confidence: 0.9}
+	if err := d.InsertVerification(ctx, ver); err != nil {
+		t.Fatalf("insert verification: %v", err)
+	}
+
+	// Latch (§8): a later unverified re-observation cannot clear the
+	// flag, while classification fields still refresh.
+	if err := d.UpsertSignal(ctx, integrationSignal(id, "onnx")); err != nil {
+		t.Fatalf("post-verified upsert: %v", err)
+	}
+	s, err := d.GetSignal(ctx, id)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if !s.Verified {
+		t.Error("verified flag cleared by re-observation; want sticky latch")
+	}
+	if s.Method != "onnx" {
+		t.Errorf("method = %q, want onnx (re-observation must still refresh)", s.Method)
+	}
+
+	// Exactly one evidence row landed, pointing at the signal.
+	var n int
+	err = d.Pool.QueryRow(ctx,
+		`SELECT count(*) FROM verifications
+		 WHERE signal_id = $1 AND verified AND sdr1_id = 'test-sdr' AND sdr2_id = 'test-sdr-2'`,
+		id).Scan(&n)
+	if err != nil {
+		t.Fatalf("verification lookup: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("verification rows = %d, want 1", n)
+	}
+}

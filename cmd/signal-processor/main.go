@@ -38,6 +38,7 @@ import (
 	"sigint-workbench/internal/config"
 	"sigint-workbench/internal/db"
 	"sigint-workbench/internal/dsp"
+	"sigint-workbench/internal/location"
 	"sigint-workbench/internal/sdr"
 	"sigint-workbench/internal/ws"
 )
@@ -129,9 +130,13 @@ type publisher struct {
 
 	events chan ws.Event // async queue of events for ws-hub
 
+	tracker *location.PairTracker // §8 two-SDR verification
+
 	mu        sync.Mutex
 	seen      map[string]time.Time // last activity per published signal ID
 	firstSeen map[string]time.Time
+	verified  map[string]bool       // signal IDs already verified (§8 latch)
+	lastSig   map[string]*db.Signal // last published payload per signal ID
 }
 
 // newPublisher creates a publisher. db, wsHubURL and locations may be
@@ -155,6 +160,9 @@ func newPublisher(database *db.DB, wsHubURL string, locations map[string]sdrLoca
 		events:        make(chan ws.Event, 256),
 		seen:          make(map[string]time.Time),
 		firstSeen:     make(map[string]time.Time),
+		verified:      make(map[string]bool),
+		lastSig:       make(map[string]*db.Signal),
+		tracker:       location.NewPairTracker(location.NewVerifier()),
 	}
 	if wsHubURL != "" {
 		go p.runEventWorker()
@@ -261,6 +269,7 @@ func (p *publisher) publish(ev signalEvent, now time.Time) {
 	}
 	p.seen[id] = now
 	first := p.firstSeen[id]
+	alreadyVerified := p.verified[id] // §8: once verified, stays verified
 	p.mu.Unlock()
 
 	mod := ""
@@ -297,6 +306,7 @@ func (p *publisher) publish(ev signalEvent, now time.Time) {
 		FirstSeen:   first,
 		LastSeen:    now,
 		SDRID:       ev.SDRID,
+		Verified:    alreadyVerified,
 		Active:      true,
 	}
 
@@ -314,6 +324,68 @@ func (p *publisher) publish(ev signalEvent, now time.Time) {
 		typ = "signal.new"
 	}
 	p.queue(typ, sig)
+
+	// §8: remember the payload so a later verified pair can re-broadcast
+	// full fields, then run the two-SDR pair tracker on this observation.
+	p.mu.Lock()
+	p.lastSig[id] = sig
+	p.mu.Unlock()
+	for _, r := range p.tracker.Observe(location.Observation{
+		SDRID:    ev.SDRID,
+		SignalID: id,
+		FreqHz:   ev.PeakHz,
+		PowerDB:  ev.PowerDB,
+		At:       now,
+	}) {
+		p.verifyPair(r)
+	}
+}
+
+// verifyPair latches §8 verification on both rows of a verified
+// two-SDR pair and re-broadcasts full signal.update payloads so
+// clients flip their verified badges without a refresh. The first
+// verified pair wins the latch; later re-verifications are no-ops.
+func (p *publisher) verifyPair(r location.PairResult) {
+	for _, obs := range []location.Observation{r.A, r.B} {
+		p.mu.Lock()
+		if p.verified[obs.SignalID] {
+			p.mu.Unlock()
+			continue
+		}
+		p.verified[obs.SignalID] = true
+		var sig *db.Signal
+		if last, ok := p.lastSig[obs.SignalID]; ok {
+			cp := *last
+			cp.Verified = true
+			p.lastSig[obs.SignalID] = &cp
+			sig = &cp
+		}
+		p.mu.Unlock()
+
+		log.Printf("verified %s (%.4f MHz) via %s + %s (confidence %.2f)",
+			obs.SignalID, float64(obs.FreqHz)/1e6, r.A.SDRID, r.B.SDRID, r.Ver.Confidence)
+
+		if p.db != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			if err := p.db.MarkVerified(ctx, obs.SignalID); err != nil {
+				log.Printf("mark verified %s: %v", obs.SignalID, err)
+			}
+			ver := &db.Verification{
+				SignalID:   obs.SignalID,
+				SDR1:       r.A.SDRID,
+				SDR2:       r.B.SDRID,
+				Verified:   true,
+				Confidence: r.Ver.Confidence,
+			}
+			if err := p.db.InsertVerification(ctx, ver); err != nil {
+				log.Printf("insert verification %s: %v", obs.SignalID, err)
+			}
+			cancel()
+		}
+		if sig != nil {
+			p.queue("signal.update", sig)
+		}
+	}
 }
 
 // sweep retires signals that have been idle longer than the TTL,
@@ -335,6 +407,7 @@ func (p *publisher) sweep(ctx context.Context) {
 					removed = append(removed, id)
 					delete(p.seen, id)
 					delete(p.firstSeen, id)
+					delete(p.lastSig, id) // §8 latch (p.verified) is kept
 				}
 			}
 			p.mu.Unlock()

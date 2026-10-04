@@ -41,12 +41,23 @@ type Recording struct {
 
 // SDRDevice represents a registered SDR.
 type SDRDevice struct {
-	ID        string  `json:"id" db:"id"`
-	Model     string  `json:"model" db:"model"`
-	Serial    string  `json:"serial" db:"serial"`
-	Lat       float64 `json:"lat" db:"lat"`
-	Lon       float64 `json:"lon" db:"lon"`
-	GainDB    float64 `json:"gainDb" db:"gain_db"`
-	FreqHz    uint64  `json:"freqHz" db:"freq_hz"`
-	Active    bool    `json:"active" db:"active"`
+	ID     string  `json:"id" db:"id"`
+	Model  string  `json:"model" db:"model"`
+	Serial string  `json:"serial" db:"serial"`
+	Lat    float64 `json:"lat" db:"lat"`
+	Lon    float64 `json:"lon" db:"lon"`
+	GainDB float64 `json:"gainDb" db:"gain_db"`
+	FreqHz uint64  `json:"freqHz" db:"freq_hz"`
+	Active bool    `json:"active" db:"active"`
+}
+
+// Verification represents a two-SDR cross-check result (§8).
+type Verification struct {
+	ID         string    `json:"id" db:"id"`
+	SignalID   string    `json:"signalId" db:"signal_id"`
+	SDR1       string    `json:"sdr1" db:"sdr1_id"`
+	SDR2       string    `json:"sdr2" db:"sdr2_id"`
+	Verified   bool      `json:"verified" db:"verified"`
+	Confidence float64   `json:"confidence" db:"confidence"`
+	CreatedAt  time.Time `json:"createdAt" db:"created_at"`
 }

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"sigint-workbench/internal/classify"
+	"sigint-workbench/internal/db"
 	"sigint-workbench/internal/dsp"
 	"sigint-workbench/internal/sdr"
 	"sigint-workbench/internal/ws"
@@ -359,5 +360,99 @@ func TestProcessFrameClampsBelowZero(t *testing.T) {
 	}
 	if events[0].PeakHz != 0 {
 		t.Fatalf("PeakHz = %d, want 0 (clamped)", events[0].PeakHz)
+	}
+}
+
+func TestPublishVerifiesPair(t *testing.T) {
+	// §8: the same carrier seen by two SDRs inside the time window
+	// latches verified on both rows and re-broadcasts full updates.
+	hub := &fakeHub{}
+	srv := hub.serve()
+	defer srv.Close()
+
+	p := newPublisher(nil, srv.URL, map[string]sdrLocation{}, time.Minute)
+
+	now := time.Now()
+	evA := testEvent() // SDRID rtlsdr-0 @ 146.52 MHz
+	evB := testEvent()
+	evB.SDRID = "rtlsdr-1"
+	p.publish(evA, now)
+	p.publish(evB, now.Add(100*time.Millisecond))
+
+	idA := db.SignalID("rtlsdr-0", 146_520_000)
+	idB := db.SignalID("rtlsdr-1", 146_520_000)
+	p.mu.Lock()
+	va, vb := p.verified[idA], p.verified[idB]
+	p.mu.Unlock()
+	if !va || !vb {
+		t.Fatalf("pair not verified: idA=%v idB=%v", va, vb)
+	}
+
+	// signal.new ×2 from the publishes + signal.update ×2 from the
+	// verified pair.
+	if n := hub.waitCount(4); n < 4 {
+		t.Fatalf("expected ≥4 events, got %d", n)
+	}
+
+	// A re-observation keeps the latch: its payload is already verified
+	// and the pair tracker must not verify again.
+	p.publish(testEvent(), now.Add(300*time.Millisecond))
+	if n := hub.waitCount(5); n < 5 {
+		t.Fatalf("expected ≥5 events after re-observation, got %d", n)
+	}
+	time.Sleep(100 * time.Millisecond) // let any stray events land
+
+	hub.mu.Lock()
+	defer hub.mu.Unlock()
+	verifiedUpdates := 0
+	for _, ev := range hub.events {
+		if ev.Type != "signal.update" {
+			continue
+		}
+		var sig db.Signal
+		if err := json.Unmarshal(ev.Payload, &sig); err != nil {
+			t.Fatalf("unmarshal signal.update payload: %v", err)
+		}
+		if !sig.Verified {
+			continue
+		}
+		if sig.ID != idA && sig.ID != idB {
+			t.Errorf("verified update for unexpected id %s", sig.ID)
+			continue
+		}
+		verifiedUpdates++
+		if sig.FreqHz != 146_520_000 {
+			t.Errorf("verified payload freq = %d, want 146520000 (full payload required)", sig.FreqHz)
+		}
+	}
+	// Two from verifyPair + one from the latched re-observation.
+	if verifiedUpdates != 3 {
+		t.Fatalf("verified signal.update events = %d, want 3", verifiedUpdates)
+	}
+}
+
+func TestPublishNoVerifyOnFreqMismatch(t *testing.T) {
+	// §8.2: peaks more than 5 kHz apart are different signals and must
+	// never cross-verify.
+	hub := &fakeHub{}
+	srv := hub.serve()
+	defer srv.Close()
+
+	p := newPublisher(nil, srv.URL, map[string]sdrLocation{}, time.Minute)
+
+	now := time.Now()
+	evA := testEvent()
+	evB := testEvent()
+	evB.SDRID = "rtlsdr-1"
+	evB.PeakHz = 146_530_000 // 10 kHz away
+	p.publish(evA, now)
+	p.publish(evB, now.Add(100*time.Millisecond))
+
+	time.Sleep(150 * time.Millisecond)
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.verified) != 0 {
+		t.Errorf("unexpected verifications: %v", p.verified)
 	}
 }
