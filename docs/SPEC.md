@@ -970,12 +970,14 @@ live-DB migration test for the new columns.
 
 ## 10. Audio
 
-**Status: demodulators (incl. SSB), WAV encoder, and the streaming
-`WAVWriter` are `[implemented]`; in-band capture (D1) is
-`[implemented]` in `cmd/recorder` (§10.2); live Opus streaming (D1b,
-§10.3–§10.4) is `[implemented]` end to end — recorder-side per-signal
-mux + internal `:9012/ws/audio` server, relayed by the gateway's
-`GET /ws/audio` (§2.2).**
+**Status: demodulators (incl. SSB), the WAV encoder, and the
+streaming `WAVWriter` are `[implemented]`; in-band capture (D1) is
+`[implemented]` in `cmd/recorder` (§10.2, DB-poll tracked sessions);
+the live Opus transport (D1b, §10.4) is `[implemented]` recorder-side
+— per-signal mux + internal `:9012/ws/audio` server, relayed by the
+gateway's `GET /ws/audio` (§2.2) — while browser live playback is
+`[planned]` (§10.4, slice 7); the §10.6 `audio.level` feed is
+`[implemented]` end to end, frontend store included (Phase 4).**
 
 ### 10.1 Demodulator contract
 
@@ -1018,27 +1020,42 @@ falls back). The default registry maps `FM/NFM → 2.5 kHz demod`,
 The **default** audio path: `iq-ingest` fans its stream to the
 recorder (`:9011`) exactly like the processor. The recorder:
 
-1. reads frames (§4 protocol) and inspects the processor's signal
-   events (via `signal.new`/`signal.update` on `/ws`) to learn which
-   signals are demodulable,
-2. for each active signal, carves the in-band IQ from the shared
-   stream around the detected peak (baseband shift by the peak
-   offset),
+1. reads frames (§4 protocol) and refreshes an **active-signal
+   snapshot from the database every 5 s** (`GetSignals`) — it does
+   not subscribe to the hub; every tracked signal is a candidate,
+2. for each tracked signal inside the streamed band (frame center
+   ± sampleRate/2), carves the in-band IQ around the detected peak
+   (baseband shift by the peak offset; the mixer is
+   phase-continuous across frames so FM does not click at frame
+   boundaries),
 3. demodulates with the registry (§10.1),
 4. feeds the live Opus stream (§10.4) and the WAV writer (§10.5).
+
+**Session lifecycle** (per signal): a session opens on the first
+in-band frame of a tracked, registry-demodulable signal. It
+finalizes after `capture.close_silence_s` (default **10 s**) without
+a fed frame — which is also how a signal leaving the active set
+(TTL, §11.2) ends its recording, since the next poll simply stops
+feeding it. At `capture.max_concurrent` (default **8**) new signals
+are skipped until a session closes (strongest-first compaction is
+future work). Empty or damaged sessions are discarded — files
+removed, no `recordings` row.
 
 No SDR retuning ever happens for audio — the capture/scan behavior
 is completely unaffected.
 
 ### 10.3 Dedicated-tune monitor mode (D1b, optional)
 
-A device may be pinned to a frequency
-(`mode: monitor`, or `POST /api/v1/frequency` for `both` devices) to
-get a known-capture-frequency live audio channel — e.g. a fixed
-aviation or marine frequency. The in-band path works identically;
-the peak sits at DC and the baseband shift is trivial. At most the
-pinned channel streams audio; this mode is an operator convenience,
-not a pipeline change.
+A device may be pinned to a frequency (`mode: monitor` in
+`sdr-capture.yaml`, §16.2, or a manual retune — operator-facing via
+the gateway `PUT /api/sdrs/{id}`, §13.1, which forwards to capture's
+`POST /api/v1/frequency`, §7.4) to get a known-capture-frequency
+live audio channel — e.g. a fixed aviation or marine frequency. The
+in-band path works identically; the peak sits at DC and the baseband
+shift is trivial. At most the pinned channel streams audio; this
+mode is an operator convenience, not a pipeline change. A manual
+frequency command pauses that device's scan loop until restart
+(§7.4, documented operator behavior).
 
 ### 10.4 Live transport — Opus over WebSocket (D1b, normative)
 
@@ -1054,7 +1071,7 @@ not a pipeline change.
   1. On connect, the recorder sends exactly **one text (JSON)
      hello**:
      `{"type":"audio.meta","signalId":"<uuid>","centerHz":<n>,`
-     `"modulation":"<FM|AM|SSB>","subType":"<WFM|NFM|USB|LSB|>","sampleRate":48000,"channels":1,"bitrate":24000}`
+     `"modulation":"<FM|AM|SSB>","subType":"<WFM|NFM|USB|LSB>"`
   2. Then **binary messages only**: each binary WebSocket message is
      **exactly one Opus packet** (TOC byte + payload, per RFC 6716).
      No length prefix, no timestamp, no extra header.
@@ -1064,24 +1081,46 @@ not a pipeline change.
 - The gateway relay is transparent (frames pass through untouched);
   it performs no decoding.
 - One live stream per signal per client; the recorder multiplexes
-  per-signal encoder state.
+  per-signal encoder state. (`subType` in the hello is the signal's
+  stored value and **may be empty** — the §10.1 registry fallback
+  already resolved the demodulator.)
+- **Semantics (normative):** audio flows one way — client messages
+  are ignored (ping/pong keepalive only). With **no subscriber** on
+  a signal, its audio is **dropped, not buffered**: a new listener
+  hears from now on, never a backlog. Subscribe carries a **3 s
+  grace** (the session opens on the next in-band frame); no stream
+  by then ⇒ close code 1000 ("no live stream"). A missing or
+  non-UUID `signal` parameter ⇒ `400` before upgrade. Each write
+  has a **5 s deadline**, so a stuck client can never wedge the
+  packet pump.
+- **Build gate:** without the `opus` build tag (libopus) the
+  recorder skips the live server entirely; recording (§10.2/§10.5)
+  is unaffected.
+- **Client (honesty):** no browser consumer exists yet — the
+  dashboard plays **recordings** via
+  `GET /api/recordings/{id}/audio` (§13.1). Live browser Opus
+  playback is `[planned]` (slice 7).
 
 ### 10.5 Recorded files (D1)
 
-Per recording event the recorder writes, in parallel:
+Per recording session the recorder writes:
 
-- **WAV** (always): 16-bit PCM mono, 48 kHz —
+- **WAV** (`[implemented]`, always): 16-bit PCM mono, 48 kHz —
   `EncodeWAV` (RIFF, `fmt` chunk PCM/1ch/16-bit, `data` chunk,
   all little-endian).
-- **Raw IQ** (optional, `recording.raw_iq: true`):
-  `int16[2n]` interleaved I/Q, headerless, at the capture sample
-  rate.
+- **Raw IQ** (`[planned]`, slice 7): `int16[2n]` interleaved I/Q,
+  headerless, at the capture sample rate. The config surface exists
+  (`iq.enabled` / `iq.format`, §16.5) but no writer is implemented
+  yet; `recordings.file_format` (§12.3) keeps the `iq` value
+  reserved.
 
 **FLAC is not supported and MUST NOT be claimed** (the README's
 former "raw IQ + decoded audio (WAV/FLAC)" claim was removed in the
-README realignment). File names:
-`<signalId>-<unix-ts>.{wav,iq}` under
-`recordings/<sdrId>/<YYYY-MM-DD>/`.
+README realignment). File names are **flat under `recordings_dir`**:
+`<signalid8>-<yyyymmddThhmmss>.wav` — first 8 characters of the
+signal UUID + UTC timestamp, filesystem-safe and sortable. There are
+no per-SDR or per-date subdirectories; §11.3 retention scans this
+one directory.
 
 ### 10.6 Levels
 
@@ -1089,10 +1128,18 @@ Live level metering `[implemented]` (Phase 4): every actively
 demodulated signal (an open §10.2 session) runs the §5.7 AGC
 constants (target 0.95, attack 1, release 50) on its demodulated
 float32 stream; the post-AGC RMS — clamped to [0,1] — is published as
-a coarse (≤ 10 Hz) `audio.level` event, one per demodulated signal.
-The recorder publishes when `WS_HUB_URL` is set (§16.2); unset
-disables the feed. Signals that are not being demodulated emit
-nothing.
+a coarse `audio.level` event (100 ms ticker = 10 Hz cap), one per
+demodulated signal, POSTed to the hub's `/api/events` ingest. The
+recorder publishes when `WS_HUB_URL` is set (§16.1; hub errors are
+logged at most once per 30 s); unset disables the feed. Signals that
+are not being demodulated emit nothing.
+
+Frontend `[implemented]` (Phase 4): the `signalLevels` store consumes
+`audio.level` over the §14.4.2 socket (stale entries prune after
+1.5 s, matching the feed cadence) and drives the `VUMeter` in
+SignalDetail; recording playback streams the WAV via
+`GET /api/recordings/{id}/audio` (§13.1) with its own local
+AnalyserNode meter.
 
 ## 11. Recordings & Retention
 
@@ -1106,10 +1153,14 @@ archive purge and file retention are `[implemented]` (§11.3
 
 A recording starts when a **demodulable** signal appears
 (modulation ∈ {FM, AM, SSB} with a matching registry entry) and ends
-when the signal disappears (TTL, §11.2) or `recording.max_duration_s`
-(default **300 s**) is reached. Each recording writes a `recordings`
-row plus the files of §10.5. Multiple simultaneous signals record
-independently.
+when its §10.2 session finalizes — the `capture.close_silence_s`
+silence hysteresis, typically because the signal left the active set
+(TTL, §11.2). A max-duration cap is **`[planned]`** (slice 7): the
+config key exists (`iq.max_duration_s`, default **300 s**, §16.5) but
+is not enforced yet. Each recording writes a `recordings` row plus
+the files of §10.5 (empty sessions write nothing). Multiple
+simultaneous signals record independently, capped by
+`capture.max_concurrent` (§10.2).
 
 ### 11.2 Signal lifecycle (D6)
 
@@ -1348,10 +1399,12 @@ payload-by-`id` upsert on `new`/`update`, delete on `removed`.
 2. Frontend wiring — `[implemented]`: `+page.svelte` bootstraps via
    `$lib/api/client.ts` (`fetchSignals`, `fetchSDRs`), opens the
    event socket through the gateway relay, dispatches
-   `signal.new`/`signal.update`/`signal.removed` + `sdr.status`
-   into the stores, and re-bootstraps with exponential backoff after
-   every reconnect; `SignalList`/`MapView`/`SDRControl` render from
-   the stores.
+   `signal.new`/`signal.update`/`signal.removed` + `sdr.status` +
+   `audio.level` (§10.6 `signalLevels` store) into the stores, and
+   re-bootstraps with exponential backoff after every reconnect;
+   `SignalList`/`MapView`/`SDRControl` render from the stores, and
+   `SignalDetail` adds the VU meter + recorded-WAV playback (§10.4
+   client note; live Opus playback is slice 7).
 3. `sdr.status` producer — `[implemented]`: the processor observes
    every incoming frame per SDR (§4) and emits a **deduplicated**
    event when a device's effective state changes (first frame,
@@ -1753,7 +1806,7 @@ stores and the API client; `svelte-check` for types.
 | **1 — Correctness** | D4 negative offsets; A1 unlocated signals; §6.5 class enum; dead `/ws` hub removal; FLAC-claim cleanup (code + README); CORS/origin tightening — all **done** | new tests per §17.3 green; docs match behavior |
 | **2 — Features** | §15.3 RTL-SDR defect fixes; §10.1 real SSB + pair-aware registry; §11.2 active/TTL lifecycle; `sdr.status` producer (§14.4.3); `GET /ws` gateway relay (§2.2, A3); frontend data wiring (§14.4.2); YAML config loading + `min_confidence` enforcement (§16.1); **slices 1–3:** D3 scan loop + §7.4 control status; §8 dual-SDR verification with verified latch; recorder (D1 in-band WAV + §11.3 retention); first live `TEST_DATABASE_URL` integration run (§17.3); **slice 4:** Opus live streaming recorder side (D1b, §10.3–§10.4: per-signal mux + `/ws/audio` server + `Dockerfile.recorder`); **slice 5:** `/ws/audio` gateway relay (§2.2, §10.4); control-API proxy — `PUT /api/sdrs/{id}` retune forwarding + `GET /api/sdrs/{id}/status` (§7.4, §13.1, §13.2.3) — **all delivered** | §17.3 obligations green; dashboard live end-to-end |
 | **3 — Hardware & fidelity** | RTL-SDR on-hardware validation (§15.3 defect fixes delivered in Phase 2); HackRF driver (H1/H2) — **delivered, compile-validated** (§15.4); power calibration contract (§5.6) — **delivered** (contract + mechanism + honesty flag; measuring each SDR's physical offset → docs/HARDWARE.md runbook, slice 3); **slice 0:** multi-SDR sim enablement — `driver: simulator` accepted via YAML + two-device shared-ingest-port rehearsal (§16.1, §16.4) — **delivered**; `min_confidence` enforcement (§16.1) — **delivered in Phase 2**; **slice 3:** RTL-SDR on-hardware validation runbook + calibration tooling — docs/HARDWARE.md, cmd/rtl-list, cmd/rtl-calibrate (§15.3, §5.6) — **delivered and executed 2026-10-04** (V1–V8 pass, offsets applied); **fft fidelity:** §5.7 `fft.size`/`fft.window` wired end-to-end — signal-processor assembles 4096-pair records, rtl-calibrate `-fft-size`, ONNX inference reachable on the native bench (`make ort-lib`, `-tags onnx`) — **delivered 2026-10-04** (offsets recalibrated at the 4096 geometry per §6.3; §8 session 2) | 2 real SDRs verified end-to-end; calibration documented — **met 2026-10-04** (RTL-SDR half; HackRF deferred, no hardware) |
-| **4 — Deferred** | **in progress** — **slice 0:** D2 stub removal (`cmd/classifier`, `cmd/location-service`, compose entries; `Dockerfile.classifier` builds signal-processor only) — **delivered**; **slice 1:** annotations — `GET/POST /api/signals/{id}/annotations` + SignalDetail notes UI — **delivered**; **slice 2:** `audio.level` coarse feed recorder → hub → frontend — **delivered** (scope settled: one event per actively demodulated §10.2 session); **slice 3:** tracking — populate `tracks` from consecutive placements (§9.4, §12.4) — **delivered** (1 Hz persist + `track.update`, final row on TTL sweep, `GET /api/signals/{id}/track`, SignalDetail speed/heading, MapView polyline); **slice 4:** TDOA design — normative §9.5 + §4 frame v2 sample-accurate timing (design review gate) — **drafted, in review**; **slice 5:** TDOA engine — simulator first (injected offsets), then 3-SDR on-air fix — **spec drafted, in review**; **slice 6:** multi-host + NTP/PTP — remote capture hosts, sync-quality reporting (§16) | per-slice; slices 4–5: TDOA fix on a known on-air transmitter; slice 6: second capture host with NTP/PTP sync-quality reporting |
+| **4 — Deferred** | **in progress** — **slice 0:** D2 stub removal (`cmd/classifier`, `cmd/location-service`, compose entries; `Dockerfile.classifier` builds signal-processor only) — **delivered**; **slice 1:** annotations — `GET/POST /api/signals/{id}/annotations` + SignalDetail notes UI — **delivered**; **slice 2:** `audio.level` coarse feed recorder → hub → frontend — **delivered** (scope settled: one event per actively demodulated §10.2 session); **slice 3:** tracking — populate `tracks` from consecutive placements (§9.4, §12.4) — **delivered** (1 Hz persist + `track.update`, final row on TTL sweep, `GET /api/signals/{id}/track`, SignalDetail speed/heading, MapView polyline); **slice 4:** TDOA design — normative §9.5 + §4 frame v2 sample-accurate timing (design review gate) — **drafted, in review**; **slice 5:** TDOA engine — simulator first (injected offsets), then 3-SDR on-air fix — **spec drafted, in review**; **slice 6:** multi-host + NTP/PTP — remote capture hosts, sync-quality reporting (§16); **slice 7: audio parity — [planned]:** §10.5 raw-IQ writer (`iq.enabled`), §11.1 max-duration enforcement (`iq.max_duration_s`), §10.4 live browser Opus playback (dashboard consumes `/ws/audio`) | per-slice; slices 4–5: TDOA fix on a known on-air transmitter; slice 6: second capture host with NTP/PTP sync-quality reporting; slice 7: raw-IQ + duration-cap tests, live playback on the dashboard |
 
 ## Appendix A — Decision Register
 
