@@ -94,6 +94,7 @@ func (s *Server) buildRoutes() {
 	s.router.Get("/api/signals/{id}", s.handleGetSignal)
 	s.router.Get("/api/signals/{id}/annotations", s.handleGetAnnotations)
 	s.router.Post("/api/signals/{id}/annotations", s.handleAddAnnotation)
+	s.router.Get("/api/signals/{id}/track", s.handleGetSignalTrack)
 
 	// Recordings
 	s.router.Get("/api/recordings", s.handleGetRecordings)
@@ -253,6 +254,30 @@ func (s *Server) handleAddAnnotation(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusCreated)
 	writeJSON(w, a)
+}
+
+// handleGetSignalTrack returns a signal's current track (§9.4, §12.4):
+// path, speed and heading. Signals without a track answer 404.
+func (s *Server) handleGetSignalTrack(w http.ResponseWriter, r *http.Request) {
+	if !s.requireDB(w) {
+		return
+	}
+	id := chi.URLParam(r, "id")
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	track, err := s.db.GetTrack(ctx, id)
+	if err != nil {
+		if err == db.ErrNotFound {
+			http.Error(w, `{"error":"track not found"}`, http.StatusNotFound)
+			return
+		}
+		s.log.Error().Err(err).Str("id", id).Msg("get track")
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, track)
 }
 
 // handleGetRecordings returns recordings, optionally filtered by

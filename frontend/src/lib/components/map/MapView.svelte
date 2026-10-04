@@ -1,7 +1,9 @@
 <script lang="ts">
 	import maplibregl from 'maplibre-gl';
 	import { mapStyle } from '$lib/map/config';
-	import { signals } from '$lib/stores/signals';
+	import { selectedSignal, signals } from '$lib/stores/signals';
+	import { tracks } from '$lib/stores/tracks';
+	import { derived } from 'svelte/store';
 	import { onMount } from 'svelte';
 
 	let mapEl: HTMLDivElement;
@@ -82,6 +84,23 @@
 					'text-halo-width': 1
 				}
 			});
+
+			// Selected signal's track (§9.4)
+			map.addSource('signal-track', {
+				type: 'geojson',
+				data: { type: 'FeatureCollection', features: [] }
+			});
+			map.addLayer({
+				id: 'signal-track-line',
+				type: 'line',
+				source: 'signal-track',
+				layout: { 'line-cap': 'round', 'line-join': 'round' },
+				paint: {
+					'line-color': '#38bdf8',
+					'line-width': 3,
+					'line-opacity': 0.9
+				}
+			});
 		});
 
 		// Update markers when signals change
@@ -107,8 +126,35 @@
 			}
 		});
 
+		// Selected signal's track polyline (§9.4): drawn once a REST
+		// fetch has delivered a path with two or more fixes.
+		const trackData = derived([selectedSignal, tracks], ([$sel, $t]) => {
+			const empty = { type: 'FeatureCollection' as const, features: [] as unknown[] };
+			if (!$sel) return empty;
+			const tr = $t[$sel.id];
+			if (!tr || tr.path.length < 2) return empty;
+			return {
+				type: 'FeatureCollection' as const,
+				features: [
+					{
+						type: 'Feature' as const,
+						geometry: {
+							type: 'LineString' as const,
+							coordinates: tr.path.map((p) => [p.lon, p.lat])
+						},
+						properties: {}
+					}
+				]
+			};
+		});
+		const unsubTrack = trackData.subscribe((data) => {
+			const source = map.getSource('signal-track') as maplibregl.GeoJSONSource | undefined;
+			source?.setData(data as Parameters<maplibregl.GeoJSONSource['setData']>[0]);
+		});
+
 		return () => {
 			unsub();
+			unsubTrack();
 			map.remove();
 		};
 	});

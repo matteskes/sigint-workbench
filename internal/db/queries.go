@@ -4,6 +4,8 @@ package db
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -142,6 +144,92 @@ func (d *DB) AddAnnotation(ctx context.Context, signalID, note string) (*Annotat
 		return nil, fmt.Errorf("db: add annotation: %w", err)
 	}
 	return &a, nil
+}
+
+// UpsertTrack persists one signal's current track (§9.4, §12.4):
+// exactly one row per signal (UNIQUE(signal_id)), path = the given
+// fixes as a LINESTRING (NULL until two fixes exist), plus the latest
+// speed/heading. Callers should trim the path (the processor keeps
+// the last 200 fixes).
+func (d *DB) UpsertTrack(ctx context.Context, signalID string, path []TrackPoint, speedKmh, headingDeg float64) error {
+	wkt := ""
+	if len(path) >= 2 {
+		var b strings.Builder
+		b.WriteString("LINESTRING(")
+		for i, p := range path {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			fmt.Fprintf(&b, "%.7f %.7f", p.Lon, p.Lat)
+		}
+		b.WriteString(")")
+		wkt = b.String()
+	}
+	query := `
+		INSERT INTO tracks (signal_id, path, speed_kmh, heading, updated_at)
+		VALUES ($1,
+			CASE WHEN $2 = '' THEN NULL ELSE ST_SetSRID(ST_GeomFromText($2), 4326)::geography END,
+			$3, $4, now())
+		ON CONFLICT (signal_id) DO UPDATE SET
+			path = EXCLUDED.path,
+			speed_kmh = EXCLUDED.speed_kmh,
+			heading = EXCLUDED.heading,
+			updated_at = now()
+	`
+	if _, err := d.Pool.Exec(ctx, query, signalID, wkt, speedKmh, headingDeg); err != nil {
+		return fmt.Errorf("db: upsert track: %w", err)
+	}
+	return nil
+}
+
+// GetTrack returns a signal's current track row (§9.4) or
+// ErrNotFound when the signal has never had a track.
+func (d *DB) GetTrack(ctx context.Context, signalID string) (*TrackState, error) {
+	query := `
+		SELECT COALESCE(ST_AsText(path::geometry), ''), COALESCE(speed_kmh, 0),
+			COALESCE(heading, 0), updated_at
+		FROM tracks
+		WHERE signal_id = $1
+	`
+	var t TrackState
+	var wkt string
+	err := d.Pool.QueryRow(ctx, query, signalID).
+		Scan(&wkt, &t.SpeedKmh, &t.HeadingDeg, &t.UpdatedAt)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("db: get track: %w", err)
+	}
+	t.SignalID = signalID
+	t.Path = parseLineString(wkt)
+	return &t, nil
+}
+
+// parseLineString converts a PostGIS "LINESTRING(lon lat, ...)" text
+// back to path points; empty input (NULL path) yields nil.
+func parseLineString(wkt string) []TrackPoint {
+	wkt = strings.TrimSpace(wkt)
+	wkt = strings.TrimPrefix(wkt, "LINESTRING(")
+	wkt = strings.TrimSuffix(wkt, ")")
+	if wkt == "" || wkt == "EMPTY" {
+		return nil
+	}
+	parts := strings.Split(wkt, ",")
+	out := make([]TrackPoint, 0, len(parts))
+	for _, p := range parts {
+		fields := strings.Fields(strings.TrimSpace(p))
+		if len(fields) != 2 {
+			continue
+		}
+		lon, errLon := strconv.ParseFloat(fields[0], 64)
+		lat, errLat := strconv.ParseFloat(fields[1], 64)
+		if errLon != nil || errLat != nil {
+			continue
+		}
+		out = append(out, TrackPoint{Lat: lat, Lon: lon})
+	}
+	return out
 }
 
 // GetRecording returns a single recording by ID.

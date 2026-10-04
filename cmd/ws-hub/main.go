@@ -31,6 +31,7 @@ var eventTypes = map[string]bool{
 	"signal.removed": true,
 	"sdr.status":     true,
 	"audio.level":    true,
+	"track.update":   true,
 }
 
 // handleWS upgrades an HTTP connection to a WebSocket client.

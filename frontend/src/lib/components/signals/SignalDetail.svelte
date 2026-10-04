@@ -1,8 +1,9 @@
 <script lang="ts">
-	import { fetchAnnotations, addAnnotation } from '$lib/api/client';
+	import { fetchAnnotations, addAnnotation, fetchTrack } from '$lib/api/client';
 	import type { Annotation } from '$lib/api/client';
 	import type { Signal } from '$lib/stores/signals';
 	import { signalLevels } from '$lib/stores/audio';
+	import { tracks, setTrack } from '$lib/stores/tracks';
 	import AudioPlayer from '../audio/AudioPlayer.svelte';
 	import VUMeter from '../audio/VUMeter.svelte';
 
@@ -25,6 +26,22 @@
 			})
 			.catch(() => {
 				if (!cancelled) notes = [];
+			});
+		return () => {
+			cancelled = true;
+		};
+	});
+
+	$effect(() => {
+		const id = signal.id;
+		let cancelled = false;
+		// §9.4: fetch the persisted track (path + movement) per selection.
+		fetchTrack(id)
+			.then((t) => {
+				if (!cancelled) setTrack(t);
+			})
+			.catch(() => {
+				// No track for this signal — fine.
 			});
 		return () => {
 			cancelled = true;
@@ -150,6 +167,30 @@
 		<div>
 			<div class="text-xs text-slate-500">Level</div>
 			<VUMeter level={$signalLevels[signal.id].level} />
+		</div>
+	{/if}
+
+	<!-- Movement (§9.4 track — shown once the signal has fixes) -->
+	{#if $tracks[signal.id]}
+		<div class="grid grid-cols-3 gap-2">
+			<div>
+				<div class="text-xs text-slate-500">Speed</div>
+				<div class="text-sm font-mono">{$tracks[signal.id].speedKmh.toFixed(1)} km/h</div>
+			</div>
+			<div>
+				<div class="text-xs text-slate-500">Heading</div>
+				<div class="text-sm font-mono">{$tracks[signal.id].headingDeg.toFixed(0)}°</div>
+			</div>
+			<div>
+				<div class="text-xs text-slate-500">Status</div>
+				<span
+					class="text-xs px-2 py-0.5 rounded {$tracks[signal.id].isMoving
+						? 'bg-green-900/50 text-green-400'
+						: 'bg-slate-800 text-slate-400'}"
+				>
+					{$tracks[signal.id].isMoving ? 'Moving' : 'Static'}
+				</span>
+			</div>
 		</div>
 	{/if}
 

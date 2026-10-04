@@ -662,7 +662,8 @@ flag is stored per row, and both rows are updated on success.
 
 **Status: identity `[implemented]`; single-SDR placement
 `[implemented]`; unlocated-signal handling in §9.3 is `[implemented]`
-(A1); tracking is `[planned]`; TDOA multilateration is Phase 4.**
+(A1); tracking `[implemented]` (§9.4); TDOA multilateration is
+Phase 4.**
 
 ### 9.1 Signal ID — deterministic UUIDv5
 
@@ -716,13 +717,18 @@ flows through detect → classify → persist → publish → list.
 
 No silent drops anywhere in the pipeline.
 
-### 9.4 Tracking (planned)
+### 9.4 Tracking
 
-`Track` (implemented in `internal/location`, not yet driven):
-haversine distance between consecutive fixes,
-`speed = km/h`, `IsMoving` at **> 1 km/h**, heading from
-`atan2(dLon, dLat)`. The `tracks` table exists; population is Phase 4
-(§17.4).
+`[implemented]` (Phase 4). `Track` (`internal/location`) — haversine
+distance between consecutive fixes, `speed` in km/h, `IsMoving` at
+**> 1 km/h**, heading from `atan2(dLon, dLat)`. signal-processor
+appends every placement of a located signal to its in-memory track,
+persists one `tracks` row per signal (path = the last 200 fixes as a
+`LINESTRING`, `UNIQUE(signal_id)` upsert) at ≤ 1 Hz, writes a final
+row when the TTL sweep retires the signal (the row remains as
+history, §11.2), and emits a coarse `track.update` event (movement
+summary + last fix, ≤ 1 Hz, §14.2). REST: `GET /api/signals/{id}/track`
+returns the persisted path (§13.1).
 
 ## 10. Audio
 
@@ -952,9 +958,11 @@ DESC`.
 
 ### 12.4 `tracks`
 
-`id` UUID PK; `signal_id` → signals **ON DELETE CASCADE**; `path`
+`id` UUID PK; `signal_id` → signals **ON DELETE CASCADE**
+(`UNIQUE` — one current track per signal); `path`
 GEOGRAPHY(LINESTRING, 4326); `speed_kmh`; `heading`; `updated_at`.
-GIST on `path`. Populated in Phase 4 (§9.4).
+GIST on `path`. `[implemented]` — populated by signal-processor
+(Phase 4, §9.4).
 
 ### 12.5 `annotations`
 
@@ -1021,6 +1029,7 @@ General contract:
 | `GET /ws/audio` | `[implemented]` | Transparent relay to recorder `:9012/ws/audio?signal=<id>` (§10.4, Phase 2): one text `audio.meta` hello, then binary Opus packets pass untouched; recorder down ⇒ `502` JSON; foreign origins ⇒ `403` |
 | `GET /api/sdrs/{id}/status` | `[implemented]` | Proxy of capture control `GET /api/v1/status` filtered to the device (§7.4); capture down ⇒ `502`, unknown id ⇒ `404` |
 | `GET/POST /api/signals/{id}/annotations` | `[implemented]` | List a signal's user notes (newest first) / add one — POST body `{"userNote"}` ⇒ `201` + created row; unknown signal ⇒ `404`; blank or missing note ⇒ `400` (§12.5) |
+| `GET /api/signals/{id}/track` | `[implemented]` | Current track `{"signalId","path":[{lat,lon}…],"speedKmh","headingDeg","updatedAt"}`; no track ⇒ `404` (§9.4, §12.4) |
 
 ### 13.2 Gap fixes to existing endpoints
 
@@ -1072,6 +1081,7 @@ counted):
 | `signal.update` | full Signal object | throttled refresh (§5.8) incl. `verified` flips |
 | `signal.removed` | `{"id":"<uuid>"}` | TTL expiry (§11.2) — client removes from live list |
 | `sdr.status` | SDRDevice object (§12.1) | device active/frequency change |
+| `track.update` | `{"signalId","lat","lon","speedKmh","headingDeg","isMoving"}` | movement refresh, ≤ 1 Hz per located signal (§9.4) |
 | `audio.level` | `{"signalId":"<uuid>","level":<0..1>}` | coarse post-AGC RMS level, ≤ 10 Hz, one event per actively demodulated signal (§10.6) |
 
 Full-object payloads (not deltas) make clients stateless: apply
@@ -1505,7 +1515,7 @@ stores and the API client; `svelte-check` for types.
 | **1 — Correctness** | D4 negative offsets; A1 unlocated signals; §6.5 class enum; dead `/ws` hub removal; FLAC-claim cleanup (code + README); CORS/origin tightening — all **done** | new tests per §17.3 green; docs match behavior |
 | **2 — Features** | §15.3 RTL-SDR defect fixes; §10.1 real SSB + pair-aware registry; §11.2 active/TTL lifecycle; `sdr.status` producer (§14.4.3); `GET /ws` gateway relay (§2.2, A3); frontend data wiring (§14.4.2); YAML config loading + `min_confidence` enforcement (§16.1); **slices 1–3:** D3 scan loop + §7.4 control status; §8 dual-SDR verification with verified latch; recorder (D1 in-band WAV + §11.3 retention); first live `TEST_DATABASE_URL` integration run (§17.3); **slice 4:** Opus live streaming recorder side (D1b, §10.3–§10.4: per-signal mux + `/ws/audio` server + `Dockerfile.recorder`); **slice 5:** `/ws/audio` gateway relay (§2.2, §10.4); control-API proxy — `PUT /api/sdrs/{id}` retune forwarding + `GET /api/sdrs/{id}/status` (§7.4, §13.1, §13.2.3) — **all delivered** | §17.3 obligations green; dashboard live end-to-end |
 | **3 — Hardware & fidelity** | RTL-SDR on-hardware validation (§15.3 defect fixes delivered in Phase 2); HackRF driver (H1/H2) — **delivered, compile-validated** (§15.4); power calibration contract (§5.6) — **delivered** (contract + mechanism + honesty flag; measuring each SDR's physical offset → docs/HARDWARE.md runbook, slice 3); **slice 0:** multi-SDR sim enablement — `driver: simulator` accepted via YAML + two-device shared-ingest-port rehearsal (§16.1, §16.4) — **delivered**; `min_confidence` enforcement (§16.1) — **delivered in Phase 2**; **slice 3:** RTL-SDR on-hardware validation runbook + calibration tooling — docs/HARDWARE.md, cmd/rtl-list, cmd/rtl-calibrate (§15.3, §5.6) — **delivered and executed 2026-10-04** (V1–V8 pass, offsets applied); **fft fidelity:** §5.7 `fft.size`/`fft.window` wired end-to-end — signal-processor assembles 4096-pair records, rtl-calibrate `-fft-size`, ONNX inference reachable on the native bench (`make ort-lib`, `-tags onnx`) — **delivered 2026-10-04** (offsets recalibrated at the 4096 geometry per §6.3; §8 session 2) | 2 real SDRs verified end-to-end; calibration documented — **met 2026-10-04** (RTL-SDR half; HackRF deferred, no hardware) |
-| **4 — Deferred** | **in progress** — **slice 0:** D2 stub removal (`cmd/classifier`, `cmd/location-service`, compose entries; `Dockerfile.classifier` builds signal-processor only) — **delivered**; **slice 1:** annotations — `GET/POST /api/signals/{id}/annotations` + SignalDetail notes UI — **delivered**; **slice 2:** `audio.level` coarse feed recorder → hub → frontend — **delivered** (scope settled: one event per actively demodulated §10.2 session); **slice 3:** tracking — populate `tracks` from consecutive placements (§9.4, §12.4); **slice 4:** TDOA design — normative §9.5 + §4 frame v2 sample-accurate timing (design review gate); **slice 5:** TDOA engine — simulator first (injected offsets), then 3-SDR on-air fix; **slice 6:** multi-host + NTP/PTP — remote capture hosts, sync-quality reporting (§16) | per-slice; slices 4–5: TDOA fix on a known on-air transmitter; slice 6: second capture host with NTP/PTP sync-quality reporting |
+| **4 — Deferred** | **in progress** — **slice 0:** D2 stub removal (`cmd/classifier`, `cmd/location-service`, compose entries; `Dockerfile.classifier` builds signal-processor only) — **delivered**; **slice 1:** annotations — `GET/POST /api/signals/{id}/annotations` + SignalDetail notes UI — **delivered**; **slice 2:** `audio.level` coarse feed recorder → hub → frontend — **delivered** (scope settled: one event per actively demodulated §10.2 session); **slice 3:** tracking — populate `tracks` from consecutive placements (§9.4, §12.4) — **delivered** (1 Hz persist + `track.update`, final row on TTL sweep, `GET /api/signals/{id}/track`, SignalDetail speed/heading, MapView polyline); **slice 4:** TDOA design — normative §9.5 + §4 frame v2 sample-accurate timing (design review gate); **slice 5:** TDOA engine — simulator first (injected offsets), then 3-SDR on-air fix; **slice 6:** multi-host + NTP/PTP — remote capture hosts, sync-quality reporting (§16) | per-slice; slices 4–5: TDOA fix on a known on-air transmitter; slice 6: second capture host with NTP/PTP sync-quality reporting |
 
 ## Appendix A — Decision Register
 

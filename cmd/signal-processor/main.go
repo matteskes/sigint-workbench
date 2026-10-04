@@ -149,6 +149,8 @@ type publisher struct {
 	firstSeen map[string]time.Time
 	verified  map[string]bool       // signal IDs already verified (§8 latch)
 	lastSig   map[string]*db.Signal // last published payload per signal ID
+	tracks    map[string]*location.Track // §9.4 movement per signal ID
+	trackWrite map[string]time.Time     // last track persist/event per signal ID
 }
 
 // newPublisher creates a publisher. db, wsHubURL and locations may be
@@ -174,6 +176,8 @@ func newPublisher(database *db.DB, wsHubURL string, locations map[string]sdrLoca
 		firstSeen:     make(map[string]time.Time),
 		verified:      make(map[string]bool),
 		lastSig:       make(map[string]*db.Signal),
+		tracks:        make(map[string]*location.Track),
+		trackWrite:    make(map[string]time.Time),
 		tracker:       location.NewPairTracker(location.NewVerifier()),
 	}
 	if wsHubURL != "" {
@@ -432,6 +436,86 @@ func (p *publisher) publish(ev signalEvent, now time.Time) {
 	}) {
 		p.verifyPair(r)
 	}
+
+	// §9.4: consecutive placements of a located signal feed its
+	// movement track (haversine speed, IsMoving > 1 km/h, heading
+	// atan2(dLon, dLat) — location.Track). Persistence and the
+	// track.update event are throttled to one per second per signal.
+	if loc != nil {
+		p.mu.Lock()
+		tr, ok := p.tracks[id]
+		if !ok {
+			tr = location.NewTrack(id)
+			p.tracks[id] = tr
+		}
+		tr.AddLocation(location.SignalLocation{
+			Lat:       loc.Lat,
+			Lon:       loc.Lon,
+			Method:    "sdr_position",
+			Timestamp: now,
+		})
+		notify := now.Sub(p.trackWrite[id]) >= time.Second
+		if notify {
+			p.trackWrite[id] = now
+		}
+		snapshot := trackSnapshot(tr)
+		p.mu.Unlock()
+
+		if notify {
+			p.persistTrack(tr)
+			p.queue("track.update", snapshot)
+		}
+	}
+}
+
+// trackUpdate is the track.update event payload (§14.2): the latest
+// movement summary plus last fix.
+type trackUpdate struct {
+	SignalID   string  `json:"signalId"`
+	Lat        float64 `json:"lat"`
+	Lon        float64 `json:"lon"`
+	SpeedKmh   float64 `json:"speedKmh"`
+	HeadingDeg float64 `json:"headingDeg"`
+	IsMoving   bool    `json:"isMoving"`
+}
+
+// trackSnapshot copies a track's movement state for event emission
+// (the underlying location.Track keeps mutating in place).
+func trackSnapshot(tr *location.Track) trackUpdate {
+	snap := trackUpdate{
+		SignalID:   tr.SignalID,
+		SpeedKmh:   tr.SpeedKmh,
+		HeadingDeg: tr.HeadingDeg,
+		IsMoving:   tr.IsMoving,
+	}
+	if n := len(tr.Locations); n > 0 {
+		snap.Lat = tr.Locations[n-1].Lat
+		snap.Lon = tr.Locations[n-1].Lon
+	}
+	return snap
+}
+
+// persistTrack writes the current track row (§12.4): one row per
+// signal, path = the last 200 fixes as a LINESTRING. Best effort —
+// tracking failures must never break the pipeline.
+func (p *publisher) persistTrack(tr *location.Track) {
+	if p.db == nil || len(tr.Locations) == 0 {
+		return
+	}
+	const maxTrackPoints = 200
+	pts := tr.Locations
+	if len(pts) > maxTrackPoints {
+		pts = pts[len(pts)-maxTrackPoints:]
+	}
+	path := make([]db.TrackPoint, len(pts))
+	for i, l := range pts {
+		path[i] = db.TrackPoint{Lat: l.Lat, Lon: l.Lon}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := p.db.UpsertTrack(ctx, tr.SignalID, path, tr.SpeedKmh, tr.HeadingDeg); err != nil {
+		log.Printf("upsert track %s: %v", tr.SignalID, err)
+	}
 }
 
 // verifyPair latches §8 verification on both rows of a verified
@@ -512,6 +596,17 @@ func (p *publisher) sweep(ctx context.Context) {
 						log.Printf("deactivate signal %s: %v", id, err)
 					}
 					cancel()
+				}
+				// §9.4: close the track — one final row write, then
+				// drop the in-memory state; the row remains as
+				// history (§11.2 keeps inactive signal rows too).
+				p.mu.Lock()
+				tr, hadTrack := p.tracks[id]
+				delete(p.tracks, id)
+				delete(p.trackWrite, id)
+				p.mu.Unlock()
+				if hadTrack {
+					p.persistTrack(tr)
 				}
 				p.queue("signal.removed", map[string]string{"id": id})
 			}

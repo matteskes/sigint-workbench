@@ -96,11 +96,23 @@ func TestPublishNewThenUpdate(t *testing.T) {
 	}
 	hub.mu.Lock()
 	defer hub.mu.Unlock()
-	if hub.events[0].Type != "signal.new" {
-		t.Fatalf("first event type = %q, want signal.new", hub.events[0].Type)
+	// §9.4 adds interleaved track.update events; find the first
+	// signal.new and the first signal.update and assert their order.
+	newIdx, updIdx := -1, -1
+	for i, ev := range hub.events {
+		switch ev.Type {
+		case "signal.new":
+			if newIdx == -1 {
+				newIdx = i
+			}
+		case "signal.update":
+			if updIdx == -1 {
+				updIdx = i
+			}
+		}
 	}
-	if hub.events[1].Type != "signal.update" {
-		t.Fatalf("second event type = %q, want signal.update", hub.events[1].Type)
+	if newIdx == -1 || updIdx == -1 || newIdx > updIdx {
+		t.Fatalf("want signal.new before signal.update, events = %+v", hub.events)
 	}
 	var sig struct {
 		ID    string  `json:"id"`
@@ -110,7 +122,7 @@ func TestPublishNewThenUpdate(t *testing.T) {
 		Lat   float64 `json:"lat"`
 		SDRID string  `json:"sdrId"`
 	}
-	if err := json.Unmarshal(hub.events[0].Payload, &sig); err != nil {
+	if err := json.Unmarshal(hub.events[newIdx].Payload, &sig); err != nil {
 		t.Fatalf("unmarshal payload: %v", err)
 	}
 	if sig.Freq != 146_520_000 || sig.Mod != "am" || sig.SDRID != "rtlsdr-0" {
@@ -153,6 +165,63 @@ func TestPublishUnlocatedSDREmits(t *testing.T) {
 	}
 	if sig.SDRID != "rtlsdr-0" {
 		t.Fatalf("sdrId = %q, want rtlsdr-0", sig.SDRID)
+	}
+}
+
+// TestPublishTracksMovement is the §9.4 two-point fixture: the
+// "simulator" receiver relocates ~111 m north between two publishes;
+// the track must report ≈ 11 km/h (moving) heading ≈ 0° (north) and
+// emit a track.update event.
+func TestPublishTracksMovement(t *testing.T) {
+	hub := &fakeHub{}
+	srv := hub.serve()
+	defer srv.Close()
+
+	locs := map[string]sdrLocation{"rtlsdr-0": {Lat: 40.0, Lon: -74.0}}
+	p := newPublisher(nil, srv.URL, locs, time.Minute)
+
+	now := time.Now()
+	p.publish(testEvent(), now)
+
+	// Move the receiver: +0.001° latitude ≈ 111 m north.
+	p.mu.Lock()
+	p.locations["rtlsdr-0"] = sdrLocation{Lat: 40.001, Lon: -74.0}
+	p.mu.Unlock()
+	p.publish(testEvent(), now.Add(36*time.Second))
+
+	// 2 signal events + 2 track.update events (1 Hz throttle passes
+	// for both publishes because they are 36 s apart).
+	if n := hub.waitCount(4); n < 4 {
+		t.Fatalf("expected >= 4 events (2 signal + 2 track), got %d", n)
+	}
+
+	hub.mu.Lock()
+	defer hub.mu.Unlock()
+	var last trackUpdate
+	found := false
+	for _, ev := range hub.events {
+		if ev.Type != "track.update" {
+			continue
+		}
+		found = true
+		if err := json.Unmarshal(ev.Payload, &last); err != nil {
+			t.Fatalf("unmarshal track.update: %v", err)
+		}
+	}
+	if !found {
+		t.Fatalf("no track.update among %d events", len(hub.events))
+	}
+	if !last.IsMoving {
+		t.Fatalf("isMoving = false, want true (payload %+v)", last)
+	}
+	if last.SpeedKmh < 10 || last.SpeedKmh > 12.5 {
+		t.Fatalf("speedKmh = %v, want ~11.1 (111 m over 36 s)", last.SpeedKmh)
+	}
+	if last.HeadingDeg > 5 && last.HeadingDeg < 355 {
+		t.Fatalf("headingDeg = %v, want ~0 (north)", last.HeadingDeg)
+	}
+	if last.Lat != 40.001 {
+		t.Fatalf("lat = %v, want last fix 40.001", last.Lat)
 	}
 }
 

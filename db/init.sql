@@ -67,7 +67,7 @@ CREATE INDEX IF NOT EXISTS idx_recordings_start ON recordings(start_time DESC);
 -- ─── Signal Tracks (movement over time) ───
 CREATE TABLE IF NOT EXISTS tracks (
     id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    signal_id   UUID REFERENCES signals(id) ON DELETE CASCADE,
+    signal_id   UUID UNIQUE REFERENCES signals(id) ON DELETE CASCADE,
     path        GEOGRAPHY(LINESTRING, 4326),
     speed_kmh   REAL,
     heading     REAL,

@@ -8,6 +8,7 @@
 	import { selectedSignal, signals, upsertSignal, removeSignal, type Signal } from '$lib/stores/signals';
 	import { sdrs, applySDRStatus, type SDRStatus } from '$lib/stores/sdrs';
 	import { applyAudioLevel, pruneSignalLevels, clearSignalLevel } from '$lib/stores/audio';
+	import { applyTrackUpdate, clearTrack } from '$lib/stores/tracks';
 	import { fetchSignals, fetchSDRs, connectWebSocket, type WSEvent } from '$lib/api/client';
 
 	// Full (re)sync from the REST API — on boot and after every
@@ -32,6 +33,7 @@
 				if (ev.payload?.id) {
 					removeSignal(ev.payload.id);
 					clearSignalLevel(ev.payload.id);
+					clearTrack(ev.payload.id);
 				}
 				break;
 			case 'sdr.status':
@@ -40,6 +42,10 @@
 			case 'audio.level':
 				// §10.6: coarse level per actively demodulated signal.
 				if (ev.payload?.signalId) applyAudioLevel(ev.payload.signalId, ev.payload.level ?? 0);
+				break;
+			case 'track.update':
+				// §9.4: movement summary per located signal.
+				if (ev.payload?.signalId) applyTrackUpdate(ev.payload);
 				break;
 		}
 	}

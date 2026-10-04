@@ -12,6 +12,7 @@ package db
 
 import (
 	"context"
+	"math"
 	"os"
 	"testing"
 	"time"
@@ -112,6 +113,65 @@ func TestIntegrationAnnotations(t *testing.T) {
 	}
 	if len(empty) != 0 {
 		t.Fatalf("want 0 annotations, got %d", len(empty))
+	}
+}
+
+// TestIntegrationTracks covers the §9.4/§12.4 track queries:
+// LINESTRING round-trip, upsert-on-conflict, NULL path for a single
+// fix, and ErrNotFound for trackless signals.
+func TestIntegrationTracks(t *testing.T) {
+	d := integrationPool(t)
+	ctx := context.Background()
+	id := "33333333-3333-3333-3333-333333333333"
+
+	if err := d.UpsertSignal(ctx, integrationSignal(id, "rules")); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	path := []TrackPoint{{Lat: 40.0, Lon: -74.0}, {Lat: 40.001, Lon: -74.0}}
+	if err := d.UpsertTrack(ctx, id, path, 11.1, 0); err != nil {
+		t.Fatalf("upsert track: %v", err)
+	}
+
+	got, err := d.GetTrack(ctx, id)
+	if err != nil {
+		t.Fatalf("get track: %v", err)
+	}
+	if len(got.Path) != 2 || got.Path[0].Lat != 40.0 || got.Path[1].Lat != 40.001 {
+		t.Fatalf("path = %+v, want the two fixes in order", got.Path)
+	}
+	if math.Abs(got.SpeedKmh-11.1) > 0.01 || math.Abs(got.HeadingDeg) > 0.01 {
+		t.Fatalf("speed/heading = %v/%v, want 11.1/0", got.SpeedKmh, got.HeadingDeg)
+	}
+
+	// ON CONFLICT: a second write replaces path and movement state.
+	path2 := append(path, TrackPoint{Lat: 40.002, Lon: -74.0})
+	if err := d.UpsertTrack(ctx, id, path2, 22.2, 45); err != nil {
+		t.Fatalf("upsert track 2: %v", err)
+	}
+	got2, err := d.GetTrack(ctx, id)
+	if err != nil {
+		t.Fatalf("get track 2: %v", err)
+	}
+	if len(got2.Path) != 3 || math.Abs(got2.SpeedKmh-22.2) > 0.01 || math.Abs(got2.HeadingDeg-45) > 0.01 {
+		t.Fatalf("after conflict-write: %+v", got2)
+	}
+
+	// A single fix has no LINESTRING yet — the path decodes empty.
+	if err := d.UpsertTrack(ctx, id, path2[:1], 0, 0); err != nil {
+		t.Fatalf("upsert single-fix track: %v", err)
+	}
+	got3, err := d.GetTrack(ctx, id)
+	if err != nil {
+		t.Fatalf("get single-fix track: %v", err)
+	}
+	if len(got3.Path) != 0 {
+		t.Fatalf("single-fix path = %+v, want empty", got3.Path)
+	}
+
+	// A signal without a track → ErrNotFound.
+	if _, err := d.GetTrack(ctx, "77777777-7777-7777-7777-777777777777"); err != ErrNotFound {
+		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
 }
 

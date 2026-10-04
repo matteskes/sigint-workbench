@@ -43,7 +43,13 @@ export interface BBox {
 	maxLon: number;
 }
 
-export type WSEventType = 'signal.new' | 'signal.update' | 'signal.removed' | 'sdr.status' | 'audio.level';
+export type WSEventType =
+	| 'signal.new'
+	| 'signal.update'
+	| 'signal.removed'
+	| 'sdr.status'
+	| 'audio.level'
+	| 'track.update';
 
 export interface WSEvent {
 	type: WSEventType;
@@ -132,6 +138,27 @@ export async function addAnnotation(signalId: string, userNote: string): Promise
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify({ userNote })
 	});
+	if (!res.ok) throw new Error(`API error: ${res.status}`);
+	return res.json();
+}
+
+export interface TrackPoint {
+	lat: number;
+	lon: number;
+}
+
+/** Persisted track: GET /api/signals/{id}/track (§9.4, §12.4). */
+export interface SignalTrack {
+	signalId: string;
+	path: TrackPoint[];
+	speedKmh: number;
+	headingDeg: number;
+	updatedAt: string;
+}
+
+/** Fetches a signal's current track (path + movement state). */
+export async function fetchTrack(signalId: string): Promise<SignalTrack> {
+	const res = await fetch(`${API_URL}/api/signals/${signalId}/track`);
 	if (!res.ok) throw new Error(`API error: ${res.status}`);
 	return res.json();
 }

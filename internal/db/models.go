@@ -73,3 +73,19 @@ type Annotation struct {
 	UserNote  string    `json:"userNote" db:"user_note"`
 	CreatedAt time.Time `json:"createdAt" db:"created_at"`
 }
+
+// TrackPoint is one geographic fix of a track path (§12.4).
+type TrackPoint struct {
+	Lat float64 `json:"lat"`
+	Lon float64 `json:"lon"`
+}
+
+// TrackState is a signal's current movement state (§9.4): the path
+// (persisted as a LINESTRING), plus haversine speed and heading.
+type TrackState struct {
+	SignalID   string       `json:"signalId"`
+	Path       []TrackPoint `json:"path"`
+	SpeedKmh   float64      `json:"speedKmh"`
+	HeadingDeg float64      `json:"headingDeg"`
+	UpdatedAt  time.Time    `json:"updatedAt"`
+}
