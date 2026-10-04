@@ -1021,9 +1021,14 @@ payload-by-`id` upsert on `new`/`update`, delete on `removed`.
    `$lib/api/client.ts` (`fetchSignals`, `fetchSDRs`) and open the
    event socket; `SignalList`/`MapView`/`SDRControl` render from the
    stores. Until then the dashboard shows only empty panels.
-3. `sdr.status` producer: `sdr-capture` (or the processor on
-   per-frame observation) MUST emit it when a device's active state
-   or frequency changes — currently never emitted.
+3. `sdr.status` producer — `[implemented]`: the processor observes
+   every incoming frame per SDR (§4) and emits a **deduplicated**
+   event when a device's effective state changes (first frame,
+   retune, reactivation; ≥1 s spacing between repeats), and the
+   sweeper flags SDRs silent for more than `SIGNAL_TTL`/2 (clamped
+   5–30 s) `active = false` in `sdrs` with a matching deactivation
+   event. Payloads carry the §12.1 SDRDevice fields plus `bwHz`
+   from the capture config.
 
 ## 15. Hardware
 

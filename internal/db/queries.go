@@ -242,6 +242,17 @@ func (d *DB) UpdateSDR(ctx context.Context, s *SDRDevice) error {
 	return nil
 }
 
+// SetSDRActive flags one SDR active/inactive (§14.4.3): the
+// processor marks configured SDRs inactive after a silence threshold
+// and re-activates them when frames return.
+func (d *DB) SetSDRActive(ctx context.Context, id string, active bool) error {
+	_, err := d.Pool.Exec(ctx, `UPDATE sdrs SET active = $2 WHERE id = $1`, id, active)
+	if err != nil {
+		return fmt.Errorf("db: set sdr active: %w", err)
+	}
+	return nil
+}
+
 // DeleteSignal removes a signal by ID. The sweep path does NOT use
 // this (it deactivates, §11.2); deletion is reserved for the
 // §11.2 archive purge.

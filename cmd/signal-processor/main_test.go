@@ -15,6 +15,7 @@ import (
 
 	"sigint-workbench/internal/classify"
 	"sigint-workbench/internal/dsp"
+	"sigint-workbench/internal/sdr"
 	"sigint-workbench/internal/ws"
 )
 
@@ -184,6 +185,99 @@ func TestSweepEmitsRemoved(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 	t.Fatal("expected signal.removed event after TTL expiry")
+}
+
+func TestObserveFrameEmitsSDRStatus(t *testing.T) {
+	hub := &fakeHub{}
+	srv := hub.serve()
+	defer srv.Close()
+
+	p := newPublisher(nil, srv.URL, map[string]sdrLocation{}, time.Minute)
+	now := time.Now()
+	p.observeFrame("rtlsdr-0", 146_520_000, now)
+	if n := hub.waitCount(1); n < 1 {
+		t.Fatal("expected a sdr.status event on first frame")
+	}
+
+	// Same frequency again → deduped, no new event.
+	p.observeFrame("rtlsdr-0", 146_520_000, now.Add(100*time.Millisecond))
+	if n := hub.waitCount(1); n != 1 {
+		t.Fatalf("expected dedupe (1 event), got %d", n)
+	}
+
+	// Retune → new event with the new frequency.
+	p.observeFrame("rtlsdr-0", 121_500_000, now.Add(2*time.Second))
+	if n := hub.waitCount(2); n < 2 {
+		t.Fatalf("expected status event after retune, got %d", n)
+	}
+	hub.mu.Lock()
+	defer hub.mu.Unlock()
+	last := hub.events[len(hub.events)-1]
+	if last.Type != "sdr.status" {
+		t.Fatalf("type = %q, want sdr.status", last.Type)
+	}
+	var st struct {
+		ID     string `json:"id"`
+		Model  string `json:"model"`
+		FreqHz uint64 `json:"freqHz"`
+		Active bool   `json:"active"`
+	}
+	if err := json.Unmarshal(last.Payload, &st); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if st.ID != "rtlsdr-0" || st.FreqHz != 121_500_000 || !st.Active {
+		t.Fatalf("unexpected sdr.status payload: %+v", st)
+	}
+}
+
+func TestSDRSilenceDeactivates(t *testing.T) {
+	hub := &fakeHub{}
+	srv := hub.serve()
+	defer srv.Close()
+
+	p := newPublisher(nil, srv.URL, map[string]sdrLocation{}, 2*time.Second)
+	p.initSDRs([]sdr.SDRCaptureConfig{{
+		ID: "rtlsdr-0", Driver: "rtlsdr",
+		DefaultFreq: 146_520_000, DefaultGain: 40, DefaultBW: 2_400_000,
+	}})
+	now := time.Now()
+	p.observeFrame("rtlsdr-0", 146_520_000, now)
+	if n := hub.waitCount(1); n < 1 {
+		t.Fatal("expected initial sdr.status")
+	}
+
+	// Simulate silence far past the threshold (ttl/2, clamped ≥5s).
+	p.mu.Lock()
+	p.sdrs["rtlsdr-0"].lastFrame = now.Add(-time.Hour)
+	p.mu.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go p.sweep(ctx)
+
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		hub.mu.Lock()
+		deactivated := false
+		for _, ev := range hub.events {
+			if ev.Type != "sdr.status" {
+				continue
+			}
+			var st struct {
+				ID     string `json:"id"`
+				Active bool   `json:"active"`
+			}
+			if json.Unmarshal(ev.Payload, &st) == nil && st.ID == "rtlsdr-0" && !st.Active {
+				deactivated = true
+			}
+		}
+		hub.mu.Unlock()
+		if deactivated {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatal("expected sdr.status deactivation after silence")
 }
 
 func TestQueueDropWhenFull(t *testing.T) {

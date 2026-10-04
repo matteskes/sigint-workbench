@@ -43,21 +43,75 @@ import (
 
 // signalEvent is a classified signal detected in the spectrum.
 type signalEvent struct {
-	SDRID      string             `json:"sdr_id"`
-	Timestamp  time.Time          `json:"timestamp"`
-	CenterHz   uint64             `json:"center_hz"`
-	PeakHz     uint64             `json:"peak_hz"`
-	OffsetHz   float64            `json:"offset_hz"`
-	PowerDB    float64            `json:"power_db"`
-	Bandwidth  float64            `json:"bandwidth_hz"`
-	BandName   string             `json:"band_name"`
-	Class      *classify.Result   `json:"class"`
+	SDRID     string           `json:"sdr_id"`
+	Timestamp time.Time        `json:"timestamp"`
+	CenterHz  uint64           `json:"center_hz"`
+	PeakHz    uint64           `json:"peak_hz"`
+	OffsetHz  float64          `json:"offset_hz"`
+	PowerDB   float64          `json:"power_db"`
+	Bandwidth float64          `json:"bandwidth_hz"`
+	BandName  string           `json:"band_name"`
+	Class     *classify.Result `json:"class"`
 }
 
 // sdrLocation is a receiver's physical location.
 type sdrLocation struct {
 	Lat float64
 	Lon float64
+}
+
+// sdrState tracks one known SDR for sdr.status emission (§14.4.3).
+type sdrState struct {
+	configured bool // seeded from the sdr-capture config
+	model      string
+	serial     string
+	gainDB     float64
+	bwHz       uint32
+	lat, lon   *float64
+	freqHz     uint64
+	active     bool
+	lastFrame  time.Time
+	emittedAt  time.Time
+}
+
+// statusEvent builds the sdr.status payload: the §12.1 SDRDevice
+// fields plus bwHz, camelCase per §12.7.
+func (s *sdrState) statusEvent(id string) sdrStatusEvent {
+	return sdrStatusEvent{
+		ID:     id,
+		Model:  s.model,
+		FreqHz: s.freqHz,
+		GainDB: s.gainDB,
+		BWHz:   s.bwHz,
+		Active: s.active,
+		Lat:    s.lat,
+		Lon:    s.lon,
+	}
+}
+
+// sdrStatusEvent is the sdr.status payload (§3.2/§14.4.3).
+type sdrStatusEvent struct {
+	ID     string   `json:"id"`
+	Model  string   `json:"model"`
+	FreqHz uint64   `json:"freqHz"`
+	GainDB float64  `json:"gainDb"`
+	BWHz   uint32   `json:"bwHz"`
+	Active bool     `json:"active"`
+	Lat    *float64 `json:"lat,omitempty"`
+	Lon    *float64 `json:"lon,omitempty"`
+}
+
+// driverModel maps a capture-config driver to a display model name.
+func driverModel(driver string) string {
+	switch driver {
+	case "rtlsdr":
+		return "RTL2832U"
+	case "hackrf":
+		return "HackRF One"
+	case "simulator":
+		return "Simulator"
+	}
+	return driver
 }
 
 // publisher persists detected signals to the database and emits
@@ -69,6 +123,9 @@ type publisher struct {
 	locations map[string]sdrLocation
 	ttl       time.Duration
 
+	sdrSilenceTTL time.Duration        // SDR idle threshold (§14.4.3)
+	sdrs          map[string]*sdrState // known SDRs → status state
+
 	events chan ws.Event // async queue of events for ws-hub
 
 	mu        sync.Mutex
@@ -79,20 +136,107 @@ type publisher struct {
 // newPublisher creates a publisher. db, wsHubURL and locations may be
 // nil/empty — the publisher degrades gracefully to log-only mode.
 func newPublisher(database *db.DB, wsHubURL string, locations map[string]sdrLocation, ttl time.Duration) *publisher {
+	silence := ttl / 2
+	if silence < 5*time.Second {
+		silence = 5 * time.Second
+	}
+	if silence > 30*time.Second {
+		silence = 30 * time.Second
+	}
 	p := &publisher{
-		db:        database,
-		client:    &http.Client{Timeout: 2 * time.Second},
-		wsHubURL:  wsHubURL,
-		locations: locations,
-		ttl:       ttl,
-		events:    make(chan ws.Event, 256),
-		seen:      make(map[string]time.Time),
-		firstSeen: make(map[string]time.Time),
+		db:            database,
+		client:        &http.Client{Timeout: 2 * time.Second},
+		wsHubURL:      wsHubURL,
+		locations:     locations,
+		ttl:           ttl,
+		sdrSilenceTTL: silence,
+		sdrs:          make(map[string]*sdrState),
+		events:        make(chan ws.Event, 256),
+		seen:          make(map[string]time.Time),
+		firstSeen:     make(map[string]time.Time),
 	}
 	if wsHubURL != "" {
 		go p.runEventWorker()
 	}
 	return p
+}
+
+// initSDRs seeds publisher SDR state from the sdr-capture config so
+// sdr.status events carry model/gain/bandwidth and the sweeper knows
+// which devices to watch (§14.4.3).
+func (p *publisher) initSDRs(cfgs []sdr.SDRCaptureConfig) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, c := range cfgs {
+		st := &sdrState{
+			configured: true,
+			model:      driverModel(c.Driver),
+			serial:     c.Serial,
+			gainDB:     c.DefaultGain,
+			bwHz:       c.DefaultBW,
+		}
+		if c.Lat != nil && c.Lon != nil {
+			st.lat, st.lon = c.Lat, c.Lon
+		}
+		p.sdrs[c.ID] = st
+	}
+}
+
+// observeFrame records one received frame from an SDR and emits a
+// deduplicated sdr.status when the device's effective state changes —
+// first frame, retune, or reactivation after silence (§14.4.3).
+func (p *publisher) observeFrame(sdrID string, freqHz uint64, now time.Time) {
+	p.mu.Lock()
+	st, ok := p.sdrs[sdrID]
+	if !ok {
+		st = &sdrState{model: "unknown"}
+		p.sdrs[sdrID] = st
+	}
+	firstFrame := st.lastFrame.IsZero()
+	reactivated := !st.active
+	freqChanged := st.freqHz != freqHz
+	st.lastFrame = now
+	st.active = true
+	st.freqHz = freqHz
+	if !firstFrame && !reactivated && !freqChanged {
+		p.mu.Unlock()
+		return // deduped: effective state unchanged
+	}
+	// Throttle repeats (e.g. rapid retunes): ≥1 s between events,
+	// except for the first frame and reactivations which always emit.
+	if !st.emittedAt.IsZero() && now.Sub(st.emittedAt) < time.Second && !firstFrame && !reactivated {
+		p.mu.Unlock()
+		return
+	}
+	st.emittedAt = now
+	ev := st.statusEvent(sdrID)
+	configured := st.configured
+	serial := st.serial
+	lat, lon := st.lat, st.lon
+	p.mu.Unlock()
+
+	p.queue("sdr.status", ev)
+	if p.db != nil && configured {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		sdev := &db.SDRDevice{
+			ID:     sdrID,
+			Model:  ev.Model,
+			Serial: serial,
+			GainDB: ev.GainDB,
+			FreqHz: freqHz,
+			Active: true,
+		}
+		if lat != nil {
+			sdev.Lat = *lat
+		}
+		if lon != nil {
+			sdev.Lon = *lon
+		}
+		if err := p.db.UpsertSDR(ctx, sdev); err != nil {
+			log.Printf("upsert sdr %s: %v", sdrID, err)
+		}
+	}
 }
 
 // publish records one detected signal. It always upserts to the database
@@ -204,6 +348,29 @@ func (p *publisher) sweep(ctx context.Context) {
 				}
 				p.queue("signal.removed", map[string]string{"id": id})
 			}
+
+			// §14.4.3: SDRs that stopped sending frames are marked
+			// inactive and their deactivation is broadcast.
+			p.mu.Lock()
+			var silent []sdrStatusEvent
+			for id, st := range p.sdrs {
+				if st.active && !st.lastFrame.IsZero() && now.Sub(st.lastFrame) > p.sdrSilenceTTL {
+					st.active = false
+					silent = append(silent, st.statusEvent(id))
+				}
+			}
+			p.mu.Unlock()
+			for _, ev := range silent {
+				if p.db != nil {
+					cctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+					if err := p.db.SetSDRActive(cctx, ev.ID, false); err != nil {
+						log.Printf("deactivate sdr %s: %v", ev.ID, err)
+					}
+					cancel()
+				}
+				log.Printf("sdr %s silent > %v, marking inactive", ev.ID, p.sdrSilenceTTL)
+				p.queue("sdr.status", ev)
+			}
 		}
 	}
 }
@@ -242,6 +409,19 @@ func (p *publisher) runEventWorker() {
 			log.Printf("ws-hub: ingest returned %d", resp.StatusCode)
 		}
 	}
+}
+
+// loadSDRs reads the configured SDR list from the sdr-capture config;
+// used to seed sdr.status state (§14.4.3). A missing file is not fatal.
+func loadSDRs(path string) []sdr.SDRCaptureConfig {
+	cfg, err := sdr.LoadCaptureConfig(path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("load SDR config %s: %v", path, err)
+		}
+		return nil
+	}
+	return cfg.SDRs
 }
 
 // loadLocations reads SDR lat/lon from the sdr-capture config file.
@@ -355,6 +535,7 @@ func main() {
 	wsHubURL := os.Getenv("WS_HUB_URL")
 	ttl := time.Duration(envInt("SIGNAL_TTL", 30)) * time.Second
 	pub := newPublisher(database, wsHubURL, loadLocations(*configPath), ttl)
+	pub.initSDRs(loadSDRs(*configPath))
 	if wsHubURL != "" {
 		log.Printf("emitting events to %s (ttl=%v)", wsHubURL, ttl)
 	}
@@ -410,6 +591,9 @@ func main() {
 		if err != nil {
 			continue
 		}
+
+		// §14.4.3: per-frame SDR observation drives sdr.status events.
+		pub.observeFrame(frame.SDRID, frame.FreqHz, time.Now())
 
 		events := processFrame(frame, peakDetector, classifier)
 
