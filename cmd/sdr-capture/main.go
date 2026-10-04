@@ -6,6 +6,7 @@
 // Build (macOS, real hardware):
 //
 //	go build -tags rtlsdr -o bin/sdr-capture ./cmd/sdr-capture
+//	go build -tags "rtlsdr,hackrf" -o bin/sdr-capture ./cmd/sdr-capture
 //
 // Build (no hardware, simulator only):
 //

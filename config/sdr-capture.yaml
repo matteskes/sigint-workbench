@@ -26,7 +26,9 @@ sdrs:
     stream_host: localhost
     stream_port: 9001
 
-# Example: adding a HackRF later
+# Example: HackRF One (requires building sdr-capture with
+# -tags "rtlsdr,hackrf"; without the tag, startup aborts with a clear
+# error). serial selects the device — omit it to use the first found.
 #  - id: "hackrf-0"
 #    driver: hackrf
 #    serial: "0x00000000000000000000000000000001"

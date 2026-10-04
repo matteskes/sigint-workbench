@@ -94,13 +94,13 @@ and geospatial visualization.
 
 ### macOS (Development)
 
-- `brew install librtlsdr`
+- `brew install librtlsdr` (+ `brew install hackrf` for HackRF One)
 - RTL-SDR dongle(s) connected via USB — or none: run hardware-less
   with `config/sdr-capture.sim.yaml`
 
 ### Linux (Production)
 
-- `apt install librtlsdr-dev`
+- `apt install librtlsdr-dev libhackrf-dev`
 - RTL-SDR dongle(s) or HackRF One via USB
 
 ## Quick Start
@@ -165,6 +165,7 @@ sigint-workbench/
 | ----------- | ----------- |
 | `make dev` | Full dev environment (macOS) |
 | `make build-capture` | Build native macOS sdr-capture |
+| `make build-capture-hw` | Build sdr-capture with rtlsdr + hackrf drivers |
 | `make build-capture-linux` | Cross-compile sdr-capture for Linux |
 | `make build-prod` | Build all Docker images |
 | `make deploy` | Start production stack (Linux) |
@@ -190,11 +191,28 @@ frontend suite runs via `make frontend-test`.
 Implement the `Demodulator` interface in `internal/audio/`, register it in
 `DefaultRegistry()`, and the recorder and API will automatically use it.
 
-### Adding HackRF Support
+### Hardware Drivers (build tags)
 
-Install `libhackrf-dev`, implement the `SDR` interface in
-`internal/sdr/hackrf.go` (remove build tag), add a `hackrf` entry in
-`config/sdr-capture.yaml`, build with `-tags "rtlsdr,hackrf"`.
+sdr-capture compiles hardware drivers in via build tags (cgo); the
+simulator is always available:
+
+```bash
+# RTL-SDR only (SPEC §15.3)
+go build -tags rtlsdr -o bin/sdr-capture ./cmd/sdr-capture
+# RTL-SDR + HackRF One (SPEC §15.4) — or: make build-capture-hw
+go build -tags "rtlsdr,hackrf" -o bin/sdr-capture ./cmd/sdr-capture
+```
+
+- RTL-SDR: `usb_index` selects the dongle.
+- HackRF: `serial` selects the device (omit to use the first found);
+  RX-only by policy (SPEC H2 — the driver never links the transmit
+  API, and a guard test enforces it).
+
+Without the tag, selecting that driver in YAML aborts startup with a
+clear "built without … support" error. Install the libraries first:
+`brew install librtlsdr hackrf` (macOS) or `apt install librtlsdr-dev
+libhackrf-dev` (Debian/Ubuntu). The Linux production image already
+compiles both drivers in.
 
 ### Training Classification Models
 

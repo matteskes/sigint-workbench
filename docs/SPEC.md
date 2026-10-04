@@ -33,8 +33,8 @@ dashboard, and (planned) records decoded audio.
 
 - Receive-only monitoring on one host (or one Docker network).
 - 1–N SDR receivers; reference deployments use one or two.
-- 24 MHz – 1.7 GHz (RTL-SDR class); 1 MHz – 7250 MHz when HackRF support
-  lands (see §15).
+- 24 MHz – 1.7 GHz (RTL-SDR class); 1 MHz – 7250 MHz with the HackRF
+  driver (see §15).
 - Signal detection, band identification, modulation classification,
   2-SDR cross-verification, per-SDR location, retention, web UI.
 - The synthetic simulator driver as a hardware-independent testbed.
@@ -1069,7 +1069,9 @@ payload-by-`id` upsert on `new`/`update`, delete on `removed`.
 
 **Status: simulator `[implemented]`; RTL-SDR driver
 `[implemented]` (build tag; §15.3 defect fixes compile-validated,
-on-hardware validation `[planned]`); HackRF `[planned]` (H1/H2).**
+on-hardware validation `[planned]`); HackRF driver `[implemented]`
+(build tag; compile-validated, hardware-unverified; on-hardware
+validation `[planned]`) (H1/H2).**
 
 ### 15.1 Driver contract
 
@@ -1095,7 +1097,7 @@ this interface.
 | -------- | ----------- | ------------ | -------- | ---- | -------- |
 | Simulator | (none) | 24 MHz – 1.7 GHz (declared) | 10 MHz | no | `[implemented]` — the CI testbed |
 | RTL-SDR (RTL2832U) | `rtlsdr` (cgo, librtlsdr) | 24 MHz – 1.7 GHz | 3.2 MHz | no | `[implemented]` — §15.3 fixes compile-validated, hardware-unverified |
-| HackRF One | `hackrf` (cgo, libhackrf) | **1 MHz – 7250 MHz** (H1) | ≤ **56 MSPS** (H1; practical cap ≈ 20 MSPS) | hardware has TX; **prohibited** | `[planned]` |
+| HackRF One | `hackrf` (cgo, libhackrf) | **1 MHz – 7250 MHz** (H1) | ≤ **56 MSPS** (H1; practical cap ≈ 20 MSPS) | hardware has TX; **prohibited** | `[implemented]` — compile-validated, hardware-unverified |
 
 **Simulator normative defaults** (testbed fixture): center set per
 launch; noise amplitude 0.005; gain factor `10^(gain/40)` with
@@ -1141,11 +1143,12 @@ The cgo bindings were rewritten against the real librtlsdr ABI
 not exist in the library. On-hardware validation remains a Phase 3
 gate.
 
-### 15.4 HackRF (H1/H2) — `[planned]` contract
+### 15.4 HackRF (H1/H2) — `[implemented]`, hardware-unverified
 
 - RX-only in this project. The driver MUST report
   `hasTX = false` and MUST NOT call `hackrf_start_tx` — **TX is
-  prohibited by policy (H2), regardless of hardware capability**.
+  prohibited by policy (H2), regardless of hardware capability**
+  (enforced at test time by `TestHackRFH2Guard`, §17.3).
 - Range cap: 1 MHz – 7250 MHz; sample rate requests > maxBW are
   clamped (same behavior as the RTL driver's `SetSampleRate`).
 - Config: `driver: hackrf` with `serial` selection; everything
@@ -1153,6 +1156,32 @@ gate.
 - Multi-host deployments and PTP/NTP clock sync are **out of v1
   scope** (Phase 4); single-host, one or two local SDRs is the only
   supported topology.
+
+Implementation notes (`internal/sdr/hackrf.go`, `-tags hackrf`;
+compile-validated against libhackrf 2026.01 — no HackRF hardware in
+CI or the dev environment):
+
+- `NewHackRF` validates the configured `serial` against
+  `hackrf_device_list` and reads board name + serial for metadata
+  without opening the device; an empty `serial` opens the first
+  device found.
+- RX is asynchronous: the libhackrf callback widens the signed 8-bit
+  stream to full-scale int16 (`v << 8`, same convention as §15.3)
+  and fills a small block queue that `ReadIQ` drains, preserving the
+  synchronous `sdr.SDR` interface. A retune flushes the queue (up to
+  one in-flight USB transfer may still hold pre-tune samples);
+  queue overflow drops the freshest block, counts the lost pairs,
+  and the driver logs the loss.
+- `SetGain` maps one dB figure onto VGA first (0-62 dB, 2 dB steps),
+  then LNA (0-40 dB, 8 dB steps); the 14 dB amp stays off so the
+  gain chain is deterministic (§5.6 calibration prerequisite).
+  Negative dB is rejected — the HackRF has no auto gain mode.
+- Builds: CI compile-validates `-tags hackrf` and the combined
+  `-tags "rtlsdr,hackrf"` build (`libhackrf-dev`);
+  `Dockerfile.sdr-capture` ships the combined build with `libhackrf0`
+  at runtime; macOS dev: `make build-capture-hw`.
+- On-hardware validation (sweep, 2-SDR verification, throughput near
+  the 20 MSPS practical cap) remains a Phase 3 exit gate.
 
 ## 16. Configuration Reference
 
@@ -1311,8 +1340,9 @@ removed from compose with the stubs (D2).
 - **Path safety:** recording file serving is confined to
   `RECORDINGS_DIR` (prefix check) — keep this invariant.
 - **TX prohibition (H2):** no driver may transmit; enforced by
-  `hasTX = false` metadata and code review (HackRF driver MUST NOT
-  link `hackrf_start_tx`).
+  `hasTX = false` metadata plus `TestHackRFH2Guard`, which fails if
+  any HackRF driver source references the transmit API
+  (`hackrf_start_tx`, §15.4).
 - **Secrets:** Postgres credentials via `.env` (never committed);
   `gitignore` covers `.env` and `recordings/` content.
 - **Legal:** operators are responsible for local frequency-monitoring
@@ -1400,7 +1430,7 @@ stores and the API client; `svelte-check` for types.
 | **0 — Core pipeline** | capture → ingest → DSP → classify → persist → events; dashboard shell; CI | smoke-onnx green; this spec written |
 | **1 — Correctness** | D4 negative offsets; A1 unlocated signals; §6.5 class enum; dead `/ws` hub removal; FLAC-claim cleanup (code + README); CORS/origin tightening — all **done** | new tests per §17.3 green; docs match behavior |
 | **2 — Features** | §15.3 RTL-SDR defect fixes; §10.1 real SSB + pair-aware registry; §11.2 active/TTL lifecycle; `sdr.status` producer (§14.4.3); `GET /ws` gateway relay (§2.2, A3); frontend data wiring (§14.4.2); YAML config loading + `min_confidence` enforcement (§16.1); **slices 1–3:** D3 scan loop + §7.4 control status; §8 dual-SDR verification with verified latch; recorder (D1 in-band WAV + §11.3 retention); first live `TEST_DATABASE_URL` integration run (§17.3); **slice 4:** Opus live streaming recorder side (D1b, §10.3–§10.4: per-signal mux + `/ws/audio` server + `Dockerfile.recorder`); **slice 5:** `/ws/audio` gateway relay (§2.2, §10.4); control-API proxy — `PUT /api/sdrs/{id}` retune forwarding + `GET /api/sdrs/{id}/status` (§7.4, §13.1, §13.2.3) — **all delivered** | §17.3 obligations green; dashboard live end-to-end |
-| **3 — Hardware & fidelity** | RTL-SDR on-hardware validation (§15.3 defect fixes delivered in Phase 2); HackRF driver (H1/H2); power calibration contract (§5.6); `min_confidence` enforcement (§16.1); **slice 0:** multi-SDR sim enablement — `driver: simulator` accepted via YAML + two-device shared-ingest-port rehearsal (§16.1, §16.4) — **delivered** | 2 real SDRs verified end-to-end; calibration documented |
+| **3 — Hardware & fidelity** | RTL-SDR on-hardware validation (§15.3 defect fixes delivered in Phase 2); HackRF driver (H1/H2) — **delivered, compile-validated** (§15.4); power calibration contract (§5.6); **slice 0:** multi-SDR sim enablement — `driver: simulator` accepted via YAML + two-device shared-ingest-port rehearsal (§16.1, §16.4) — **delivered**; `min_confidence` enforcement (§16.1) — **delivered in Phase 2** | 2 real SDRs verified end-to-end; calibration documented |
 | **4 — Deferred** | multi-host + NTP/PTP; TDOA multilateration; tracking (`tracks`, §9.4); annotations UI; `audio.level` feed | scoped separately |
 
 ## Appendix A — Decision Register
@@ -1418,7 +1448,7 @@ defaults — they have no separate normative surface.)
 | D3 | Normative scanner loop in sdr-capture (step/dwell); 2-SDR verification asynchronous | §7, §8 |
 | D4 | FFT bins above fs/2 wrapped to negative offsets (below-center blind spot) | §5.3 |
 | D6 | Retention: TTL → `active=false` (no hard delete); 30-day archive purge; recordings 30 days / 50 GB | §11 |
-| H1 | Hardware: RTL-SDR + simulator now; HackRF 1–7250 MHz, ≤ 56 MSPS, planned | §15.1, §15.3, §15.4 |
+| H1 | Hardware: RTL-SDR + simulator now; HackRF 1–7250 MHz, ≤ 56 MSPS, delivered (compile-validated, hardware-unverified) | §15.1, §15.3, §15.4 |
 | H2 | TX prohibited by policy; drivers report `hasTX=false` | §1.2, §15.4, §17.2 |
 | A1 | Unlocated signals are listed & verified, never silently dropped (map omits them) | §9.3 |
 | A3 | Single client ingress: api-gateway proxies `/ws` and `/ws/audio`; hub + recorder internal-only | §2.2, §3.2 |
