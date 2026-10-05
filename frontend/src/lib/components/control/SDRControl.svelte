@@ -1,6 +1,11 @@
 <script lang="ts">
 	import { sdrs, applySDRStatus } from '$lib/stores/sdrs';
-	import { retuneSdr } from '$lib/api/client';
+	import {
+		retuneSdr,
+		setScan,
+		fetchSDRStatus,
+		type SDRDeviceStatus
+	} from '$lib/api/client';
 
 	// §7.4 control surface: a manual tune PUTs through the gateway,
 	// which persists the row AND forwards to sdr-capture (§13.1:
@@ -10,15 +15,44 @@
 	let busy = $state<Record<string, boolean>>({});
 	let errors = $state<Record<string, string>>({});
 
+	// Live scan state per device (§7.4): `scanning` = a D3 sweep loop
+	// is attached; `scanPaused` = parked (boot park via
+	// scan_autostart: false, or a manual tune). Refreshed on mount,
+	// after a tune and after toggling.
+	let scan = $state<Record<string, SDRDeviceStatus>>({});
+	let requested = $state<Record<string, boolean>>({});
+
 	function describe(e: unknown): string {
 		const m = /(\d{3})\s*$/.exec(String(e));
 		if (!m) return String(e);
 		const status = Number(m[1]);
 		if (status === 502) return 'capture unreachable';
 		if (status === 404) return 'unknown device at capture';
+		if (status === 409) return 'device has no scan loop';
 		if (status === 503) return 'database unavailable';
 		return `error ${status}`;
 	}
+
+	async function refreshStatus(id: string): Promise<void> {
+		try {
+			const st = await fetchSDRStatus(id);
+			scan = { ...scan, [id]: st };
+		} catch {
+			// Best-effort: the toggle needs capture up anyway, and
+			// freq/gain keep flowing via sdr.status regardless.
+		}
+	}
+
+	// One status fetch per device as it appears (monitors too — the
+	// fetch is what tells us there is no sweep toggle to render).
+	$effect(() => {
+		for (const s of $sdrs) {
+			if (!requested[s.id]) {
+				requested = { ...requested, [s.id]: true };
+				void refreshStatus(s.id);
+			}
+		}
+	});
 
 	async function tune(sdr: { id: string; freqHz: number }, freqMHz: number): Promise<void> {
 		errors = { ...errors, [sdr.id]: '' };
@@ -29,10 +63,28 @@
 		busy = { ...busy, [sdr.id]: true };
 		try {
 			applySDRStatus(await retuneSdr(sdr.id, freqHz));
+			// §7.4: a manual tune parks the sweep — refresh the badge.
+			void refreshStatus(sdr.id);
 		} catch (e) {
 			errors = { ...errors, [sdr.id]: describe(e) };
 		} finally {
 			busy = { ...busy, [sdr.id]: false };
+		}
+	}
+
+	async function toggleScan(id: string): Promise<void> {
+		const cur = scan[id];
+		if (!cur) return;
+		errors = { ...errors, [id]: '' };
+		busy = { ...busy, [id]: true };
+		try {
+			const st = await setScan(id, cur.scanPaused);
+			scan = { ...scan, [id]: st };
+			applySDRStatus(st);
+		} catch (e) {
+			errors = { ...errors, [id]: describe(e) };
+		} finally {
+			busy = { ...busy, [id]: false };
 		}
 	}
 </script>
@@ -67,10 +119,31 @@
 				onblur={(e) => tune(sdr, parseFloat(e.currentTarget.value))}
 				aria-label="Frequency (MHz) for {sdr.id}"
 			/>
+			{#if scan[sdr.id]?.scanning}
+				<div class="flex items-center justify-between">
+					<button
+						class="rounded px-2 py-0.5 text-xs disabled:opacity-50
+							{scan[sdr.id].scanPaused
+							? 'bg-green-900/60 text-green-200 hover:bg-green-800'
+							: 'bg-amber-900/60 text-amber-200 hover:bg-amber-800'}"
+						disabled={busy[sdr.id]}
+						onclick={() => toggleScan(sdr.id)}
+					>
+						{scan[sdr.id].scanPaused ? 'Start sweep' : 'Stop sweep'}
+					</button>
+					<span
+						class="text-xs {scan[sdr.id].scanPaused
+							? 'text-amber-400'
+							: 'text-green-400'}"
+					>
+						{scan[sdr.id].scanPaused ? '■ parked' : '▶ sweeping'}
+					</span>
+				</div>
+			{/if}
 			{#if busy[sdr.id]}
 				<div class="text-xs text-amber-400">tuning…</div>
 			{:else if errors[sdr.id]}
-				<div class="text-xs text-red-400">Retune failed: {errors[sdr.id]}</div>
+				<div class="text-xs text-red-400">Failed: {errors[sdr.id]}</div>
 			{/if}
 		</div>
 	{:else}
@@ -78,6 +151,8 @@
 	{/each}
 
 	<div class="text-xs text-slate-600">
-		Manual tune pauses that device's scan loop until restart (§7.4).
+		Manual tune parks that device's sweep — Start sweep resumes it from
+		the currently tuned frequency (§7.4). Devices with
+		scan_autostart: false boot parked; a park resets on capture restart.
 	</div>
 </div>

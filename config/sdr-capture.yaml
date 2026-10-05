@@ -27,7 +27,15 @@ sdrs:
       default_freq: 146520000
       default_gain: !!float 40
       default_bw: 2400000
-      mode: scanner
+      # "both" (not "monitor") so the D3 sweep loop attaches and the
+      # §7.4 runtime toggle can resume it; scan_autostart: false boots
+      # that loop parked at default_freq — this receiver monitors one
+      # frequency until the sweep is explicitly enabled per session:
+      #   curl -X POST localhost:8080/api/sdrs/rtlsdr-0/scan \
+      #     -H 'Content-Type: application/json' -d '{"enabled": true}'
+      # (same toggle lives in the dashboard SDR Controls panel).
+      mode: both
+      scan_autostart: false
       stream_host: localhost
       stream_port: 9000
       calibration_offset_db: -55.61

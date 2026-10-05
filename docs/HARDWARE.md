@@ -195,9 +195,14 @@ select * from verifications order by created_at desc limit 5;
 - V6 evidence:
 
 ```bash
-# retune via the gateway (Hz; pauses that device's scan loop, §7.4)
+# retune via the gateway (Hz; parks that device's scan loop, §7.4)
 curl -s -X PUT localhost:8080/api/sdrs/rtlsdr-1 \
   -H 'Content-Type: application/json' -d '{"freqHz": 121500000}'
+# resume / park the sweep at runtime (§7.4; the dashboard Sweep
+# toggle hits the same endpoint). rtlsdr-0 boots parked via
+# scan_autostart: false — sweep only when you enable it:
+curl -s -X POST localhost:8080/api/sdrs/rtlsdr-0/scan \
+  -H 'Content-Type: application/json' -d '{"enabled": true}'
 # or straight to the capture control API (MHz):
 curl -s -X POST localhost:9090/api/v1/frequency \
   -H 'Content-Type: application/json' \

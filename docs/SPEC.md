@@ -129,10 +129,11 @@ db (PostGIS :5432, internal) <── signal-processor, api-gateway
 - **Processor → hub:** HTTP POST of event JSON (queue + timeout;
   hub loss never back-pressures the DSP loop).
 - **Control path:** `api-gateway` → `sdr-capture` control API
-  `:9090` (tune/gain/status) — `[implemented]` (Phase 2, §13.1):
+  `:9090` (tune/gain/status/scan) — `[implemented]` (Phase 2, §13.1):
   `PUT /api/sdrs/{id}` forwards `freqHz`/`gainDb` so they retune
-  hardware, and `GET /api/sdrs/{id}/status` proxies live device
-  state; capture unreachable ⇒ `502`, never silently DB-only
+  hardware, `GET /api/sdrs/{id}/status` proxies live device
+  state, and `POST /api/sdrs/{id}/scan` parks/resumes the sweep
+  (§7.4); capture unreachable ⇒ `502`, never silently DB-only
   (§13.2.3).
 
 ## 3. Deployment & Ports
@@ -806,8 +807,11 @@ modifies §5, §7, or §10 normative behavior.
 **Status: `[implemented]` (D3). `sdr-capture` runs the §7.1 loop for
 `scanner`/`both` devices — `scan.*` config with §7.1 defaults, range
 defaulted to and clamped into the driver capability range at startup.
-The §7.4 control surface (manual tune pauses the loop; per-device
-`scanning`/`scan_paused` status) is live.**
+The §7.4 control surface is live: manual tune parks the loop,
+per-device `scanning`/`scan_paused` status, runtime park/resume via
+`POST /api/v1/scan` (gateway `POST /api/sdrs/{id}/scan`), and
+per-device `scan_autostart: false` boots a `scanner`/`both` device
+parked at its default frequency.**
 
 ### 7.1 Scan loop (normative)
 
@@ -832,8 +836,9 @@ loop:
 - The loop MUST survive `SetFrequency` failures (log + retry next
   step); a failing device MUST NOT stop the loop for other devices
   (each device has an independent goroutine).
-- With `mode: monitor` (or `both` when a monitor command is active)
-  the device instead holds a fixed frequency until retuned.
+- With `mode: monitor` (or a `scanner`/`both` device whose loop is
+  parked — manual tune or `POST /api/v1/scan`, §7.4) the device holds
+  a fixed frequency until retuned or the sweep is re-enabled.
 
 ### 7.2 Why in capture, not in ingest or processor
 
@@ -857,17 +862,30 @@ HTTP on `:9090` (internal):
 
 | Method & path | Body | Effect |
 | --------------- | ------ | -------- |
-| `GET /api/v1/status` | — | per-device: id, active, freq_hz, gain_db, sample_rate |
-| `POST /api/v1/frequency` | `{"id":"S1","freq_mhz":145.5}` | retune device (pauses its scan loop) |
+| `GET /api/v1/status` | — | per-device: id, active, freq_hz, gain_db, sample_rate, mode, scanning, scan_paused |
+| `POST /api/v1/frequency` | `{"id":"S1","freq_mhz":145.5}` | retune device (parks its scan loop) |
 | `POST /api/v1/gain` | `{"id":"S1","gain_db":40}` | set LNA gain |
+| `POST /api/v1/scan` | `{"id":"S1","enabled":true}` | resume (`true`) or park (`false`) the device's scan loop at runtime; idempotent; replies with the device status. Unknown id ⇒ `404`; device without a scan loop (mode `monitor`, or no usable sweep range) ⇒ `409` |
 
-A manual `frequency` command **pauses** that device's scan loop until
-the service restarts (v1 has no "resume scan" command; this is
-documented operator behavior).
+A manual `frequency` command **parks** that device's scan loop — the
+park is runtime state and resets when `sdr-capture` restarts. The
+`scan` command **resumes** it: the sweep continues from the currently
+tuned frequency (a manual tune or the boot default), not from a stale
+pre-park cursor. While sweeping, the loop still steps past failing
+tunes (§7.1).
+
+Per-device config (§16.2): `scan_autostart: false` attaches the scan
+loop but boots the device parked at `default_freq` — the
+"monitor by default, sweep on demand" receiver. Keep the device mode
+`both` (not `monitor`) when using it: a `monitor` device never
+attaches a scan loop, so there is nothing to resume without a
+restart. An absent key defaults to `true` (the historical behavior).
 
 The gateway proxies into this API (§13.1): `PUT /api/sdrs/{id}`
-forwards `freqHz`/`gainDb` to `frequency`/`gain`, and
-`GET /api/sdrs/{id}/status` proxies `status` filtered to one device.
+forwards `freqHz`/`gainDb` to `frequency`/`gain`, `GET
+/api/sdrs/{id}/status` proxies `status` filtered to one device, and
+`POST /api/sdrs/{id}/scan` forwards `{"enabled": bool}` to `scan` —
+no DB write, it is runtime state (§12.1 has no scan column).
 
 ## 8. Dual-SDR Verification
 
@@ -1279,8 +1297,9 @@ live audio channel — e.g. a fixed aviation or marine frequency. The
 in-band path works identically; the peak sits at DC and the baseband
 shift is trivial. At most the pinned channel streams audio; this
 mode is an operator convenience, not a pipeline change. A manual
-frequency command pauses that device's scan loop until restart
-(§7.4, documented operator behavior).
+frequency command parks that device's scan loop (§7.4); the runtime
+`POST /api/sdrs/{id}/scan` resume brings the sweep back from the
+pinned frequency for the rest of the session.
 
 ### 10.4 Live transport — Opus over WebSocket (D1b, normative)
 
@@ -1522,8 +1541,9 @@ whether `powerDbm` is an absolute level — false means relative dB.
 
 **Status: all §13.1 endpoints `[implemented]` (Phase 2), including
 the `GET /ws` and `GET /ws/audio` relays (A3, §2.2) and the
-control-API proxy — `PUT /api/sdrs/{id}` forwards `freqHz`/`gainDb`
-and `GET /api/sdrs/{id}/status` proxies live state (§7.4); §13.2 gap
+control-API proxy — `PUT /api/sdrs/{id}` forwards `freqHz`/`gainDb`,
+`GET /api/sdrs/{id}/status` proxies live state, and
+`POST /api/sdrs/{id}/scan` parks/resumes the sweep (§7.4); §13.2 gap
 fixes — all 4 closed (item 3 closed with the control-API proxy).
 Signal annotations (`GET/POST /api/signals/{id}/annotations`) were
 the last `[planned]` row — `[implemented]` in Phase 4.**
@@ -1559,6 +1579,7 @@ General contract:
 | `GET /ws` | `[implemented]` | Transparent bidirectional relay to `ws-hub:8081/ws` (§2.2, Phase 2); the hub is dialed before the client upgrade — hub down ⇒ `502` JSON `{"error":"ws-hub unreachable"}`; foreign origins ⇒ `403` (`ALLOWED_ORIGINS`, §17.2) |
 | `GET /ws/audio` | `[implemented]` | Transparent relay to recorder `:9012/ws/audio?signal=<id>` (§10.4, Phase 2): one text `audio.meta` hello, then binary Opus packets pass untouched; recorder down ⇒ `502` JSON; foreign origins ⇒ `403` |
 | `GET /api/sdrs/{id}/status` | `[implemented]` | Proxy of capture control `GET /api/v1/status` filtered to the device (§7.4); capture down ⇒ `502`, unknown id ⇒ `404` |
+| `POST /api/sdrs/{id}/scan` | `[implemented]` | Runtime park/resume of the device's sweep loop (§7.4): body `{"enabled": bool}` forwarded to capture's `POST /api/v1/scan`, device's live status relayed; no DB write (runtime state). Unknown id ⇒ `404`, device without a scan loop ⇒ `409`, capture down ⇒ `502`, DB down ⇒ `503` |
 | `GET/POST /api/signals/{id}/annotations` | `[implemented]` | List a signal's user notes (newest first) / add one — POST body `{"userNote"}` ⇒ `201` + created row; unknown signal ⇒ `404`; blank or missing note ⇒ `400` (§12.5) |
 | `GET /api/signals/{id}/track` | `[implemented]` | Current track `{"signalId","path":[{lat,lon}…],"speedKmh","headingDeg","updatedAt"}`; no track ⇒ `404` (§9.4, §12.4) |
 | `POST /api/recordings/{id}/tfr` | `[implemented]` | On-demand time-frequency render over stored IQ (§19, D10): body `{"method","t0","t1","nfft","overlap?","window?","freqSpan?"}` ⇒ numeric int8-dB tiles + metadata (method, span, bin geometry, §19.2 dominant artifact), proxied to the recorder; unknown/no-IQ/purged recording ⇒ `404`, invalid params ⇒ `400`, span > `tfr.max_span_s` ⇒ `413`; `tfr.enabled: false` ⇒ `404` (§19.3) |

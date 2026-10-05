@@ -22,8 +22,10 @@ and geospatial visualization.
   movement tracks
 - **Interactive map** (MapLibre GL + self-hosted OSM tiles) with
   live signal overlay
-- **Dashboard control** — retune receivers from the UI via the
-  capture control API (§7.4); per-signal user notes
+- **Dashboard control** — retune receivers and start/stop a
+  receiver's wideband sweep from the UI via the capture control API
+  (§7.4; receivers with `scan_autostart: false` boot parked and are
+  swept on demand); per-signal user notes
 - **Spectrum analyzer** and **waterfall display** — live per-SDR
   spectrum trace + waterfall on canvas (§18)
 - **Time-frequency analysis** — on-demand STFT/reassigned/SPWVD/

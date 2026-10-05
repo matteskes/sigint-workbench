@@ -100,6 +100,25 @@ type SDRCaptureConfig struct {
 	// powerCalibrated = true. Absent (nil) → power values stay
 	// uncalibrated relative dB. Negative values are valid.
 	CalibrationOffsetDB *float64 `yaml:"calibration_offset_db,omitempty"`
+
+	// ScanAutoStart (optional, §7.4) — whether a scan-capable device
+	// (mode "scanner" or "both") starts sweeping at boot. Absent
+	// (nil) → true, the historical behavior. false attaches the scan
+	// loop but boots it parked at default_freq: the device monitors
+	// one frequency until the sweep is explicitly enabled at runtime
+	// via POST /api/v1/scan (the §7.4 "monitor by default, sweep on
+	// demand" workflow). Keep the device mode "both" (not "monitor")
+	// when using this — a "monitor" device never attaches a scan loop
+	// and therefore cannot resume sweeping without a restart.
+	ScanAutoStart *bool `yaml:"scan_autostart,omitempty"`
+}
+
+// ScanAutoStartEnabled reports whether the device should start
+// sweeping at boot (§7.4): true unless scan_autostart is explicitly
+// false (nil means "key absent → default on", mirroring the
+// CalibrationOffsetDB presence convention).
+func (c SDRCaptureConfig) ScanAutoStartEnabled() bool {
+	return c.ScanAutoStart == nil || *c.ScanAutoStart
 }
 
 // LoadCaptureConfig reads and parses a YAML config file.

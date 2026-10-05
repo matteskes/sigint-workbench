@@ -88,6 +88,13 @@ func Schema() []Section {
 						{Key: "mode", Label: "Mode", Type: "select", Group: "Defaults",
 							Options: []string{"scanner", "monitor", "both"}, Default: "monitor",
 							Help: "scanner sweeps (§7.1); monitor holds one frequency."},
+						{Key: "scan_autostart", Label: "Sweep at boot", Type: "bool",
+							Group: "Scan loop (D3)", Default: true, Optional: true,
+							Help: "scanner/both only: start sweeping at startup. " +
+								"False boots the loop parked at default_freq — " +
+								"enable per session via the dashboard Sweep " +
+								"toggle (§7.4). Keep mode both, not monitor, " +
+								"or there is no loop to resume. Empty = on."},
 						{Key: "stream_host", Label: "Stream host", Type: "string",
 							Group: "Stream", Default: "localhost",
 							Help: "iq-ingest host (compose: iq-ingest)."},

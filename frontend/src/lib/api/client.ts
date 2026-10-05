@@ -141,6 +141,65 @@ export async function retuneSdr(id: string, freqHz: number): Promise<SDRStatus> 
 }
 
 /**
+ * Live per-device state from the capture control API, relayed by the
+ * gateway GET /api/sdrs/{id}/status (§7.4). Adds the scan-loop fields
+ * the §14.4.3 sdr.status WS feed doesn't carry: `scanning` (a D3 sweep
+ * loop is attached) and `scanPaused` (parked — boot park via
+ * scan_autostart: false, or a manual tune).
+ */
+export interface SDRDeviceStatus {
+	id: string;
+	model: string;
+	active: boolean;
+	freqHz: number;
+	gainDb: number;
+	bwHz: number;
+	mode: string;
+	scanning: boolean;
+	scanPaused: boolean;
+}
+
+/** Maps the capture control API's snake_case status JSON (§7.4). */
+function mapDeviceStatus(s: any): SDRDeviceStatus {
+	return {
+		id: String(s.id),
+		model: String(s.model ?? ''),
+		active: Boolean(s.active),
+		freqHz: Number(s.freq_hz ?? 0),
+		gainDb: Number(s.gain_db ?? 0),
+		bwHz: Number(s.bw_hz ?? 0),
+		mode: String(s.mode ?? ''),
+		scanning: Boolean(s.scanning),
+		scanPaused: Boolean(s.scan_paused)
+	};
+}
+
+/** Fetches one device's live capture status (§7.4, §13.1). */
+export async function fetchSDRStatus(id: string): Promise<SDRDeviceStatus> {
+	const res = await fetch(`${API_URL}/api/sdrs/${encodeURIComponent(id)}/status`);
+	if (!res.ok) throw new Error(`API error: ${res.status}`);
+	return mapDeviceStatus(await res.json());
+}
+
+/**
+ * Parks or resumes a device's sweep at runtime: POST
+ * /api/sdrs/{id}/scan {"enabled"} (§7.4). The gateway forwards to
+ * capture's /api/v1/scan and relays the device's live status. Resuming
+ * continues the sweep from the currently tuned frequency; the park
+ * resets on capture restart. Unknown device ⇒ 404, device without a
+ * scan loop (mode monitor) ⇒ 409, capture unreachable ⇒ 502.
+ */
+export async function setScan(id: string, enabled: boolean): Promise<SDRDeviceStatus> {
+	const res = await fetch(`${API_URL}/api/sdrs/${encodeURIComponent(id)}/scan`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ enabled })
+	});
+	if (!res.ok) throw new Error(`API error: ${res.status}`);
+	return mapDeviceStatus(await res.json());
+}
+
+/**
  * Opens the event WebSocket. onOpen fires on every (re)connect so the
  * caller can re-bootstrap state missed while disconnected.
  */

@@ -567,3 +567,82 @@ func TestGetSDRStatusRequiresDB(t *testing.T) {
 		t.Fatalf("status = %d, want 503", resp.StatusCode)
 	}
 }
+
+func TestScanProxyRequiresDBAndRoute(t *testing.T) {
+	// §13 contract for POST /api/sdrs/{id}/scan: a 503 (not chi's
+	// 404) proves the route is registered and honors the DB-down
+	// convention like every other /api route.
+	ts := newTestServer()
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/api/sdrs/S1/scan", "application/json",
+		strings.NewReader(`{"enabled":true}`))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", resp.StatusCode)
+	}
+}
+
+func TestPostCaptureControlScanForwardsAndRelays(t *testing.T) {
+	var mu sync.Mutex
+	var gotPath, gotBody string
+	capTS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		gotPath, gotBody = r.URL.Path, string(b)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		// Capture replies with the device's live status (§7.4).
+		_, _ = w.Write([]byte(`{"id":"S1","ok":true,"scanning":true,"scan_paused":true}`))
+	}))
+	defer capTS.Close()
+	capURL, _ := url.Parse(capTS.URL)
+
+	log := zerolog.Nop()
+	srv := NewServer(nil, log)
+	srv.captureCtrl = capURL.Host
+
+	body, fail := srv.postCaptureControl(context.Background(), "/api/v1/scan",
+		captureScanRequest{ID: "S1", Enabled: false})
+	if fail != nil {
+		t.Fatalf("postCaptureControl: %v", fail)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if gotPath != "/api/v1/scan" {
+		t.Errorf("upstream path = %q, want /api/v1/scan", gotPath)
+	}
+	if !strings.Contains(gotBody, `"id":"S1"`) || !strings.Contains(gotBody, `"enabled":false`) {
+		t.Errorf("upstream body = %q, want scan command for S1", gotBody)
+	}
+	if !strings.Contains(string(body), `"scan_paused":true`) {
+		t.Errorf("relayed body = %q, want capture's status reply", body)
+	}
+}
+
+func TestPostCaptureControlConflictRelayed(t *testing.T) {
+	// A 409 from capture means "no scan loop on this device" — the
+	// gateway must surface it as 409 with capture's message, not
+	// flatten it into a generic 502.
+	capTS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "device has no scan loop (mode monitor)", http.StatusConflict)
+	}))
+	defer capTS.Close()
+	capURL, _ := url.Parse(capTS.URL)
+
+	log := zerolog.Nop()
+	srv := NewServer(nil, log)
+	srv.captureCtrl = capURL.Host
+
+	_, fail := srv.postCaptureControl(context.Background(), "/api/v1/scan",
+		captureScanRequest{ID: "S1", Enabled: true})
+	if fail == nil || fail.status != http.StatusConflict {
+		t.Fatalf("fail = %v, want 409 ctrlFailure", fail)
+	}
+	if !strings.Contains(fail.message, "no scan loop") {
+		t.Fatalf("message = %q, want capture's conflict text", fail.message)
+	}
+}

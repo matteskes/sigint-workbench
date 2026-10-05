@@ -26,6 +26,40 @@ sdrs:
     mode: scanner
 `
 
+func TestLoadCaptureConfig_ScanAutoStart(t *testing.T) {
+	// Key absent → default on (§7.4; same presence convention as
+	// calibration_offset_db).
+	cfg, err := LoadCaptureConfig(writeCaptureConfig(t, scannerSDR))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !cfg.SDRs[0].ScanAutoStartEnabled() {
+		t.Error("absent scan_autostart should default to enabled")
+	}
+
+	// Explicit false → the device boots parked (§7.4 monitor-by-default).
+	cfg, err = LoadCaptureConfig(writeCaptureConfig(t, scannerSDR+`
+    scan_autostart: false
+`))
+	if err != nil {
+		t.Fatalf("load parked: %v", err)
+	}
+	if cfg.SDRs[0].ScanAutoStartEnabled() {
+		t.Error("scan_autostart: false should disable boot sweep")
+	}
+
+	// Explicit true → sweep at boot.
+	cfg, err = LoadCaptureConfig(writeCaptureConfig(t, scannerSDR+`
+    scan_autostart: true
+`))
+	if err != nil {
+		t.Fatalf("load explicit: %v", err)
+	}
+	if !cfg.SDRs[0].ScanAutoStartEnabled() {
+		t.Error("scan_autostart: true should enable boot sweep")
+	}
+}
+
 func TestLoadCaptureConfig_ScanDefaults(t *testing.T) {
 	cfg, err := LoadCaptureConfig(writeCaptureConfig(t, scannerSDR))
 	if err != nil {
@@ -229,4 +263,3 @@ stream_format: sdr2
 		t.Error("expected error for unknown stream_format, got nil")
 	}
 }
-

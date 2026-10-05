@@ -125,6 +125,7 @@ func (s *Server) buildRoutes() {
 	s.router.Get("/api/sdrs", s.handleGetSDRs)
 	s.router.Put("/api/sdrs/{id}", s.handleUpdateSDR)
 	s.router.Get("/api/sdrs/{id}/status", s.handleGetSDRStatus)
+	s.router.Post("/api/sdrs/{id}/scan", s.handlePostSDRScan)
 
 	// §20 setup screen
 	s.router.Get("/api/settings", s.handleSettingsIndex)
@@ -551,42 +552,51 @@ type captureGainRequest struct {
 	GainDB float64 `json:"gain_db"`
 }
 
+// postCaptureControl POSTs a JSON payload to the sdr-capture control
+// API and maps failures onto the ctrlFailure conventions (§13.2.3):
+// capture unreachable ⇒ 502, unknown device there ⇒ 404, a device
+// without the targeted capability ⇒ 409 (control API's message
+// relayed), anything else ⇒ 502. Returns the control API's response
+// body on success so proxies can relay it (the scan endpoint's reply
+// is the device's live status).
+func (s *Server) postCaptureControl(ctx context.Context, path string, payload any) ([]byte, *ctrlFailure) {
+	buf, err := json.Marshal(payload)
+	if err != nil {
+		return nil, &ctrlFailure{http.StatusInternalServerError, "control request encode failed"}
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		"http://"+s.captureCtrl+path, bytes.NewReader(buf))
+	if err != nil {
+		return nil, &ctrlFailure{http.StatusBadGateway, "sdr-capture unreachable"}
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, &ctrlFailure{http.StatusBadGateway, "sdr-capture unreachable"}
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	switch {
+	case resp.StatusCode == http.StatusNotFound:
+		return nil, &ctrlFailure{http.StatusNotFound, "sdr-capture reports unknown SDR id"}
+	case resp.StatusCode == http.StatusConflict:
+		return nil, &ctrlFailure{http.StatusConflict, strings.TrimSpace(string(body))}
+	case resp.StatusCode < 200 || resp.StatusCode > 299:
+		s.log.Error().Str("path", path).
+			Int("status", resp.StatusCode).Msg("capture control: " + string(body))
+		return nil, &ctrlFailure{http.StatusBadGateway, "sdr-capture control API error"}
+	}
+	return body, nil
+}
+
 // retuneCapture forwards hardware-affecting fields of an SDR update
 // to the sdr-capture control API (§7.4): freqHz (DB units, Hz) is
 // converted to the control API's MHz. A manual frequency command
-// pauses that device's scan loop until the capture service restarts
-// (§7.4, documented operator behavior).
+// parks that device's scan loop (§7.4); the POST /api/sdrs/{id}/scan
+// proxy (below) is what resumes it at runtime.
 func (s *Server) retuneCapture(ctx context.Context, id string, freqHz *uint64, gainDb *float64) *ctrlFailure {
-	post := func(path string, payload any) *ctrlFailure {
-		buf, err := json.Marshal(payload)
-		if err != nil {
-			return &ctrlFailure{http.StatusInternalServerError, "retune request encode failed"}
-		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-			"http://"+s.captureCtrl+path, bytes.NewReader(buf))
-		if err != nil {
-			return &ctrlFailure{http.StatusBadGateway, "sdr-capture unreachable"}
-		}
-		req.Header.Set("Content-Type", "application/json")
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			return &ctrlFailure{http.StatusBadGateway,
-				"sdr-capture unreachable (DB row updated; hardware not retuned)"}
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode == http.StatusNotFound {
-			return &ctrlFailure{http.StatusNotFound, "sdr-capture reports unknown SDR id"}
-		}
-		if resp.StatusCode < 200 || resp.StatusCode > 299 {
-			b, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
-			s.log.Error().Str("id", id).Str("path", path).
-				Int("status", resp.StatusCode).Msg("capture control: " + string(b))
-			return &ctrlFailure{http.StatusBadGateway, "sdr-capture control API error"}
-		}
-		return nil
-	}
 	if freqHz != nil {
-		if fail := post("/api/v1/frequency", captureFreqRequest{
+		if _, fail := s.postCaptureControl(ctx, "/api/v1/frequency", captureFreqRequest{
 			ID:      id,
 			FreqMHz: float64(*freqHz) / 1e6,
 		}); fail != nil {
@@ -594,11 +604,54 @@ func (s *Server) retuneCapture(ctx context.Context, id string, freqHz *uint64, g
 		}
 	}
 	if gainDb != nil {
-		if fail := post("/api/v1/gain", captureGainRequest{ID: id, GainDB: *gainDb}); fail != nil {
+		if _, fail := s.postCaptureControl(ctx, "/api/v1/gain",
+			captureGainRequest{ID: id, GainDB: *gainDb}); fail != nil {
 			return fail
 		}
 	}
 	return nil
+}
+
+// captureScanRequest is the body of the capture control API's
+// POST /api/v1/scan (§7.4).
+type captureScanRequest struct {
+	ID      string `json:"id"`
+	Enabled bool   `json:"enabled"`
+}
+
+// handlePostSDRScan parks or resumes a device's scan loop at runtime
+// (§7.4). Body {"enabled": bool}. Runtime state only — no DB write:
+// §12.1 has no scan column and a park deliberately resets on capture
+// restart. The control API's device-status reply (incl.
+// scanning/scan_paused) is relayed verbatim. Unknown device ⇒ 404,
+// device without a scan loop ⇒ 409, capture unreachable ⇒ 502.
+func (s *Server) handlePostSDRScan(w http.ResponseWriter, r *http.Request) {
+	if !s.requireDB(w) {
+		return
+	}
+	id := chi.URLParam(r, "id")
+
+	var req struct {
+		Enabled *bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Enabled == nil {
+		http.Error(w, `{"error":"body must be {\"enabled\": true|false}"}`, http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	body, fail := s.postCaptureControl(ctx, "/api/v1/scan",
+		captureScanRequest{ID: id, Enabled: *req.Enabled})
+	if fail != nil {
+		s.log.Error().Str("id", id).Msg("capture scan: " + fail.message)
+		out, _ := json.Marshal(map[string]string{"error": fail.message})
+		http.Error(w, string(out), fail.status)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(body)
 }
 
 // handleGetSDRStatus proxies the capture control API's per-device

@@ -99,6 +99,23 @@ func (s *sdrSlot) setScanFrequency(hz uint64) error {
 	return nil
 }
 
+// setScanEnabled parks or resumes the D3 scan loop at runtime (§7.4).
+// Both directions are idempotent. Parking keeps IQ streaming at the
+// current frequency; resuming clears a boot park (scan_autostart:
+// false) or a manual-tune park. The sweep cursor itself re-syncs from
+// the slot's current frequency inside scanLoop, so a resume continues
+// the sweep from wherever the device is tuned right now.
+func (s *sdrSlot) setScanEnabled(enabled bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.scanPaused = !enabled
+	if enabled {
+		log.Printf("[%s] scan loop resumed from %.4f MHz", s.cfg.ID, float64(s.freqHz)/1e6)
+	} else {
+		log.Printf("[%s] scan loop parked at %.4f MHz", s.cfg.ID, float64(s.freqHz)/1e6)
+	}
+}
+
 // nextScanFreq returns the next sweep frequency after cur (§7.1):
 // f = min + k·step, wrapping to min once the step would exceed max.
 // ok is false when the range is degenerate (step 0 or min >= max),
@@ -310,10 +327,13 @@ func watchStreamStall(slot *sdrSlot, exit <-chan struct{}) {
 
 // scanLoop implements the D3 frequency sweep (§7.1): step across the
 // resolved range at scanStep resolution, dwelling scanDwell per
-// frequency. A manual tune (§7.4) parks the loop until restart.
+// frequency. A manual tune (§7.4) parks the loop until restart or a
+// runtime POST /api/v1/scan resume; boot parks come from
+// scan_autostart: false.
 func scanLoop(slot *sdrSlot, exit <-chan struct{}) {
 	ticker := time.NewTicker(slot.scanDwell)
 	defer ticker.Stop()
+	wasPaused := true // force a cursor sync on the first unparked tick
 	slot.mu.Lock()
 	cur := slot.freqHz
 	slot.mu.Unlock()
@@ -325,9 +345,27 @@ func scanLoop(slot *sdrSlot, exit <-chan struct{}) {
 		}
 		slot.mu.Lock()
 		paused := slot.scanPaused
+		if paused {
+			// Parked (§7.4): keep the cursor on the slot's live
+			// frequency (manual tune or boot default) so the
+			// parked state itself never goes stale.
+			cur = slot.freqHz
+		}
 		slot.mu.Unlock()
 		if paused {
+			wasPaused = true
 			continue
+		}
+		if wasPaused {
+			// Resume edge (park lifted): re-sync the cursor from
+			// the slot's current frequency — a manual tune can
+			// land between ticks, so the last parked read is not
+			// trustworthy. From here on the cursor advances on
+			// its own (§7.1), even past failing tunes.
+			slot.mu.Lock()
+			cur = slot.freqHz
+			slot.mu.Unlock()
+			wasPaused = false
 		}
 		next, ok := nextScanFreq(cur, slot.scanStep, slot.scanMinHz, slot.scanMaxHz)
 		if !ok {
@@ -345,6 +383,20 @@ func scanLoop(slot *sdrSlot, exit <-chan struct{}) {
 
 // startControlServer runs a lightweight HTTP API for runtime SDR control.
 func startControlServer(slots []*sdrSlot, addr string) *http.Server {
+	srv := &http.Server{Addr: addr, Handler: controlMux(slots)}
+	go func() {
+		log.Printf("control API listening on http://%s", addr)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("control server: %v", err)
+		}
+	}()
+	return srv
+}
+
+// controlMux builds the control-API routes. Split from
+// startControlServer so tests can exercise the handlers with
+// httptest against fake devices.
+func controlMux(slots []*sdrSlot) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/api/v1/status", func(w http.ResponseWriter, r *http.Request) {
@@ -412,14 +464,43 @@ func startControlServer(slots []*sdrSlot, addr string) *http.Server {
 		http.Error(w, "unknown SDR id", http.StatusNotFound)
 	})
 
-	srv := &http.Server{Addr: addr, Handler: mux}
-	go func() {
-		log.Printf("control API listening on http://%s", addr)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Printf("control server: %v", err)
+	mux.HandleFunc("/api/v1/scan", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
 		}
-	}()
-	return srv
+		body, _ := io.ReadAll(r.Body)
+		var req struct {
+			ID      string `json:"id"`
+			Enabled bool   `json:"enabled"`
+		}
+		if err := json.Unmarshal(body, &req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		for _, s := range slots {
+			if s.cfg.ID == req.ID {
+				if !s.scanning {
+					// §7.4: no scan loop is attached (mode
+					// "monitor", or a degenerate sweep range)
+					// — there is nothing to park or resume.
+					http.Error(w,
+						"device has no scan loop (mode "+s.cfg.Mode+")",
+						http.StatusConflict)
+					return
+				}
+				s.setScanEnabled(req.Enabled)
+				st := s.status()
+				st["ok"] = true
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(st)
+				return
+			}
+		}
+		http.Error(w, "unknown SDR id", http.StatusNotFound)
+	})
+
+	return mux
 }
 
 // createSDR builds the appropriate SDR driver for the given config.
@@ -538,6 +619,15 @@ func main() {
 				slot.scanDwell = cfg.Scan.Dwell()
 				slot.scanMinHz = minHz
 				slot.scanMaxHz = maxHz
+				// §7.4: scan_autostart: false boots the sweep
+				// loop attached but parked at default_freq — the
+				// device monitors until POST /api/v1/scan
+				// enables the sweep for this session.
+				if !sc.ScanAutoStartEnabled() {
+					slot.scanPaused = true
+					log.Printf("[%s] scan autostart disabled: parked at %.4f MHz (enable via POST /api/v1/scan {\"enabled\":true})",
+						sc.ID, float64(sc.DefaultFreq)/1e6)
+				}
 			} else {
 				log.Printf("[%s] scan disabled: no usable frequency range (driver %.0f-%.0f MHz)",
 					sc.ID, float64(meta.FreqMin)/1e6, float64(meta.FreqMax)/1e6)
