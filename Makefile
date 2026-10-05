@@ -6,8 +6,10 @@ help: ## Show available targets
 # ─── Development (macOS) ───
 
 dev: ## Start full dev environment (macOS: native SDR capture + Docker services)
-	@echo "=== Building sdr-capture (native macOS) ==="
-	@$(MAKE) build-capture
+	@echo "=== Stopping any previous sdr-capture ==="
+	@-pkill -f 'bin/sdr-capture' 2>/dev/null || true
+	@echo "=== Building sdr-capture (native macOS, hw tags when possible) ==="
+	@$(MAKE) build-capture-hw 2>/dev/null || $(MAKE) build-capture
 	@echo "=== Starting sdr-capture ==="
 	@./bin/sdr-capture -config config/sdr-capture.yaml &
 	@echo "=== Starting Docker services ==="
@@ -38,6 +40,7 @@ deploy: ## Start full production stack (all services in Docker)
 
 stop: ## Stop all services
 	docker compose down
+	@-pkill -f 'bin/sdr-capture' 2>/dev/null || true
 
 # ─── Database ───
 
