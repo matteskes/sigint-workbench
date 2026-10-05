@@ -1133,10 +1133,18 @@ frequency command pauses that device's scan loop until restart
 - **Build gate:** without the `opus` build tag (libopus) the
   recorder skips the live server entirely; recording (§10.2/§10.5)
   is unaffected.
-- **Client (honesty):** no browser consumer exists yet — the
-  dashboard plays **recordings** via
-  `GET /api/recordings/{id}/audio` (§13.1). Live browser Opus
-  playback is `[planned]` (slice 7).
+- **Client** (`[implemented]`, slice 7): the dashboard's
+  `LiveAudioPlayer` (SignalDetail) opens the relayed stream via
+  `audioWsUrl()`, decodes with WebCodecs `AudioDecoder`
+  (feature-detected; browsers without it show the live button as
+  unsupported, and recordings remain playable via
+  `GET /api/recordings/{id}/audio`, §13.1), and plays through
+  Web Audio on a ~120 ms jitter-buffer playhead — late audio is
+  dropped forward, never replayed (§10.4.3). Close code 1000 renders
+  as "ended", not an error; one live stream at a time. Vitest covers
+  the state machine and framing (FakeWebSocket + stub decoder).
+- **Client (history):** before slice 7 no browser consumer existed —
+  the dashboard played **recordings** only.
 
 ### 10.5 Recorded files (D1)
 
@@ -1839,7 +1847,9 @@ stores and the API client; `svelte-check` for types.
 - §10.4: an Opus frame-counter test (20 ms cadence, TOC byte 0xF8
   for mono 20 ms) on the recorder's WS — **delivered**: encoder
   contract test + end-to-end `TestWSAudioOpusFrameCounter` over the
-  real libopus path (`-tags opus`, CI-guarded).
+  real libopus path (`-tags opus`, CI-guarded). Browser-side, the
+  §10.4 client framing + state machine are covered by the `liveOpus`
+  vitest suite (FakeWebSocket + stub decoder, slice 7).
 - §10.5/§11.1 (slice 7): raw-IQ writer + max-duration cap —
   **delivered**: `TestSessionRawIQ` (byte-exact int16-LE interleave,
   capture-rate iq row), enabled/disabled file-shape tests, and
@@ -1855,7 +1865,7 @@ stores and the API client; `svelte-check` for types.
 | **1 — Correctness** | D4 negative offsets; A1 unlocated signals; §6.5 class enum; dead `/ws` hub removal; FLAC-claim cleanup (code + README); CORS/origin tightening — all **done** | new tests per §17.3 green; docs match behavior |
 | **2 — Features** | §15.3 RTL-SDR defect fixes; §10.1 real SSB + pair-aware registry; §11.2 active/TTL lifecycle; `sdr.status` producer (§14.4.3); `GET /ws` gateway relay (§2.2, A3); frontend data wiring (§14.4.2); YAML config loading + `min_confidence` enforcement (§16.1); **slices 1–3:** D3 scan loop + §7.4 control status; §8 dual-SDR verification with verified latch; recorder (D1 in-band WAV + §11.3 retention); first live `TEST_DATABASE_URL` integration run (§17.3); **slice 4:** Opus live streaming recorder side (D1b, §10.3–§10.4: per-signal mux + `/ws/audio` server + `Dockerfile.recorder`); **slice 5:** `/ws/audio` gateway relay (§2.2, §10.4); control-API proxy — `PUT /api/sdrs/{id}` retune forwarding + `GET /api/sdrs/{id}/status` (§7.4, §13.1, §13.2.3) — **all delivered** | §17.3 obligations green; dashboard live end-to-end |
 | **3 — Hardware & fidelity** | RTL-SDR on-hardware validation (§15.3 defect fixes delivered in Phase 2); HackRF driver (H1/H2) — **delivered, compile-validated** (§15.4); power calibration contract (§5.6) — **delivered** (contract + mechanism + honesty flag; measuring each SDR's physical offset → docs/HARDWARE.md runbook, slice 3); **slice 0:** multi-SDR sim enablement — `driver: simulator` accepted via YAML + two-device shared-ingest-port rehearsal (§16.1, §16.4) — **delivered**; `min_confidence` enforcement (§16.1) — **delivered in Phase 2**; **slice 3:** RTL-SDR on-hardware validation runbook + calibration tooling — docs/HARDWARE.md, cmd/rtl-list, cmd/rtl-calibrate (§15.3, §5.6) — **delivered and executed 2026-10-04** (V1–V8 pass, offsets applied); **fft fidelity:** §5.7 `fft.size`/`fft.window` wired end-to-end — signal-processor assembles 4096-pair records, rtl-calibrate `-fft-size`, ONNX inference reachable on the native bench (`make ort-lib`, `-tags onnx`) — **delivered 2026-10-04** (offsets recalibrated at the 4096 geometry per §6.3; §8 session 2) | 2 real SDRs verified end-to-end; calibration documented — **met 2026-10-04** (RTL-SDR half; HackRF deferred, no hardware) |
-| **4 — Deferred** | **in progress** — **slice 0:** D2 stub removal (`cmd/classifier`, `cmd/location-service`, compose entries; `Dockerfile.classifier` builds signal-processor only) — **delivered**; **slice 1:** annotations — `GET/POST /api/signals/{id}/annotations` + SignalDetail notes UI — **delivered**; **slice 2:** `audio.level` coarse feed recorder → hub → frontend — **delivered** (scope settled: one event per actively demodulated §10.2 session); **slice 3:** tracking — populate `tracks` from consecutive placements (§9.4, §12.4) — **delivered** (1 Hz persist + `track.update`, final row on TTL sweep, `GET /api/signals/{id}/track`, SignalDetail speed/heading, MapView polyline); **slice 4:** TDOA design — normative §9.5 + §4 frame v2 sample-accurate timing (design review gate) — **delivered** (review passed 2026-10-04); **slice 5:** TDOA engine — simulator first (injected offsets), then 3-SDR on-air fix — **engine + simulator, §4.5 v2 codec + dual-format consumers + per-sender gap counters, migration 004 quality columns, and §9.6 processor wiring (`signal.tdoa`, fix persistence, flip-flop guard) delivered** (on-air validation remains — runbook: docs/HARDWARE.md §7); **slice 6:** multi-host + NTP/PTP — remote capture hosts, sync-quality reporting (§16); **slice 7: audio parity — [planned]:** §10.5 raw-IQ writer (`iq.enabled`), §11.1 max-duration enforcement (`iq.max_duration_s`), §10.4 live browser Opus playback (dashboard consumes `/ws/audio`) | per-slice; slices 4–5: TDOA fix on a known on-air transmitter; slice 6: second capture host with NTP/PTP sync-quality reporting; slice 7: raw-IQ + duration-cap tests, live playback on the dashboard |
+| **4 — Deferred** | **in progress** — **slice 0:** D2 stub removal (`cmd/classifier`, `cmd/location-service`, compose entries; `Dockerfile.classifier` builds signal-processor only) — **delivered**; **slice 1:** annotations — `GET/POST /api/signals/{id}/annotations` + SignalDetail notes UI — **delivered**; **slice 2:** `audio.level` coarse feed recorder → hub → frontend — **delivered** (scope settled: one event per actively demodulated §10.2 session); **slice 3:** tracking — populate `tracks` from consecutive placements (§9.4, §12.4) — **delivered** (1 Hz persist + `track.update`, final row on TTL sweep, `GET /api/signals/{id}/track`, SignalDetail speed/heading, MapView polyline); **slice 4:** TDOA design — normative §9.5 + §4 frame v2 sample-accurate timing (design review gate) — **delivered** (review passed 2026-10-04); **slice 5:** TDOA engine — simulator first (injected offsets), then 3-SDR on-air fix — **engine + simulator, §4.5 v2 codec + dual-format consumers + per-sender gap counters, migration 004 quality columns, and §9.6 processor wiring (`signal.tdoa`, fix persistence, flip-flop guard) delivered** (on-air validation remains — runbook: docs/HARDWARE.md §7); **slice 6:** multi-host + NTP/PTP — remote capture hosts, sync-quality reporting (§16); **slice 7: audio parity — §10.5 raw-IQ writer (`iq.enabled`), §11.1 max-duration enforcement (`iq.max_duration_s`), §10.4 live browser Opus playback (dashboard consumes `/ws/audio`) — delivered 2026-10-04** | per-slice; slices 4–5: TDOA fix on a known on-air transmitter; slice 6: second capture host with NTP/PTP sync-quality reporting; slice 7: raw-IQ + duration-cap tests, live playback on the dashboard — **met 2026-10-04** (Go + vitest gates green; browser playback unit-tested against the §10.4 contract with stub WebCodecs — not verified in a real browser session) |
 
 ## Appendix A — Decision Register
 

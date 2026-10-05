@@ -117,6 +117,16 @@ export function connectWebSocket(onEvent: (event: WSEvent) => void, onOpen?: () 
 	return ws;
 }
 
+/**
+ * §10.4 live audio WebSocket URL: /ws/audio?signal=<id>, relayed by
+ * the same api-gateway origin as the events stream (A3). Derived from
+ * the events WS base so VITE_WS_URL keeps working (…/ws → …/ws/audio).
+ */
+export function audioWsUrl(signalId: string): string {
+	const base = WS_URL.replace(/\/ws\/?$/, '/ws/audio');
+	return `${base}?signal=${encodeURIComponent(signalId)}`;
+}
+
 export interface Annotation {
 	id: string;
 	signalId: string;

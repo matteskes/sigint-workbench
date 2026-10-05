@@ -5,6 +5,7 @@
 	import { signalLevels } from '$lib/stores/audio';
 	import { tracks, setTrack } from '$lib/stores/tracks';
 	import AudioPlayer from '../audio/AudioPlayer.svelte';
+	import LiveAudioPlayer from '../audio/LiveAudioPlayer.svelte';
 	import VUMeter from '../audio/VUMeter.svelte';
 
 	let { signal }: { signal: Signal } = $props();
@@ -194,7 +195,11 @@
 		</div>
 	{/if}
 
-	<!-- Audio -->
+	<!-- Audio (§10.4 live stream, §10.5 recordings) -->
+	<div class="border-t border-slate-700 pt-3">
+		<LiveAudioPlayer signal={signal} />
+	</div>
+
 	<div class="border-t border-slate-700 pt-3">
 		<AudioPlayer signal={signal} />
 	</div>
