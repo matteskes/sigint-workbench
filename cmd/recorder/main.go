@@ -27,6 +27,7 @@ import (
 	"sigint-workbench/internal/db"
 	"sigint-workbench/internal/record"
 	"sigint-workbench/internal/sdr"
+	"sigint-workbench/internal/tfr"
 	"sigint-workbench/internal/ws"
 )
 
@@ -149,6 +150,40 @@ func main() {
 			wsSrv.Shutdown(shutdownCtx)
 		}()
 	}
+
+	// §19 (D10): on-demand time-frequency renders over stored IQ
+	// (§10.5/§11.3). Mounted internal-only (§3.2) on :9013; the
+	// api-gateway proxies POST /api/recordings/{id}/tfr here (§13.1,
+	// A3). The endpoint is always mounted — while tfr.enabled is false
+	// it answers 404 (feature absent, not an error state, §19.3).
+	tfrLimits := tfr.Limits{
+		Enabled:  cfg.TFR.Enabled != nil && *cfg.TFR.Enabled,
+		MaxSpanS: config.ResolveFloat(cfg.TFR.MaxSpanS, tfr.DefaultMaxSpan),
+		MaxNFFT:  config.ResolveInt(cfg.TFR.MaxNFFT, tfr.DefaultMaxNFFT),
+	}
+	tfrPort := config.ResolveInt(config.GetEnvInt("RECORDER_TFR_PORT", 0), cfg.TFR.ListenPort, 9013)
+	tfrLookup := func(ctx context.Context, id string) (*db.Recording, error) {
+		if database == nil {
+			return nil, db.ErrNotFound // files-only mode: nothing resolvable
+		}
+		return database.GetRecording(ctx, id)
+	}
+	tfrSrv := &http.Server{
+		Addr:              fmt.Sprintf(":%d", tfrPort),
+		Handler:           tfr.NewHandler(tfrLimits, tfrLookup).Routes(),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	go func() {
+		log.Printf("tfr: recorder :%d POST /api/recordings/{id}/tfr (enabled=%t, §19)", tfrPort, tfrLimits.Enabled)
+		if err := tfrSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("tfr server: %v", err)
+		}
+	}()
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		tfrSrv.Shutdown(shutdownCtx)
+	}()
 
 	rx, frames, err := sdr.NewIQReceiver(port, 512)
 	if err != nil {

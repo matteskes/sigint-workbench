@@ -33,3 +33,14 @@ retention:
 stream:
   listen_port: 9012
   bitrate_bps: 24000  # 24 kbps CBR, mono, 20 ms frames (960 samples)
+
+# Time-frequency analysis (§19, D10): on-demand high-resolution TFR
+# renders over stored raw-IQ recordings, computed here (§19.1). The
+# api-gateway proxies POST /api/recordings/{id}/tfr to this port
+# (§13.1); it stays internal-only (§3.2). Disabled by default (§19.5)
+# — while disabled the endpoint answers 404 (§19.3).
+tfr:
+  enabled: false
+  max_span_s: 30     # largest requestable span (§19.3 ⇒ 413 beyond)
+  max_nfft: 16384    # per-request nfft cap (§19.2)
+  listen_port: 9013  # internal TFR API

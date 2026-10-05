@@ -109,6 +109,16 @@ type ClassifierConfig struct {
 	} `yaml:"onnx"`
 }
 
+// TFRConfig holds the §19.5 time-frequency knobs. Enabled is a
+// pointer so an absent yaml block keeps the spec default (false —
+// feature absent ⇒ 404, §19.3).
+type TFRConfig struct {
+	Enabled    *bool   `yaml:"enabled"`
+	MaxSpanS   float64 `yaml:"max_span_s"`
+	MaxNFFT    int     `yaml:"max_nfft"`
+	ListenPort int     `yaml:"listen_port"` // internal TFR API (§19.3)
+}
+
 // RecorderConfig mirrors config/recorder.yaml.
 type RecorderConfig struct {
 	RecordingsDir string `yaml:"recordings_dir"`
@@ -135,6 +145,9 @@ type RecorderConfig struct {
 		ListenPort int `yaml:"listen_port"` // internal /ws/audio WS (§10.4)
 		BitrateBps int `yaml:"bitrate_bps"` // Opus CBR bitrate (§10.4: 24000)
 	} `yaml:"stream"`
+	// Time-frequency analysis (§19, D10): on-demand high-resolution
+	// renders over stored raw IQ. Disabled by default (§19.5).
+	TFR TFRConfig `yaml:"tfr"`
 }
 
 // ─── Precedence helpers (flag > env > yaml > default) ────────────────
