@@ -75,7 +75,7 @@ and geospatial visualization.
 | `ws-hub` | Go | Internal WebSocket event fan-out (not client-facing) |
 | `db` | PostGIS | Spatial database (PostgreSQL 16): signals, recordings, tracks |
 | `tiles` | tileserver-gl | Self-hosted OSM vector tiles |
-| `frontend` | SvelteKit | Interactive map + signal list; live data, recording playback, live Opus listening, and retune controls delivered |
+| `frontend` | SvelteKit | Interactive map + signal list; live data, recording playback, live Opus listening, and retune controls delivered; the UI lives at `http://localhost:5173` (dev) / `http://localhost:3000` (prod) |
 
 ## Technology Stack
 
@@ -123,8 +123,9 @@ cd sigint-workbench
 make setup
 # → Installs deps, pulls LFS models, creates .env from .env.example
 
-# 2. Configure SDRs — open http://localhost:3000/setup (the
-#    first-run wizard) or edit config/sdr-capture.yaml by hand.
+# 2. Configure SDRs — open the first-run wizard at
+#    http://localhost:5173/setup (dev; :3000/setup under
+#    production deploy) or edit config/sdr-capture.yaml by hand.
 #    No hardware? Copy config/sdr-capture.sim.yaml over
 #    config/sdr-capture.yaml first — two simulated devices
 #    sharing one iq-ingest port (SPEC §16.4).
@@ -143,11 +144,11 @@ make setup
 
 # 4a. macOS Development
 make dev
-# → Opens http://localhost:3000
+# → UI at http://localhost:5173 (Vite dev server)
 
 # 4b. Linux Production
 make deploy
-# → Opens http://localhost:3000
+# → UI at http://localhost:3000
 ```
 
 ## Project Structure
