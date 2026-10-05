@@ -15,39 +15,27 @@
 # when gain changes at runtime. Omit to disable polling.
 
 api_port: 9090
-
 sdrs:
-  - id: "rtlsdr-0"
-    driver: rtlsdr
-    usb_index: 0
-    default_freq: 146520000    # 146.52 MHz (2m ham)
-    default_gain: 40
-    default_bw: 2400000        # 2.4 MHz (RTL-SDR max practical)
-    mode: scanner              # scanner | monitor | both
-    stream_host: localhost
-    stream_port: 9000
-    # Power calibration (§5.6): presence of calibration_offset_db marks
-    # this SDR calibrated — power_dbm = power_db − gain + offset, and
-    # the UI shows dBm. Measure the offset against a known reference
-    # (docs/HARDWARE.md §6 — bin/rtl-calibrate computes it); until
-    # then leave it unset (relative dB).
-    calibration_offset_db: -55.61  # §6.2 2026-10-04 recal @ fft-size 4096 (96.5 MHz FM, gain 40.2 applied)
-    # Location (optional) — used by signal-processor to geo-locate
-    # single-receiver signals on the map. Set lat+lon together.
-    # lat: 40.7128
-    # lon: -74.0060
-
-  - id: "rtlsdr-1"
-    driver: rtlsdr
-    usb_index: 1
-    default_freq: 121500000    # 121.5 MHz (guard frequency)
-    default_gain: 40
-    default_bw: 2400000
-    calibration_offset_db: -55.68  # §6.2 2026-10-04 recal @ fft-size 4096 (96.5 MHz FM, gain 40.2 applied)
-    mode: monitor
-    stream_host: localhost
-    stream_port: 9000          # shared with rtlsdr-0 — frames carry sdr_id
-
+    - id: rtlsdr-0
+      driver: rtlsdr
+      usb_index: 0
+      default_freq: 146520000
+      default_gain: !!float 40
+      default_bw: 2400000
+      mode: scanner
+      stream_host: localhost
+      stream_port: 9000
+      calibration_offset_db: -55.61
+    - id: rtlsdr-1
+      driver: rtlsdr
+      usb_index: 1
+      default_freq: 121500000
+      default_gain: !!float 40
+      default_bw: 2400000
+      mode: monitor
+      stream_host: localhost
+      stream_port: 9000
+      calibration_offset_db: -55.68
 # Example: HackRF One (requires building sdr-capture with
 # -tags "rtlsdr,hackrf"; without the tag, startup aborts with a clear
 # error). serial selects the device — omit it to use the first found.
@@ -66,7 +54,10 @@ sdrs:
 # documented defaults; the frequency range defaults to (and is clamped
 # to) the driver's capability range.
 scan:
-  step_hz: 100000       # sweep step (default 100 kHz)
-  dwell_ms: 50          # dwell per frequency (default 50 ms)
-  # min_hz: 24000000    # sweep start (default: driver minimum, RTL-SDR 24 MHz)
-  # max_hz: 1766000000  # sweep end   (default: driver maximum, RTL-SDR 1766 MHz)
+    step_hz: 100000 # sweep step (default 100 kHz)
+    dwell_ms: 50 # dwell per frequency (default 50 ms)
+    # min_hz: 24000000    # sweep start (default: driver minimum, RTL-SDR 24 MHz)
+    # max_hz: 1766000000  # sweep end   (default: driver maximum, RTL-SDR 1766 MHz)
+
+    max_hz: 0
+    min_hz: 0

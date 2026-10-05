@@ -47,3 +47,6 @@ Thumbs.db
 docker/.env
 # Python ML training environment (local only, ~540MB)
 .venv/
+
+# §20 settings-store backups
+config/*.bak
