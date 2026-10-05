@@ -148,21 +148,25 @@ sigint-workbench/
 ├── internal/
 │   ├── sdr/                # SDR interface, drivers, UDP protocol
 │   ├── dsp/                # FFT, peak detection, filters, AGC
-│   ├── audio/              # FM/AM/SSB demodulators, WAV encoder, registry
+│   ├── audio/              # FM/AM/SSB demodulators, WAV/Opus encoders, registry
 │   ├── classify/           # Feature extraction, rules, ONNX
 │   ├── location/           # Location, tracking, 2-SDR verification
+│   ├── tdoa/               # TDOA engine: buffers, resampling, correlator, solver
+│   ├── record/             # WAV/IQ recording, live Opus WS server, retention
 │   ├── db/                 # Postgres/PostGIS models and queries
-│   ├── api/                # HTTP server, handlers
+│   ├── api/                # REST API server, capture control proxy
 │   ├── ws/                 # WebSocket hub
 │   └── config/             # Shared config loading
 ├── .github/                # GitHub Actions CI workflows
 ├── frontend/               # SvelteKit + MapLibre + Tailwind + nginx.conf
-├── db/init.sql             # PostGIS schema
+├── db/                     # PostGIS schema (init.sql) + SQL migrations
 ├── config/                 # Per-service YAML configs
 ├── docker/                 # Dockerfiles (frontend, sdr-capture, services)
 ├── tiles/                  # tileserver-gl config + setup script
 ├── models/                 # ONNX models (git-lfs)
 ├── recordings/             # Host-mounted audio/IQ recordings
+├── docs/                   # SPEC (system contract) + HARDWARE.md runbook
+├── scripts/                # fetch-ort.sh (ONNX runtime), smoke-test.sh
 ├── docker-compose.yml
 ├── Makefile
 ├── .env.example            # Template copied to .env by make setup
