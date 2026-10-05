@@ -6,18 +6,24 @@ and geospatial visualization.
 ## Features
 
 - **Dual-SDR wideband scanning** with cross-verification
-- **Real-time signal detection** and classification (rules + ONNX);
-  tracking *(planned)*
+- **Real-time signal detection** and classification (rules + ONNX)
+- **Movement tracking** — speed, heading, and persisted track paths
+  per signal (§9.4)
 - **Multilateration (TDOA)** — geolocate a craft by passively
   receiving its radio emissions (e.g., ADS-B/Mode S or ACARS)
-  and comparing arrival times across the SDR network *(planned)*
+  and comparing arrival times across the SDR network; engine and
+  processor wiring delivered, on-air validation pending a third
+  receiver (§9.5–§9.6)
 - **FM/AM/SSB voice demodulation** with live audio streaming (Opus
-  over WebSocket)
-- **Signal recording** — decoded audio (WAV) + raw IQ
-- **PostGIS-backed geospatial database** for signal locations;
-  movement tracks *(planned)*
+  over WebSocket) and in-browser playback (§10.4)
+- **Signal recording** — decoded audio (WAV) + raw IQ, with a
+  max-duration cap (§10.5, §11.1)
+- **PostGIS-backed geospatial database** for signal locations and
+  movement tracks
 - **Interactive map** (MapLibre GL + self-hosted OSM tiles) with
   live signal overlay
+- **Dashboard control** — retune receivers from the UI via the
+  capture control API (§7.4); per-signal user notes
 - **Spectrum analyzer** and **waterfall display** *(planned)*
 - **Extensible demodulator and classifier framework** — add new modes
   by implementing one interface
@@ -55,13 +61,13 @@ and geospatial visualization.
 | ------- | -------- | ----------- |
 | `sdr-capture` | Go (cgo) | Reads SDR hardware, streams IQ over UDP; scan loop and control API |
 | `iq-ingest` | Go | Receives IQ streams, validates frames, fans out to consumers |
-| `signal-processor` | Go | DSP, classification (rules + ONNX), per-SDR location, persistence, event publishing; 2-SDR verification delivered, TDOA multilateration *(planned)* |
-| `recorder` | Go | Audio demodulation (FM/AM), WAV + raw-IQ recording, live Opus audio |
+| `signal-processor` | Go | DSP, classification (rules + ONNX), per-SDR location, persistence, event publishing; 2-SDR verification, tracking, and the TDOA engine + wiring delivered (on-air TDOA validation pending a third receiver) |
+| `recorder` | Go | Audio demodulation (FM/AM/SSB), WAV + raw-IQ recording, live Opus audio |
 | `api-gateway` | Go | Single client ingress: REST API, recording file serving, `/ws` + `/ws/audio` relays, capture control proxy |
 | `ws-hub` | Go | Internal WebSocket event fan-out (not client-facing) |
 | `db` | PostGIS | Spatial database (PostgreSQL 16): signals, recordings, tracks |
 | `tiles` | tileserver-gl | Self-hosted OSM vector tiles |
-| `frontend` | SvelteKit | Interactive map + signal list; live data + recording playback delivered, live Opus listening *(planned)* |
+| `frontend` | SvelteKit | Interactive map + signal list; live data, recording playback, live Opus listening, and retune controls delivered |
 
 ## Technology Stack
 
@@ -142,7 +148,7 @@ sigint-workbench/
 ├── internal/
 │   ├── sdr/                # SDR interface, drivers, UDP protocol
 │   ├── dsp/                # FFT, peak detection, filters, AGC
-│   ├── audio/              # FM/AM demodulators, WAV encoder, registry
+│   ├── audio/              # FM/AM/SSB demodulators, WAV encoder, registry
 │   ├── classify/           # Feature extraction, rules, ONNX
 │   ├── location/           # Location, tracking, 2-SDR verification
 │   ├── db/                 # Postgres/PostGIS models and queries
