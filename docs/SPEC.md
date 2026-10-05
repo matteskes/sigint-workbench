@@ -1010,11 +1010,11 @@ the new columns.
 **Status: demodulators (incl. SSB), the WAV encoder, and the
 streaming `WAVWriter` are `[implemented]`; in-band capture (D1) is
 `[implemented]` in `cmd/recorder` (§10.2, DB-poll tracked sessions);
-the live Opus transport (D1b, §10.4) is `[implemented]` recorder-side
-— per-signal mux + internal `:9012/ws/audio` server, relayed by the
-gateway's `GET /ws/audio` (§2.2) — while browser live playback is
-`[planned]` (§10.4, slice 7); the §10.6 `audio.level` feed is
-`[implemented]` end to end, frontend store included (Phase 4).**
+the live Opus transport (D1b, §10.4) is `[implemented]` end to end —
+per-signal mux + internal `:9012/ws/audio` server, relayed by the
+gateway's `GET /ws/audio` (§2.2), consumed by the dashboard's
+`LiveAudioPlayer` (WebCodecs, slice 7); the §10.6 `audio.level` feed
+is `[implemented]` end to end, frontend store included (Phase 4).**
 
 ### 10.1 Demodulator contract
 
@@ -1193,9 +1193,11 @@ AnalyserNode meter.
 
 **Status: sweep/TTL `[implemented]` (inactive-flag model, §11.2);
 in-band recording trigger/writer is `[implemented]` in `cmd/recorder`
-(§10.2: silence-hysteresis sessions, demodulator-registry gated);
-archive purge and file retention are `[implemented]` (§11.3
-`SelectPurge` + `PurgeInactiveSignals`, 30 days / 50 GB).**
+(§10.2: silence-hysteresis sessions, demodulator-registry gated),
+with the §11.1 max-duration cap (`iq.max_duration_s`) enforced in the
+same poll and raw-IQ output per §10.5 (`iq.enabled`); archive purge
+and file retention are `[implemented]` (§11.3 `SelectPurge` +
+`PurgeInactiveSignals`, 30 days / 50 GB).**
 
 ### 11.1 Recording trigger
 
