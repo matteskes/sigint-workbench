@@ -336,3 +336,93 @@ Computer Networks (Elsevier)" — cite as a 2022 survey. Read
   match or beat deep residual nets at scale — aligns the B-rung
   shortlist with Scholl's all-conv/deep-CNN result; skip deep
   residual stacks unless O'Shea-arranged.
+
+## Liao, Liang & Lv 2025 — mixed-signal AMC (FCT, peripheral)
+
+M. Liao, Y. Liang, and P. Lv (Key Lab of Cognition and Decision
+Intelligence for Complex Systems, CAS Institute of Automation,
+Beijing), "FCT: An Adaptive Model for Classification of Mixed
+Radio Signals," Electronics (MDPI) 14(10):2028, 2025-05-16,
+<https://doi.org/10.3390/electronics14102028> (CC-BY). Read
+2026-10-04 (full text; 11 pages, 28 refs, 0 citations at read
+time). Tagged peripheral: AMC, not fingerprinting — logged for
+the co-channel-overlap marker and one architecture pattern.
+
+### The task — co-channel mixed-signal AMC
+
+- Automatic MODULATION classification of overlapping co-channel
+  signals ("time-frequency aliasing"), emphasizing low SNR. This
+  is the O'Shea lineage (what waveform, not which transmitter):
+  it does not touch the workbench's core emitter-ID problem.
+- Claim: current models degrade at low SNR and "cannot achieve
+  good classification results of mixed radio signals"; FCT
+  targets exactly that regime.
+
+### The FCT architecture
+
+- Three heads on raw IQ: (1) an FNN gate outputs x ≈ P(high-SNR
+  frame) via sigmoid, with the high/low boundary set at 0 dB
+  from the empirical crossover; (2) an L-CNN (residual stacks,
+  MaxPool2D, SELU dense, dropout) specialized for high SNR,
+  weighted by x; (3) an L-Transformer (self-attention block,
+  GlobalAveragePooling1D, batch-norm, alpha-dropout, SELU)
+  specialized for low SNR, weighted by 1−x. Softmax over the
+  blended 24-class distribution; "adaptive" = x is trained
+  jointly with everything else (CCE, Adam, batch 1024, ≤1000
+  epochs, early stop patience 10).
+- The gate learns what a measured-SNR switch would hardcode — a
+  sensible pattern, and notably a task-level admission that
+  attention helps only below 0 dB here.
+
+### Experiments — RadioML2018.01A
+
+- Subsets of DeepSig RadioML2018.01A: 24 mods, SNR −20…+30 dB in
+  2 dB steps, 1.5M examples × 1024 IQ; random 8:2 train/test
+  split drawn per mod × SNR. GTX 2080Ti; the paper claims both
+  PyTorch 1.12 and tensorflow-gpu 1.15 (unexplained).
+- The mixture-construction recipe (their §2, Eq. (1)) did not
+  survive text extraction — equation images only — so how two
+  signals are superposed, at what power ratio, and how a
+  two-signal mixture maps onto a 24-class label space is
+  unverified. Nearest kin: their ref [26] (Xu & Lin,
+  arXiv:2205.09916), same dataset/task line.
+
+### Results vs baselines
+
+- FCT 84.04% overall, 95.70% peak; CCNN-Atten 57.92% (+26.12 pp
+  for FCT), Ti-CNN 65.11% (+18.93 pp). Below 0 dB the L-
+  Transformer beats Ti-CNN; above, the CNN family wins — the
+  paper presents this crossover as justifying the gate.
+- Confusion matrices across all 24 classes: diagonal sharpens
+  with SNR, as expected; FCT's is the cleanest of the three.
+
+### Evidence quality — discount the +26 pp
+
+- Synthetic-only: mixtures from RadioML2018.01A waveforms, no
+  on-air data anywhere; the authors' own conclusion calls the
+  problem "a data fitting problem without actual tests" and
+  defers real USRP captures to future work.
+- Random split of a dataset with known frame-generation leakage
+  inflates absolutes; baseline fairness on a self-defined
+  mixture task is unverifiable (26 pp over one baseline
+  retrained by the authors); the §2 gap above; rapid-turnaround
+  venue, 0 citations at read time.
+- Verdict: interesting pattern, weak evidence. Cite the
+  pattern, not the numbers.
+
+### Applicability — peripheral, with two keepers
+
+- Overlap marker: multi-emitter co-channel reception is the
+  Jagannath §VI open problem; a 2025 modulation-side paper is
+  still 100% synthetic superpositions — independently confirms
+  the "published SOTA assumes one emitter per capture"
+  calibration noted in the Jagannath entry. Relevant when the
+  E-ladder goes on-air and §18/§19 waterfalls see real overlap.
+- Architecture prior: SNR-gated dual-specialist heads (CNN
+  above 0 dB, attention below) — compatible in spirit with the
+  B-rung shortlist but NOT shortlist input at this evidence
+  level; if ever tried, gate on measured SNR first and skip
+  the learned gate.
+- Explicitly not core-path: nothing for §6.6 ladder runs, §6.7
+  transients, or E0; no SPEC cross-ref changes (§6.6/§6.7
+  verified unaffected).
