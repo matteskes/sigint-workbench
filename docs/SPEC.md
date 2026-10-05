@@ -1562,6 +1562,12 @@ General contract:
 | `GET/POST /api/signals/{id}/annotations` | `[implemented]` | List a signal's user notes (newest first) / add one — POST body `{"userNote"}` ⇒ `201` + created row; unknown signal ⇒ `404`; blank or missing note ⇒ `400` (§12.5) |
 | `GET /api/signals/{id}/track` | `[implemented]` | Current track `{"signalId","path":[{lat,lon}…],"speedKmh","headingDeg","updatedAt"}`; no track ⇒ `404` (§9.4, §12.4) |
 | `POST /api/recordings/{id}/tfr` | `[implemented]` | On-demand time-frequency render over stored IQ (§19, D10): body `{"method","t0","t1","nfft","overlap?","window?","freqSpan?"}` ⇒ numeric int8-dB tiles + metadata (method, span, bin geometry, §19.2 dominant artifact), proxied to the recorder; unknown/no-IQ/purged recording ⇒ `404`, invalid params ⇒ `400`, span > `tfr.max_span_s` ⇒ `413`; `tfr.enabled: false` ⇒ `404` (§19.3) |
+| `GET /api/settings` | `[implemented]` | §20 schema + current values for all five sections (values `null` when a file is missing or unparseable) |
+| `GET /api/settings/{section}` | `[implemented]` | One section schema + values; unknown section ⇒ `404` (§20) |
+| `PUT /api/settings/{section}` | `[implemented]` | Validate + commit a section (§20.3); field error ⇒ `400 {"error","field"}`, unknown section ⇒ `404`; the answer names the services to restart (D11) |
+| `GET /api/setup/status` | `[implemented]` | Concurrent ≤2 s probes (db, ws-hub, recorder, capture) + config-dir writability — documented §13 exception: fan-out, not proxying (§20.4) |
+| `GET /api/setup/state` | `[implemented]` | First-run flag (§20.5); DB down ⇒ `503` like every /api route |
+| `PUT /api/setup/state` | `[implemented]` | `{"first_run": bool}` completes or re-arms the wizard (§20.5) |
 
 ### 13.2 Gap fixes to existing endpoints
 
@@ -1813,7 +1819,7 @@ built-in default):
 | iq-ingest | `config/iq-ingest.yaml` (`-config`/`CONFIG`); env `LISTEN_PORT`, `CONSUMERS` and flags `-port/-consumers` override |
 | signal-processor | `config/signal-processor.yaml` + `config/classifier.yaml` (`-processor-config`/`-classifier-config`); flags `-port/-threshold/-max-peaks/-model` and env `SIGNAL_TTL`, `SDR_CONFIG`, `MODEL_PATH`, `WS_HUB_URL` override |
 | recorder | `config/recorder.yaml` (`-config`); flags `-port/-ws-port/-dir` and env `RECORDER_PORT`, `RECORDER_WS_PORT`, `RECORDINGS_DIR`, `WS_HUB_URL` (§10.6 `audio.level` publisher; unset = disabled) override |
-| api-gateway | env `RECORDINGS_DIR`, `ALLOWED_ORIGINS` (CORS allowlist, §17.2), `WS_HUB_ADDR` (`/ws` relay, §2.2), `RECORDER_WS_ADDR` (`/ws/audio` relay, §10.4), `CAPTURE_CTRL_ADDR` (control proxy, §7.4) |
+| api-gateway | env `RECORDINGS_DIR`, `ALLOWED_ORIGINS` (CORS allowlist, §17.2), `WS_HUB_ADDR` (`/ws` relay, §2.2), `RECORDER_WS_ADDR` (`/ws/audio` relay, §10.4), `CAPTURE_CTRL_ADDR` (control proxy, §7.4), `CONFIG_DIR` (writable config dir backing the setup screen, §20) |
 
 **Target:** the YAML files in `config/` are the **single source of
 truth**; each service loads its own file (flags/env remain as
@@ -2269,6 +2275,87 @@ Classifier-feature evolution (including TF-derived features) is
 tracked in §6.6; emitter-identity research (transient capture,
 cross-receiver probes) is tracked in §6.7.
 
+## 20. First-Run Setup Screen
+
+### 20.1 Scope & semantics
+
+The gateway serves a browser wizard (`/setup` in the frontend) that
+configures every user-facing option of the five editable YAML files
+without hand editing: `sdr-capture.yaml`, `signal-processor.yaml`,
+`recorder.yaml`, `classifier.yaml` and `iq-ingest.yaml` (receiver
+inventory, detection/processing, recorder/TFR, classifier and
+ingest knobs; the values are the §16 reference). It is
+intentionally NOT a deployment editor: listen ports, dirs, URLs,
+model paths and compose wiring stay in the files and `.env`
+because they must change in lockstep with docker-compose and
+cannot be applied from a browser.
+
+Services read their YAML once at startup, so every save is
+**restart-to-apply**: the API answer and the UI name the services
+to restart (D11). Exception: §7.4 live gain/frequency and §9.3
+lat/lon/active remain live-appliable through their existing
+endpoints.
+
+### 20.2 Schema is server-authoritative
+
+`internal/settings` owns the schema — typed fields with units,
+bounds, display defaults, help and warning text, optional-key
+semantics, and one list field (the SDR inventory). The frontend
+renders it generically and never hard-codes keys, so schema and UI
+cannot drift. Display values resolve exactly the way each service
+resolves them at load time (§9.6 TDOA defaults, §18.4 spectrum
+resolve, §7.1 scan defaults), and the shipped `config/*.yaml` are
+snapshot-tested against the schema to catch drift.
+
+### 20.3 Write path & safety
+
+Saves go `coerce → yaml.Node edit → re-marshal → typed
+re-validation → backup → atomic rename`:
+
+- Edits preserve mapping comments; keys the wizard creates carry
+  `# Configured via the setup screen (SPEC §20).`. Rewritten list
+  items (the SDR list) are regenerated without inner comments.
+- The marshalled result is re-decoded into the same typed configs
+  the services load and re-validated against their domain rules
+  (FFT power-of-two 64-16384, §18.1 `spectrum.bins` divides
+  `fft.size`, §9.6 buffer horizon covers the window, lat/lon set
+  together, §5.6 calibration presence semantics), so a save can
+  never produce a file a service would reject at startup. Field
+  failures answer `400 {"error", "field"}`; unknown sections
+  answer `404`.
+- The previous file is kept as `<file>.bak`; new content lands via
+  `tmp + rename` (atomic). Nothing is committed on any error.
+- Presence semantics: clearing an optional string removes the key
+  (`stream_format` absent = `sdr1` default; an absent
+  `calibration_offset_db` marks the device uncalibrated, §5.6).
+
+Compose mounts `./config:/config:ro` on every service and the
+single writable copy (`:rw`, `CONFIG_DIR=/config`) on the gateway.
+Directory mounts are required: the atomic rename changes the inode,
+and per-file binds would keep serving the stale old file until
+restart.
+
+### 20.4 Endpoints
+
+The six routes are part of the §13.1 contract (table above);
+§20.3 carries their behavior. `GET /api/setup/status` fans out
+concurrent ≤2 s probes of db, ws-hub, recorder and capture plus a
+config-dir writability check — the one documented §13 exception to
+the proxy rule, so a first-run user sees every unhealthy service
+at once instead of one failure at a time. First-run state lives in
+`app_settings` (migration 005; §20.5) and drives a dismissible
+banner on the dashboard until the wizard is completed or
+dismissed. The flag is app state — §16 remains the source of
+truth for service configuration.
+
+### 20.5 First-run state
+
+`db.app_settings` is a tiny gateway-managed key/value store
+(`key`/`value`/`updated_at`), holding the first-run flag today and
+nothing else. It exists so the wizard can be completed across
+browsers without adding config-file state, and it is deliberately
+not part of any service YAML.
+
 ## Appendix A — Decision Register
 
 Locked design decisions and the section carrying their normative
@@ -2290,6 +2377,7 @@ defaults — they have no separate normative surface.)
 | A3 | Single client ingress: api-gateway proxies `/ws` and `/ws/audio`; hub + recorder internal-only | §2.2, §3.2 |
 | D9 | Spectrum: hub JSON events (`spectrum.frame`), max-pool decimation of the §5.7 FFT to `spectrum.bins`, ≤ `rate_hz` frames/s per SDR, client-side waterfall history, canvas rendering with no new frontend dependencies; dedicated binary WS relay kept as the documented bandwidth fallback | §18 |
 | D10 | Time-frequency analysis: on-demand renders over stored IQ only (§10.5, §11.3) — never in the §5 detection path, §14 events, or the §18 feed; methods `stft`/`reassigned` (+ optional `spwvd`, `cwt-morlet`); REST via the gateway proxy (A3); synchronous, canvas rendering, no new frontend deps; implementation after §18 | §19 |
+| D11 | Setup screen: browser-edited YAML with restart-to-apply semantics; schema server-authoritative in `internal/settings`; deployment wiring deliberately not exposed | §20 |
 
 ## Appendix B — Glossary
 

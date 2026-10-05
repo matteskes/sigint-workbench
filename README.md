@@ -29,6 +29,10 @@ and geospatial visualization.
 - **Time-frequency analysis** — on-demand STFT/reassigned/SPWVD/
   Morlet renders per recording, inspect action + waterfall
   drag-select entry points (§19)
+- **First-run setup screen** — configure receivers, scan,
+  detection, recorder and classifier options from a browser
+  wizard; validated, comment-preserving YAML saves with a plain
+  restart to apply (§20)
 - **Extensible demodulator and classifier framework** — add new modes
   by implementing one interface
 
@@ -119,9 +123,11 @@ cd sigint-workbench
 make setup
 # → Installs deps, pulls LFS models, creates .env from .env.example
 
-# 2. Configure SDRs — edit config/sdr-capture.yaml
-#    (no hardware? run config/sdr-capture.sim.yaml instead — two
-#     simulated devices sharing one iq-ingest port; SPEC §16.4)
+# 2. Configure SDRs — open http://localhost:3000/setup (the
+#    first-run wizard) or edit config/sdr-capture.yaml by hand.
+#    No hardware? Copy config/sdr-capture.sim.yaml over
+#    config/sdr-capture.yaml first — two simulated devices
+#    sharing one iq-ingest port (SPEC §16.4).
 
 # 3. Set Up Map Tiles
 ./tiles/setup-tiles.sh california 10 16
