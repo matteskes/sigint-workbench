@@ -66,13 +66,21 @@ geospatial visualization.
 
 ## Commit / PR guidelines
 
+- **Never use shell heredocs for git commit messages** — no
+  `cat > file <<'EOF'`, no `git commit -F -`, no multiline
+  `git commit -m`. The shell integration layer on this terminal
+  mangles them: a heredoc-written message garbled mid-flight and
+  aborted a commit (2026-10-04).
 - **Every commit goes through a message file:** write the message
-  to a file inside `.git/` (e.g. `.git/COMMIT_MSG.txt`), commit
-  with `git commit -F .git/COMMIT_MSG.txt`, then delete the file.
-  Rationale: inline `git commit -m` strings — especially multiline
-  ones — get mangled by the shell integration layer on this
-  terminal. Parking the file under `.git/` keeps it out of
-  `git add -A` so it can never be swept into the commit itself.
+  to a file inside `.git/` (e.g. `.git/COMMIT_MSG.txt`) with the
+  editor tool (create it fresh each time; `rm` a stale one first),
+  commit with `git commit -F .git/COMMIT_MSG.txt`, then delete the
+  file. Parking the file under `.git/` keeps it out of `git add -A`
+  so it can never be swept into the commit itself.
+- **Verify before pushing:** `GIT_PAGER=cat git --no-pager log -1`
+  must show the message intact (UTF-8, line breaks). If garbled,
+  amend from a fresh message file
+  (`git commit --amend -F .git/COMMIT_MSG.txt`) before `git push`.
 - Conventional Commits with a scope: `feat(recorder):`, `fix(lint):`,
   `docs(spec):`, `chore:`. Cite SPEC refs, e.g.
   `feat(recorder): ... (D1, §10.3-§10.4)`.
