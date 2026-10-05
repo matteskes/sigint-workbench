@@ -2121,7 +2121,7 @@ untouched.
 ```text
 {"type":"spectrum.frame","payload":{
   "sdrId":"sim0","freqHz":100000000,"sampleRate":2400000,
-  "t":"2026-10-04T12:00:00Z","bins":256,"df":4687.5,
+  "t":"2026-10-04T12:00:00Z","bins":256,"df":585.9375,
   "db":[-87.3,-84.1, ...]}}
 ```
 
