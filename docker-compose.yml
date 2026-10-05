@@ -20,7 +20,13 @@ services:
       - /dev/bus/usb/001/002:/dev/bus/usb/001/002
       - /dev/bus/usb/001/003:/dev/bus/usb/001/003
     volumes:
-      - ./config/sdr-capture.yaml:/config.yaml:ro
+      # §20: directory (not per-file) mount — the setup screen rewrites
+      # files via tmp+rename (inode changes; per-file mounts would
+      # keep serving stale bytes until restart).
+      - ./config:/config:ro
+    # The -config flag default (config/sdr-capture.yaml) does not exist
+    # in the container; point it at the mounted directory explicitly.
+    command: ["-config", "/config/sdr-capture.yaml"]
     # Stream targets come from the mounted YAML (stream_host/stream_port);
     # frames carry sdr_id, so several devices may share one ingest port.
     networks: [sdr-net]
@@ -35,7 +41,8 @@ services:
     ports:
       - "${IQ_INGEST_UDP_PORT:-9000}:9000/udp"
     volumes:
-      - ./config/iq-ingest.yaml:/config/iq-ingest.yaml:ro
+      # §20: directory mount (stale-inode safe, see sdr-capture).
+      - ./config:/config:ro
     environment:
       - CONFIG=/config/iq-ingest.yaml
       - LISTEN_PORT=9000
@@ -50,9 +57,8 @@ services:
       context: .
       dockerfile: docker/Dockerfile.classifier
     volumes:
-      - ./config/signal-processor.yaml:/config/signal-processor.yaml:ro
-      - ./config/classifier.yaml:/config/classifier.yaml:ro
-      - ./config/sdr-capture.yaml:/config/sdr-capture.yaml:ro
+      # §20: directory mount (stale-inode safe, see sdr-capture).
+      - ./config:/config:ro
       - ./models:/models:ro
     environment:
       - LISTEN_PORT=9010
@@ -84,9 +90,10 @@ services:
     # the api-gateway relays /ws/audio to ws://recorder:9012 (§3.2).
     volumes:
       - ./recordings:/recordings
-      - ./config/recorder.yaml:/config.yaml:ro
+      # §20: directory mount (stale-inode safe, see sdr-capture).
+      - ./config:/config:ro
     environment:
-      - RECORDER_CONFIG=/config.yaml
+      - RECORDER_CONFIG=/config/recorder.yaml
       - DB_URL=${DB_URL:-postgres://sdr:sdr@db:5432/sdr?sslmode=disable}
       # §10.6: coarse audio.level feed to the hub (≤ 10 Hz).
       - WS_HUB_URL=http://ws-hub:8081
@@ -106,6 +113,9 @@ services:
     environment:
       - DB_URL=${DB_URL:-postgres://sdr:sdr@db:5432/sdr?sslmode=disable}
       - RECORDINGS_DIR=/recordings
+      # §20 setup screen: the ONLY rw config mount — rewrites the
+      # service YAMLs in place (restart to apply).
+      - CONFIG_DIR=/config
       - WS_HUB_ADDR=ws-hub:8081
       # /ws/audio relay target (§10.4): the recorder's internal
       # audio WS, reachable only on sdr-net.
@@ -121,6 +131,8 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
     volumes:
       - ./recordings:/recordings:ro
+      # §20: writable config dir backing the setup screen (SPEC §20).
+      - ./config:/config:rw
     networks: [sdr-net]
     depends_on: [db, ws-hub, recorder]
     restart: unless-stopped
