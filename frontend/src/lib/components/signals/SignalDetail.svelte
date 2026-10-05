@@ -1,12 +1,13 @@
 <script lang="ts">
-	import { fetchAnnotations, addAnnotation, fetchTrack } from '$lib/api/client';
-	import type { Annotation } from '$lib/api/client';
+	import { fetchAnnotations, addAnnotation, fetchTrack, fetchRecordings } from '$lib/api/client';
+	import type { Annotation, Recording } from '$lib/api/client';
 	import type { Signal } from '$lib/stores/signals';
 	import { signalLevels } from '$lib/stores/audio';
 	import { tracks, setTrack } from '$lib/stores/tracks';
 	import AudioPlayer from '../audio/AudioPlayer.svelte';
 	import LiveAudioPlayer from '../audio/LiveAudioPlayer.svelte';
 	import VUMeter from '../audio/VUMeter.svelte';
+	import TfrPanel from '../analysis/TfrPanel.svelte';
 
 	let { signal }: { signal: Signal } = $props();
 
@@ -16,17 +17,30 @@
 	let noteText = $state('');
 	let saving = $state(false);
 
+	// Recordings (§12.3) + the §19 inspect target (one at a time).
+	let recordings = $state<Recording[]>([]);
+	let inspectId = $state<string | null>(null);
+
 	$effect(() => {
 		const id = signal.id;
 		let cancelled = false;
 		notes = [];
 		noteText = '';
+		recordings = [];
+		inspectId = null;
 		fetchAnnotations(id)
 			.then((list) => {
 				if (!cancelled) notes = list;
 			})
 			.catch(() => {
 				if (!cancelled) notes = [];
+			});
+		fetchRecordings(id)
+			.then((list) => {
+				if (!cancelled) recordings = list;
+			})
+			.catch(() => {
+				if (!cancelled) recordings = [];
 			});
 		return () => {
 			cancelled = true;
@@ -198,6 +212,45 @@
 	<!-- Audio (§10.4 live stream, §10.5 recordings) -->
 	<div class="border-t border-slate-700 pt-3">
 		<LiveAudioPlayer signal={signal} />
+	</div>
+
+	<!-- Recordings (§12.3) with the §19.4 inspect action -->
+	<div class="border-t border-slate-700 pt-3">
+		<div class="text-xs text-slate-500">Recordings</div>
+		{#if recordings.length === 0}
+			<div class="text-sm text-slate-500">None yet</div>
+		{:else}
+			<ul class="mt-1 space-y-1">
+				{#each recordings as rec (rec.id)}
+					<li class="flex items-center justify-between gap-2">
+						<div class="min-w-0 text-xs">
+							<div class="truncate font-mono text-slate-300">
+								{new Date(rec.startTime).toLocaleTimeString()}
+							</div>
+							<div class="text-[10px] text-slate-500">
+								{rec.durationS.toFixed(1)} s · {rec.fileFormat.toUpperCase()}
+								· {(rec.sampleRate / 1000).toFixed(0)} kS/s
+							</div>
+						</div>
+						{#if rec.fileFormat === 'iq'}
+							<button
+								class="shrink-0 rounded px-2 py-0.5 text-xs {inspectId === rec.id
+									? 'bg-sky-700 text-white'
+									: 'bg-slate-800 text-slate-300 hover:bg-slate-700'}"
+								onclick={() => (inspectId = inspectId === rec.id ? null : rec.id)}
+							>
+								{inspectId === rec.id ? 'Close' : 'Inspect'}
+							</button>
+						{/if}
+					</li>
+					{#if inspectId === rec.id}
+						<li class="rounded border border-slate-700 bg-slate-900/60 p-2">
+							<TfrPanel recording={rec} />
+						</li>
+					{/if}
+				{/each}
+			</ul>
+		{/if}
 	</div>
 
 	<div class="border-t border-slate-700 pt-3">

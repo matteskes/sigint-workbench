@@ -215,3 +215,97 @@ export async function fetchTrack(signalId: string): Promise<SignalTrack> {
 	if (!res.ok) throw new Error(`API error: ${res.status}`);
 	return res.json();
 }
+
+/** One `recordings` row (§12.3). */
+export interface Recording {
+	id: string;
+	signalId: string;
+	startTime: string;
+	endTime: string;
+	durationS: number;
+	sampleRate: number;
+	centerFreq: number;
+	bandwidthHz: number;
+	filePath: string;
+	fileFormat: string;
+	sizeBytes: number;
+}
+
+/** Lists recordings, optionally for one signal, newest first (§12.3). */
+export async function fetchRecordings(signalId: string): Promise<Recording[]> {
+	const res = await fetch(
+		`${API_URL}/api/recordings?${new URLSearchParams({ signalId, limit: '20' })}`
+	);
+	if (!res.ok) throw new Error(`API error: ${res.status}`);
+	return res.json();
+}
+
+/**
+ * §19.3 TFR request body. t0/t1 are seconds within the recording;
+ * freqSpan is absolute Hz (recording center ± sampleRate/2).
+ */
+export interface TFRRequest {
+	method: 'stft' | 'reassigned' | 'spwvd' | 'cwt-morlet';
+	t0?: number;
+	t1?: number;
+	nfft: number;
+	overlap?: number;
+	window?: string;
+	freqSpan?: [number, number];
+}
+
+/**
+ * §19.3 response: numeric tiles (row-major, row 0 = freqLoHz, col 0 =
+ * t0; int8 dB relative to dbRef at 1 dB/LSB, floor −128) plus metadata
+ * naming the §19.2 dominant artifact.
+ */
+export interface TFRResult {
+	recordingId: string;
+	method: TFRRequest['method'];
+	window?: string;
+	t0: number;
+	t1: number;
+	nfft: number;
+	hop: number;
+	overlap: number;
+	sampleRate: number;
+	centerFreq: number;
+	freqLoHz: number;
+	freqHiHz: number;
+	rows: number;
+	cols: number;
+	dbRef: number;
+	dbStep: number;
+	tile: number[];
+	artifact: string;
+	elapsedMs: number;
+	note?: string;
+}
+
+/**
+ * §19.4: requests a render through the gateway proxy (§19.3). Errors
+ * carry the server's message — 404 covers both `tfr.enabled: false`
+ * (feature absent) and unknown/purged recordings; 413 is the span
+ * cap; 400 is a parameter the picker should correct.
+ */
+export async function requestTFR(recordingId: string, req: TFRRequest): Promise<TFRResult> {
+	const res = await fetch(
+		`${API_URL}/api/recordings/${encodeURIComponent(recordingId)}/tfr`,
+		{
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(req)
+		}
+	);
+	if (!res.ok) {
+		let msg = `API error: ${res.status}`;
+		try {
+			const body = await res.json();
+			if (body?.error) msg = body.error;
+		} catch {
+			// non-JSON error body — keep the status line
+		}
+		throw new Error(msg);
+	}
+	return res.json();
+}

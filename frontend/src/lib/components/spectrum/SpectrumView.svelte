@@ -6,6 +6,7 @@
 		selectedSdrId,
 		selectedSpectrum
 	} from '$lib/stores/spectrum';
+	import { spectrumSelection, dragToSelection } from '$lib/stores/tfr';
 	import type { SpectrumFrame } from '$lib/api/client';
 
 	// §18.3: plain <canvas> + requestAnimationFrame, no new dependencies.
@@ -183,6 +184,63 @@
 		dirty = true;
 	}
 
+	// §19.4 drag-select (D10): a horizontal drag across the waterfall
+	// picks a frequency span for the TFR inspector; the time context is
+	// the visible waterfall window. A plain click (degenerate drag)
+	// clears the selection. Purely a client-side draft — nothing is
+	// fetched until a recording render is requested in the inspector.
+	let dragX0: number | null = null;
+	let dragX1: number | null = null;
+
+	$: selection = $spectrumSelection;
+	$: selLabel = selection
+		? `sel ${(Math.min(selection.freqLoHz, selection.freqHiHz) / 1e6).toFixed(3)}–${(
+				Math.max(selection.freqLoHz, selection.freqHiHz) / 1e6
+		  ).toFixed(3)} MHz`
+		: '';
+
+	function canvasX(e: PointerEvent): number {
+		if (!waterfallEl) return 0;
+		const rect = waterfallEl.getBoundingClientRect();
+		if (rect.width < 1) return 0;
+		return ((e.clientX - rect.left) / rect.width) * waterfallEl.width;
+	}
+
+	function dragDown(e: PointerEvent): void {
+		dragX0 = canvasX(e);
+		dragX1 = dragX0;
+	}
+
+	function dragMove(e: PointerEvent): void {
+		if (dragX0 !== null) dragX1 = canvasX(e);
+	}
+
+	function dragUp(e: PointerEvent): void {
+		if (dragX0 === null || !waterfallEl) {
+			dragX0 = dragX1 = null;
+			return;
+		}
+		const x1 = canvasX(e);
+		const f: SpectrumFrame | null = latest;
+		if (f && f.sampleRate > 0) {
+			const t0 = $selectedSpectrum?.rows.length
+				? Date.parse($selectedSpectrum.rows[0].t)
+				: NaN;
+			const t1 = Date.parse(f.t);
+			const sel = dragToSelection(
+				dragX0,
+				x1,
+				waterfallEl.width,
+				f.freqHz - f.sampleRate / 2,
+				f.freqHz + f.sampleRate / 2,
+				Number.isNaN(t0) ? 0 : t0,
+				Number.isNaN(t1) ? 0 : t1
+			);
+			spectrumSelection.set(sel);
+		}
+		dragX0 = dragX1 = null;
+	}
+
 	onMount(() => {
 		const unsub = selectedSpectrum.subscribe(() => {
 			dirty = true;
@@ -244,14 +302,39 @@
 			height={96}
 			class="w-full rounded bg-slate-950"
 		></canvas>
-		<canvas
-			bind:this={waterfallEl}
-			width={bins}
-			height={WATERFALL_ROWS}
-			class="mt-1 w-full rounded bg-slate-950"
-		></canvas>
+		<div class="relative touch-none select-none">
+			<canvas
+				bind:this={waterfallEl}
+				width={bins}
+				height={WATERFALL_ROWS}
+				class="mt-1 block w-full rounded bg-slate-950 cursor-crosshair"
+				on:pointerdown={dragDown}
+				on:pointermove={dragMove}
+				on:pointerup={dragUp}
+				on:pointerleave={dragUp}
+			></canvas>
+			{#if dragX0 !== null && dragX1 !== null && dragX0 !== dragX1}
+				<div
+					class="pointer-events-none absolute top-0 bottom-0 border-x border-sky-400 bg-sky-400/10"
+					style="left:{(Math.min(dragX0, dragX1) / bins) * 100}%; width:{(
+						Math.abs(dragX1 - dragX0) /
+						bins
+					) * 100}%"
+				></div>
+			{/if}
+		</div>
 		<canvas bind:this={tickEl} width={bins} height={14} class="w-full"></canvas>
 
-		<div class="mt-1 text-[10px] text-slate-500">{spanLabel} · dB (rel.)</div>
+		<div class="mt-1 text-[10px] text-slate-500">
+			{spanLabel} · dB (rel.)
+			{#if selLabel}
+				· <span class="text-sky-400">{selLabel}</span>
+			{/if}
+		</div>
+		{#if !selection}
+			<div class="mt-0.5 text-[10px] text-slate-600">
+				drag across the waterfall to pick a span for time-frequency analysis
+			</div>
+		{/if}
 	{/if}
 </div>

@@ -1561,7 +1561,7 @@ General contract:
 | `GET /api/sdrs/{id}/status` | `[implemented]` | Proxy of capture control `GET /api/v1/status` filtered to the device (§7.4); capture down ⇒ `502`, unknown id ⇒ `404` |
 | `GET/POST /api/signals/{id}/annotations` | `[implemented]` | List a signal's user notes (newest first) / add one — POST body `{"userNote"}` ⇒ `201` + created row; unknown signal ⇒ `404`; blank or missing note ⇒ `400` (§12.5) |
 | `GET /api/signals/{id}/track` | `[implemented]` | Current track `{"signalId","path":[{lat,lon}…],"speedKmh","headingDeg","updatedAt"}`; no track ⇒ `404` (§9.4, §12.4) |
-| `POST /api/recordings/{id}/tfr` | `[planned]` | On-demand time-frequency render over stored IQ (§19, D10): body `{"method","t0","t1","nfft","overlap?","freqSpan?"}` ⇒ PNG/tiles + metadata, proxied to the recorder; unknown recording ⇒ `404`, invalid params ⇒ `400`, span > `tfr.max_span_s` ⇒ `413`; `tfr.enabled: false` ⇒ `404` (§19.3) |
+| `POST /api/recordings/{id}/tfr` | `[implemented]` | On-demand time-frequency render over stored IQ (§19, D10): body `{"method","t0","t1","nfft","overlap?","window?","freqSpan?"}` ⇒ numeric int8-dB tiles + metadata (method, span, bin geometry, §19.2 dominant artifact), proxied to the recorder; unknown/no-IQ/purged recording ⇒ `404`, invalid params ⇒ `400`, span > `tfr.max_span_s` ⇒ `413`; `tfr.enabled: false` ⇒ `404` (§19.3) |
 
 ### 13.2 Gap fixes to existing endpoints
 
@@ -2085,8 +2085,9 @@ stores and the API client; `svelte-check` for types.
 
 ## 18. Spectrum Analyzer & Waterfall
 
-**Status: `[planned]` — design locked (D9); implementation is
-Phase 4 slice 9 (§17.4).**
+**Status: `[implemented]` (Phase 4 slice 9, 2026-10-04): the §18.1
+tap in the signal-processor, the `spectrum.frame` relay in ws-hub
+(§18.2), and the dashboard spectrum/waterfall canvas (§18.3).**
 
 A live per-SDR power-spectrum line plus a scrolling waterfall on the
 dashboard — the README's remaining `*(planned)*` feature. The hard
@@ -2169,8 +2170,14 @@ rate-capped per §18.1.
 
 ## 19. Time-Frequency Analysis
 
-**Status: `[planned]` — design locked (D10); implementation after
-§18 (§19.4).**
+**Status: `[implemented]` (Phase 4 slice 10, 2026-10-05): the
+recorder engine + endpoint (§19.1–§19.3, §19.5), the gateway proxy
+(§13.1), and the §19.4 inspector + §18 waterfall drag-select.
+Implementation notes: responses are numeric int8-dB tiles (≤ 512×512,
+max-pooled online from full-rate frames) rather than PNG; the
+integer-lag SPWVD is unaliased only over ±fs/4 (folded content is
+named in the §19.2 artifact note); reassignment rejects the
+rectangular window (no phase gradient ⇒ 400).**
 
 On-demand, high-resolution time-frequency renders of stored IQ —
 the analysis counterpart to §18's continuous dashboard feed,
@@ -2207,6 +2214,9 @@ only when a client asks — nothing here is continuous.
   `0 <= overlap < 1`, default `0.75`.
 - `t0`/`t1` select the span within the recording; the span MUST NOT
   exceed `tfr.max_span_s` (else `413`, §19.3).
+- The `window` parameter applies to `stft`/`reassigned` only;
+  `reassigned` rejects `rectangular` (`400`) — the phase gradient it
+  reassigns by does not exist for a rectangular window.
 - Each response MUST carry metadata naming the method's dominant
   artifact (reassignment smearing, WVD cross-terms, SPWVD kernel
   smoothing) so the UI can surface it (§19.4).

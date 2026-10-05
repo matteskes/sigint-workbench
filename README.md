@@ -24,10 +24,11 @@ and geospatial visualization.
   live signal overlay
 - **Dashboard control** — retune receivers from the UI via the
   capture control API (§7.4); per-signal user notes
-- **Spectrum analyzer** and **waterfall display** *(planned)*
-- **Time-frequency analysis** — on-demand STFT/reassigned
-  spectrograms per recording *(planned; lands after the spectrum
-  analyzer, §19)*
+- **Spectrum analyzer** and **waterfall display** — live per-SDR
+  spectrum trace + waterfall on canvas (§18)
+- **Time-frequency analysis** — on-demand STFT/reassigned/SPWVD/
+  Morlet renders per recording, inspect action + waterfall
+  drag-select entry points (§19)
 - **Extensible demodulator and classifier framework** — add new modes
   by implementing one interface
 
@@ -65,8 +66,8 @@ and geospatial visualization.
 | `sdr-capture` | Go (cgo) | Reads SDR hardware, streams IQ over UDP; scan loop and control API |
 | `iq-ingest` | Go | Receives IQ streams, validates frames, fans out to consumers |
 | `signal-processor` | Go | DSP, classification (rules + ONNX), per-SDR location, persistence, event publishing; 2-SDR verification, tracking, and the TDOA engine + wiring delivered (on-air TDOA validation pending a third receiver) |
-| `recorder` | Go | Audio demodulation (FM/AM/SSB), WAV + raw-IQ recording, live Opus audio |
-| `api-gateway` | Go | Single client ingress: REST API, recording file serving, `/ws` + `/ws/audio` relays, capture control proxy |
+| `recorder` | Go | Audio demodulation (FM/AM/SSB), WAV + raw-IQ recording, live Opus audio, on-demand §19 time-frequency renders |
+| `api-gateway` | Go | Single client ingress: REST API, recording file serving, `/ws` + `/ws/audio` relays, capture control proxy, §19 TFR proxy |
 | `ws-hub` | Go | Internal WebSocket event fan-out (not client-facing) |
 | `db` | PostGIS | Spatial database (PostgreSQL 16): signals, recordings, tracks |
 | `tiles` | tileserver-gl | Self-hosted OSM vector tiles |

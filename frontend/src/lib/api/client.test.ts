@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { fetchSignals, fetchSignal, fetchSDRs, retuneSdr, fetchAnnotations, addAnnotation, connectWebSocket } from './client';
+import { fetchSignals, fetchSignal, fetchSDRs, retuneSdr, fetchAnnotations, addAnnotation, connectWebSocket, fetchRecordings, requestTFR } from './client';
 
 // Minimal WebSocket double: records the URL and lets tests emit messages.
 class FakeWebSocket {
@@ -239,5 +239,120 @@ describe('retuneSdr (§7.4, §13.1)', () => {
 			vi.fn().mockResolvedValue({ ok: false, status: 502, json: async () => ({}) } as Response)
 		);
 		await expect(retuneSdr('rtlsdr-0', 100_000_000)).rejects.toThrow('API error: 502');
+	});
+});
+
+describe('recordings + TFR (§19)', () => {
+	it('fetchRecordings queries by signalId', async () => {
+		const fetchMock = vi.fn().mockResolvedValue(
+			okJSON([
+				{
+					id: 'rec-1',
+					signalId: 'sig-1',
+					startTime: '2026-10-05T12:00:00Z',
+					endTime: '2026-10-05T12:01:00Z',
+					durationS: 60,
+					sampleRate: 1_024_000,
+					centerFreq: 146_000_000,
+					bandwidthHz: 12_500,
+					filePath: '/recordings/r.iq',
+					fileFormat: 'iq',
+					sizeBytes: 245_760_000
+				}
+			])
+		);
+		vi.stubGlobal('fetch', fetchMock);
+
+		const recs = await fetchRecordings('sig-1');
+
+		expect(recs).toHaveLength(1);
+		expect(recs[0].fileFormat).toBe('iq');
+		const url = new URL(fetchMock.mock.calls[0][0] as string);
+		expect(url.pathname).toBe('/api/recordings');
+		expect(url.searchParams.get('signalId')).toBe('sig-1');
+	});
+
+	it('requestTFR posts the picker parameters and returns tiles', async () => {
+		const fetchMock = vi.fn().mockResolvedValue(
+			okJSON({
+				recordingId: 'rec-1',
+				method: 'stft',
+				window: 'hamming',
+				t0: 0,
+				t1: 4,
+				nfft: 1024,
+				hop: 256,
+				overlap: 0.75,
+				sampleRate: 1_024_000,
+				centerFreq: 146_000_000,
+				freqLoHz: 145_488_000,
+				freqHiHz: 146_512_000,
+				rows: 64,
+				cols: 32,
+				dbRef: -12.5,
+				dbStep: 1,
+				tile: new Array(64 * 32).fill(-40),
+				artifact: 'window resolution trade-off',
+				elapsedMs: 812
+			})
+		);
+		vi.stubGlobal('fetch', fetchMock);
+
+		const res = await requestTFR('rec-1', {
+			method: 'stft',
+			t0: 0,
+			t1: 4,
+			nfft: 1024,
+			overlap: 0.75,
+			window: 'hamming'
+		});
+
+		expect(res.rows * res.cols).toBe(res.tile.length);
+		expect(res.artifact).toContain('trade-off');
+		const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+		expect(url).toContain('/api/recordings/rec-1/tfr');
+		expect(init.method).toBe('POST');
+		expect(JSON.parse(init.body as string)).toMatchObject({ method: 'stft', nfft: 1024 });
+	});
+
+	it('surfaces the server error message (404 disabled / 413 span)', async () => {
+		vi.stubGlobal(
+			'fetch',
+			vi.fn().mockResolvedValue({
+				ok: false,
+				status: 404,
+				json: async () => ({ error: 'tfr feature disabled' })
+			} as Response)
+		);
+		await expect(requestTFR('rec-1', { method: 'stft', nfft: 256 })).rejects.toThrow(
+			'tfr feature disabled'
+		);
+
+		vi.unstubAllGlobals();
+		vi.stubGlobal(
+			'fetch',
+			vi.fn().mockResolvedValue({
+				ok: false,
+				status: 413,
+				json: async () => ({ error: 'span 31 s exceeds tfr.max_span_s 30' })
+			} as Response)
+		);
+		await expect(
+			requestTFR('rec-1', { method: 'stft', nfft: 256, t0: 0, t1: 31 })
+		).rejects.toThrow('tfr.max_span_s');
+	});
+
+	it('falls back to the status line for non-JSON errors (502)', async () => {
+		vi.stubGlobal(
+			'fetch',
+			vi.fn().mockResolvedValue({
+				ok: false,
+				status: 502,
+				json: async () => {
+					throw new Error('not json');
+				}
+			} as unknown as Response)
+		);
+		await expect(requestTFR('rec-1', { method: 'stft', nfft: 256 })).rejects.toThrow('API error: 502');
 	});
 });
