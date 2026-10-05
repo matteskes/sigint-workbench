@@ -123,6 +123,7 @@ func main() {
 
 	// Stats counters
 	var packetsRecv, packetsSent, bytesRecv, dropped atomic.Int64
+	seqs := sdr.NewSeqTracker() // §4.5/§9.6 per-sender gap accounting
 
 	// Stats goroutine
 	stopStats := make(chan struct{})
@@ -144,12 +145,13 @@ func main() {
 				if rate > 0 {
 					log.Printf("stats: %.0f pkt/s in, %.0f pkt/s out, %d dropped", rate, sRate, drop)
 				}
+				seqs.LogGaps() // §4.5: gap/reorder report (silent when clean)
 			}
 		}
 	}()
 
 	// Buffer for max frame size
-	buf := make([]byte, sdr.IQHeaderSize+sdr.MaxIQSamplesPerFrame*4)
+	buf := make([]byte, sdr.MaxIQDatagramSize) // v2 max datagram (§4.5)
 
 	// Signal handling
 	sigCh := make(chan os.Signal, 1)
@@ -183,9 +185,15 @@ func main() {
 		bytesRecv.Add(int64(n))
 
 		// Validate frame
-		if _, err := sdr.DecodeIQFrame(buf[:n]); err != nil {
+		frame, err := sdr.DecodeIQFrame(buf[:n])
+		if err != nil {
 			dropped.Add(1)
 			continue
+		}
+		// §4.5/§9.6: per-sender gap accounting from v2 seq (v1
+		// frames carry no ordering information).
+		if frame.V2 {
+			seqs.Observe(frame.SDRID, frame.Seq)
 		}
 
 		// Fan out to all consumers

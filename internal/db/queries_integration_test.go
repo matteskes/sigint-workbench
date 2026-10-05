@@ -481,3 +481,92 @@ func TestIntegrationSDRNullLatLon(t *testing.T) {
 		t.Fatalf("null-loc-sdr missing from ListSDRs: %+v", sdrs)
 	}
 }
+
+// TestIntegrationTDOAQuality covers the §9.6 TDOA quality columns on
+// signals: plain re-observations leave them NULL, an accepted fix is
+// sticky across further plain re-observations (COALESCE upsert), a
+// fresh solve overwrites, and both read paths (GetSignal and the
+// GetSignals list) carry the fields.
+func TestIntegrationTDOAQuality(t *testing.T) {
+	d := integrationPool(t)
+	ctx := context.Background()
+	id := "55555555-5555-5555-5555-555555555555"
+
+	// Plain re-observations carry no quality data — must stay NULL.
+	for i := 0; i < 2; i++ {
+		if err := d.UpsertSignal(ctx, integrationSignal(id, "rules")); err != nil {
+			t.Fatalf("upsert %d: %v", i, err)
+		}
+	}
+	got, err := d.GetSignal(ctx, id)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.ResidualNS != nil || got.PairsUsed != nil || got.MaxBaselineM != nil || got.Reference != nil {
+		t.Fatalf("quality columns set without a fix: %+v", got)
+	}
+
+	// §9.5 solve output → accepted fix on the reference receiver's row.
+	res, pairs, base, ref := 61.3, 3, 1517.9, "rtlsdr-0"
+	fixed := integrationSignal(id, "rules")
+	fixed.ResidualNS, fixed.PairsUsed, fixed.MaxBaselineM, fixed.Reference = &res, &pairs, &base, &ref
+	if err := d.UpsertSignal(ctx, fixed); err != nil {
+		t.Fatalf("upsert fix: %v", err)
+	}
+
+	// Subsequent plain re-observations must NOT clobber the fix.
+	for i := 0; i < 3; i++ {
+		if err := d.UpsertSignal(ctx, integrationSignal(id, "rules")); err != nil {
+			t.Fatalf("re-observation %d: %v", i, err)
+		}
+	}
+	got, err = d.GetSignal(ctx, id)
+	if err != nil {
+		t.Fatalf("get after re-observations: %v", err)
+	}
+	if got.ResidualNS == nil || *got.ResidualNS != res {
+		t.Errorf("residualNs = %v, want %v", got.ResidualNS, res)
+	}
+	if got.PairsUsed == nil || *got.PairsUsed != pairs {
+		t.Errorf("pairsUsed = %v, want %d", got.PairsUsed, pairs)
+	}
+	if got.MaxBaselineM == nil || *got.MaxBaselineM != base {
+		t.Errorf("maxBaselineM = %v, want %v", got.MaxBaselineM, base)
+	}
+	if got.Reference == nil || *got.Reference != ref {
+		t.Errorf("reference = %v, want %q", got.Reference, ref)
+	}
+
+	// A fresh solve (new reference, tighter residual) overwrites.
+	res2, pairs2, ref2 := 42.0, 5, "rtlsdr-1"
+	got.ResidualNS, got.PairsUsed, got.Reference = &res2, &pairs2, &ref2
+	if err := d.UpsertSignal(ctx, got); err != nil {
+		t.Fatalf("upsert fresh solve: %v", err)
+	}
+	got, err = d.GetSignal(ctx, id)
+	if err != nil {
+		t.Fatalf("get after fresh solve: %v", err)
+	}
+	if got.ResidualNS == nil || *got.ResidualNS != res2 || got.Reference == nil || *got.Reference != ref2 {
+		t.Errorf("fresh solve not stored: residual=%v reference=%v", got.ResidualNS, got.Reference)
+	}
+
+	// The REST list path carries the same quality fields.
+	list, err := d.GetSignals(ctx, -90, -180, 90, 180)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	var found *Signal
+	for i := range list {
+		if list[i].ID == id {
+			found = &list[i]
+		}
+	}
+	if found == nil {
+		t.Fatal("signal missing from GetSignals")
+	}
+	if found.PairsUsed == nil || *found.PairsUsed != pairs2 || found.Reference == nil || *found.Reference != ref2 {
+		t.Errorf("list path quality fields: pairs=%v reference=%v", found.PairsUsed, found.Reference)
+	}
+}
+

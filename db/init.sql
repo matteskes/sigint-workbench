@@ -35,7 +35,13 @@ CREATE TABLE IF NOT EXISTS signals (
     last_seen       TIMESTAMPTZ DEFAULT now(),
     sdr_id          TEXT REFERENCES sdrs(id),
     verified        BOOLEAN DEFAULT FALSE,
-    active          BOOLEAN NOT NULL DEFAULT TRUE
+    active          BOOLEAN NOT NULL DEFAULT TRUE,
+    -- §9.6 TDOA quality (migration 004): NULL until a §9.5 fix is
+    -- accepted; sticky across plain re-observations (COALESCE upsert).
+    residual_ns     DOUBLE PRECISION,
+    pairs_used      INTEGER,
+    max_baseline_m  DOUBLE PRECISION,
+    reference       TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_signals_location ON signals USING GIST(location);

@@ -31,3 +31,16 @@ scan:
   dwell_ms: 50        # 50 ms dwell per step
   min_freq_hz: 24000000
   max_freq_hz: 1700000000
+
+# TDOA engine (§9.6) — disabled until §4.5 v2 frames flow
+# (sdr-capture stream_format: sdr2) and receivers carry lat/lon.
+# tdoa:
+#   enabled: true
+#   window_ms: 10               # common observation window
+#   buffer_horizon_ms: 500      # alignment-buffer horizon (§9.5)
+#   pair_cap: 15                # all-pairs above C(N,2) > cap → star
+#   outlier_sigma: 3            # normalized-residual rejection gate
+#   accuracy_budget_m: 200      # fix gate (50 in the simulator)
+#   overwrite_placement: true   # covariance-gated §9.3 overwrite
+#   locus_radius_m: 0           # 0 ⇒ 3× the pair's baseline
+#   solve_rate_hz: 0            # 0 ⇒ bandwidth-derived (default 250 kS/s)

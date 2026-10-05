@@ -26,6 +26,23 @@ type CaptureConfig struct {
 	// reads the same file, to poll the control status endpoint for live
 	// gain changes (§5.6 calibration). 0 disables polling.
 	APIPort int `yaml:"api_port,omitempty"`
+
+	// StreamFormat selects the §4.5 IQ wire format this capture emits:
+	// "sdr1" (classic 40-byte header) or "sdr2" (64-byte header with
+	// per-sender seq, sample_index, and a nanosecond CLOCK_REALTIME
+	// anchor — the sample-accurate timing TDOA requires). Empty
+	// defaults to "sdr1"; flip to "sdr2" only after every consumer of
+	// the stream accepts v2 (§9.6 rollout).
+	StreamFormat string `yaml:"stream_format,omitempty"`
+}
+
+// WireFormat returns the resolved §4.5 stream format: "sdr2" or the
+// "sdr1" default.
+func (c *CaptureConfig) WireFormat() string {
+	if c.StreamFormat == "sdr2" {
+		return "sdr2"
+	}
+	return "sdr1"
 }
 
 // ScanConfig configures the D3 scan loop (§7.1) applied to every device
@@ -133,6 +150,13 @@ func LoadCaptureConfig(path string) (*CaptureConfig, error) {
 	if cfg.Scan.MinHz != 0 && cfg.Scan.MaxHz != 0 && cfg.Scan.MinHz >= cfg.Scan.MaxHz {
 		return nil, fmt.Errorf("sdr: scan.min_hz (%d) must be below scan.max_hz (%d)",
 			cfg.Scan.MinHz, cfg.Scan.MaxHz)
+	}
+	switch cfg.StreamFormat {
+	case "":
+		cfg.StreamFormat = "sdr1" // §9.6 rollout default
+	case "sdr1", "sdr2":
+	default:
+		return nil, fmt.Errorf("sdr: unknown stream_format %q (want sdr1|sdr2)", cfg.StreamFormat)
 	}
 	return &cfg, nil
 }

@@ -151,6 +151,11 @@ type publisher struct {
 	lastSig   map[string]*db.Signal // last published payload per signal ID
 	tracks    map[string]*location.Track // §9.4 movement per signal ID
 	trackWrite map[string]time.Time     // last track persist/event per signal ID
+
+	// eng is the §9.6 TDOA engine, nil when tdoa.enabled is false.
+	// Set once at startup; publish() notifies it of detections and
+	// defers to its accepted fixes (flip-flop guard).
+	eng *tdoaEngine
 }
 
 // newPublisher creates a publisher. db, wsHubURL and locations may be
@@ -377,9 +382,16 @@ func (p *publisher) publish(ev signalEvent, now time.Time) {
 	}
 	// Unlocated SDR -> NULL lat/lon (A1, §9.3).
 	var lat, lon *float64
-	if loc != nil {
+	// §9.6 flip-flop guard: once an accepted TDOA fix owns a signal's
+	// placement, later sdr_position placements must not clobber it.
+	if fix, ok := p.eng.fixFor(id); ok {
+		lat, lon = &fix.Lat, &fix.Lng
+	} else if loc != nil {
 		lat, lon = &loc.Lat, &loc.Lon
 	}
+	// §9.6: feed the TDOA engine's trigger state (persistence and
+	// per-receiver coverage) from every classified detection.
+	p.eng.NoteSignal(ev.SDRID, ev.CenterHz, ev.PeakHz, ev.Bandwidth)
 	// §5.6: power_dbm is the calibrated value when the SDR has a
 	// calibration offset; otherwise the raw relative dB passes through
 	// and PowerCalibrated stays false (consumers treat it as relative).
@@ -897,7 +909,7 @@ func main() {
 	}
 
 	// Buffer
-	buf := make([]byte, sdr.IQHeaderSize+sdr.MaxIQSamplesPerFrame*4)
+	buf := make([]byte, sdr.MaxIQDatagramSize) // v2 max datagram (§4.5)
 
 	// Signal handling
 	sigCh := make(chan os.Signal, 1)
@@ -913,6 +925,18 @@ func main() {
 	}()
 	go pub.sweep(ctx)
 
+	// §9.6 TDOA engine (tdoa.enabled, default false): dual-ports v2
+	// frames from the UDP loop below and solves on its own goroutine.
+	var tdoaEng *tdoaEngine
+	if procCfg.TDOA.Enabled {
+		tdoaEng = newTDOAEngine(procCfg.TDOA, pub, database)
+		pub.eng = tdoaEng
+		go tdoaEng.loop(ctx)
+		log.Printf("tdoa engine enabled (§9.6): window=%v horizon=%v budget=%.0fm overwrite=%v pair_cap=%d solve_rate=%.0f Hz",
+			tdoaEng.cfg.window, tdoaEng.cfg.horizon, tdoaEng.cfg.budgetM,
+			tdoaEng.cfg.overwrite, tdoaEng.cfg.pairCap, tdoaEng.cfg.solveRateHz)
+	}
+
 	// Throttle: log + emit at most once per 2 seconds per SDR+freq
 	lastEmit := make(map[string]time.Time)
 
@@ -924,6 +948,22 @@ func main() {
 	if fftSize != 0 {
 		assembler = dsp.NewFFTAssembler(fftSize)
 	}
+
+	// §4.5/§9.6: per-sender gap accounting for v2 streams, reported
+	// periodically. v1 frames carry no seq and are not counted.
+	seqs := sdr.NewSeqTracker()
+	go func() {
+		t := time.NewTicker(30 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				seqs.LogGaps()
+			}
+		}
+	}()
 
 	// Main loop
 	for {
@@ -942,6 +982,16 @@ func main() {
 		frame, err := sdr.DecodeIQFrame(buf[:n])
 		if err != nil {
 			continue
+		}
+		// §4.5/§9.6: per-sender gap accounting from v2 seq (v1
+		// frames carry no ordering information).
+		if frame.V2 {
+			seqs.Observe(frame.SDRID, frame.Seq)
+			// §9.6: dual-port v2 frames into the TDOA engine (it does
+			// its own band-shift/decimate and gap-free run assembly).
+			if tdoaEng != nil {
+				tdoaEng.Feed(frame)
+			}
 		}
 
 		// §14.4.3: per-frame SDR observation drives sdr.status events.

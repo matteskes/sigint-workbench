@@ -192,6 +192,22 @@ func main() {
 		go publishLevels(ctx, rec, hubURL)
 	}
 
+	// §4.5/§9.6: per-sender gap accounting for v2 streams, reported
+	// periodically (recorder shares the ingest's IQ stream).
+	seqs := sdr.NewSeqTracker()
+	go func() {
+		t := time.NewTicker(30 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				seqs.LogGaps()
+			}
+		}
+	}()
+
 	// Frame consumer: feed the shared IQ stream to the recorder.
 	go func() {
 		for {
@@ -199,6 +215,9 @@ func main() {
 			case <-ctx.Done():
 				return
 			case f := <-frames:
+				if f.V2 {
+					seqs.Observe(f.SDRID, f.Seq)
+				}
 				mu.Lock()
 				snap := tracked
 				mu.Unlock()

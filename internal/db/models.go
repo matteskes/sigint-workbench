@@ -26,6 +26,18 @@ type Signal struct {
 	SDRID           string    `json:"sdrId" db:"sdr_id"`
 	Verified        bool      `json:"verified" db:"verified"`
 	Active          bool      `json:"active" db:"active"` // §11.2 lifecycle
+
+	// §9.6 TDOA quality — NULL until a §9.5 fix is accepted for this
+	// signal. ResidualNS is the RMS solve residual; PairsUsed the
+	// eligible receiver-pair count; MaxBaselineM the longest
+	// inter-receiver baseline; Reference names the receiver the fix
+	// is anchored to (the fix is persisted on that receiver's signal
+	// row). Sticky across re-observations: an upsert with nil fields
+	// leaves the stored fix untouched.
+	ResidualNS   *float64 `json:"residualNs" db:"residual_ns"`
+	PairsUsed    *int     `json:"pairsUsed" db:"pairs_used"`
+	MaxBaselineM *float64 `json:"maxBaselineM" db:"max_baseline_m"`
+	Reference    *string  `json:"reference" db:"reference"`
 }
 
 // Recording represents a recorded signal capture.

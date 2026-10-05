@@ -58,6 +58,15 @@ type sdrSlot struct {
 	// Last successful IQ read (unix nanos); 0 until data flows. Backs
 	// the §7.4 status "active" field.
 	lastRead atomic.Int64
+
+	// §4.5 v2 stream state (used when stream_format is sdr2): v2
+	// selects the wire format; seq is the per-sender sequence number
+	// (+1 per frame, starts at 0); sampleIndex is the stream-wide
+	// count of I/Q pairs already streamed. Guarded by mu alongside
+	// freqHz.
+	v2          bool
+	seq         uint64
+	sampleIndex uint64
 }
 
 func (s *sdrSlot) setFrequency(mhz float64) error {
@@ -209,13 +218,23 @@ func iqReadLoop(slot *sdrSlot, buf []int16, exit <-chan struct{}) {
 		slot.lastRead.Store(time.Now().UnixNano())
 		slot.mu.Lock()
 		freqHz := slot.freqHz
+		v2 := slot.v2
+		seq := slot.seq
+		slot.seq++
+		sampleIndex := slot.sampleIndex
+		slot.sampleIndex += uint64(n) / 2
 		slot.mu.Unlock()
+		// §4.5: the v2 anchor is CLOCK_REALTIME read in the driver
+		// read loop, stamped at the frame's first sample.
 		frame := &sdr.IQFrame{
-			SDRID:      slot.cfg.ID,
-			FreqHz:     freqHz,
-			SampleRate: slot.cfg.DefaultBW,
-			Timestamp:  time.Now(),
-			Samples:    buf[:n],
+			SDRID:       slot.cfg.ID,
+			FreqHz:      freqHz,
+			SampleRate:  slot.cfg.DefaultBW,
+			Timestamp:   time.Now(),
+			Samples:     buf[:n],
+			V2:          v2,
+			Seq:         seq,
+			SampleIndex: sampleIndex,
 		}
 		if err := slot.streamer.Send(frame); err != nil {
 			log.Printf("[%s] send error: %v", slot.cfg.ID, err)
@@ -402,6 +421,7 @@ func main() {
 	}
 
 	// Create SDR slots
+	log.Printf("IQ wire format: %s (§4.5)", cfg.WireFormat())
 	slots := make([]*sdrSlot, 0, len(cfg.SDRs))
 	for _, sc := range cfg.SDRs {
 		device, err := createSDR(sc, *simMode)
@@ -434,6 +454,7 @@ func main() {
 			streamer: streamer,
 			freqHz:   sc.DefaultFreq,
 			gainDB:   gainDB,
+			v2:       cfg.WireFormat() == "sdr2",
 		}
 		// §7.1: scanner-mode devices are driven by the D3 sweep loop.
 		if sc.Mode == "scanner" || sc.Mode == "both" {

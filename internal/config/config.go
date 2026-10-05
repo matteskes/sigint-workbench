@@ -65,6 +65,23 @@ type SignalProcessorConfig struct {
 		MinFreqHz uint64 `yaml:"min_freq_hz"`
 		MaxFreqHz uint64 `yaml:"max_freq_hz"`
 	} `yaml:"scan"`
+	// TDOA engine (§9.6). Disabled by default; see the tdoa block in
+	// config/signal-processor.yaml for the per-key semantics.
+	TDOA TDOAConfig `yaml:"tdoa"`
+}
+
+// TDOAConfig holds the §9.6 engine knobs. Zero values take the
+// documented defaults (applied by the engine constructor).
+type TDOAConfig struct {
+	Enabled            bool    `yaml:"enabled"`
+	WindowMS           int     `yaml:"window_ms"`
+	BufferHorizonMS    int     `yaml:"buffer_horizon_ms"`
+	PairCap            int     `yaml:"pair_cap"`
+	OutlierSigma       float64 `yaml:"outlier_sigma"`
+	AccuracyBudgetM    float64 `yaml:"accuracy_budget_m"`
+	OverwritePlacement bool    `yaml:"overwrite_placement"`
+	LocusRadiusM       float64 `yaml:"locus_radius_m"`
+	SolveRateHz        float64 `yaml:"solve_rate_hz"`
 }
 
 // ClassifierConfig mirrors config/classifier.yaml.

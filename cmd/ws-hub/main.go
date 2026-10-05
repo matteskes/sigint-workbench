@@ -29,6 +29,7 @@ var eventTypes = map[string]bool{
 	"signal.new":     true,
 	"signal.update":  true,
 	"signal.removed": true,
+	"signal.tdoa":    true, // §9.6/§14.2 TDOA fix/locus events
 	"sdr.status":     true,
 	"audio.level":    true,
 	"track.update":   true,

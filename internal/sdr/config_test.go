@@ -196,3 +196,37 @@ sdrs:
 		t.Error("expected error for unknown driver, got nil")
 	}
 }
+
+// §4.5/§9.6: stream_format selects the wire format, defaulting to
+// sdr1; only sdr1|sdr2 are accepted.
+func TestLoadCaptureConfig_StreamFormat(t *testing.T) {
+	// Absent → sdr1 default.
+	cfg, err := LoadCaptureConfig(writeCaptureConfig(t, scannerSDR))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got := cfg.WireFormat(); got != "sdr1" {
+		t.Errorf("WireFormat = %q, want default %q", got, "sdr1")
+	}
+	if cfg.StreamFormat != "sdr1" {
+		t.Errorf("StreamFormat = %q, want normalized %q", cfg.StreamFormat, "sdr1")
+	}
+
+	// Explicit sdr2 resolves through.
+	cfg2, err := LoadCaptureConfig(writeCaptureConfig(t, `
+stream_format: sdr2
+`+scannerSDR))
+	if err != nil {
+		t.Fatalf("load sdr2: %v", err)
+	}
+	if got := cfg2.WireFormat(); got != "sdr2" {
+		t.Errorf("WireFormat = %q, want %q", got, "sdr2")
+	}
+
+	// Unknown values are rejected.
+	bad := "stream_format: sdr3\n" + scannerSDR
+	if _, err := LoadCaptureConfig(writeCaptureConfig(t, bad)); err == nil {
+		t.Error("expected error for unknown stream_format, got nil")
+	}
+}
+

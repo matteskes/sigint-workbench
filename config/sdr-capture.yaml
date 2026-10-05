@@ -1,6 +1,13 @@
 # SIGINT Workbench — SDR Capture Configuration
 # Used by: sdr-capture (native macOS or Docker on Linux)
 
+# ─── IQ wire format (§4.5) ───
+# sdr1 emits the classic 40-byte-header frames; sdr2 emits the
+# sample-accurate v2 frames (per-sender seq + sample_index + ns
+# CLOCK_REALTIME anchor) required for TDOA (§9.6). Keep sdr1 until
+# every consumer of the stream accepts v2, then flip. Default: sdr1.
+# stream_format: sdr1
+
 # ─── Control API (§5.6 gain polling) ───
 # Port of this capture instance's control API (the sdr-capture
 # `-listen` flag, default 127.0.0.1:9090). Consumed by signal-processor,

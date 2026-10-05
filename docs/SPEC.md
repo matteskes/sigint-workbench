@@ -250,10 +250,18 @@ sequence number exists in v1; `timestamp` is the only ordering hint.
 - Every successful `ReadIQ` sets the device active; the control API
   (§7.4) reports per-device status.
 
-### 4.5 Frame v2 — sample-accurate timing (`SDR2`) — **DRAFT, slice 4**
+### 4.5 Frame v2 — sample-accurate timing (`SDR2`) — **[implemented]**
 
-**This section is a draft for Phase 4 slice 4 (§17.4) and is pending
-design review. Nothing here is implemented yet.**
+**Implemented (slice 5, §17.4):** the codec is dual-format
+(`internal/sdr` — `IQMagicV2` encode/decode with per-datagram magic
+sniffing, so one mixed v1/v2 stream decodes frame by frame);
+`sdr-capture` emits v2 when `stream_format: sdr2` (default `sdr1`,
+§9.6 rollout), stamping `seq`/`sample_index`/CLOCK_REALTIME anchor in
+the driver read loop; every consumer (iq-ingest, recorder,
+signal-processor) accepts both formats, keeps per-sender gap
+counters, and sizes its UDP buffers to the 4160-byte v2 bound
+(`MaxIQDatagramSize`). Normative wire layout below is unchanged from
+the approved draft.
 
 v1 (§4.1) cannot carry TDOA: its 1-second `timestamp` is far coarser
 than the nanosecond-scale delays TDOA measures, and there is no
@@ -736,8 +744,9 @@ flag is stored per row, and both rows are updated on success.
 
 **Status: identity `[implemented]`; single-SDR placement
 `[implemented]`; unlocated-signal handling in §9.3 is `[implemented]`
-(A1); tracking `[implemented]` (§9.4); TDOA multilateration is
-Phase 4.**
+(A1); tracking `[implemented]` (§9.4); TDOA multilateration — engine
+`[implemented]` (§9.5), wiring `[implemented]` (§9.6); on-air
+validation pending (slice 5 exit criterion).**
 
 ### 9.1 Signal ID — deterministic UUIDv5
 
@@ -913,11 +922,22 @@ prerequisite). On-air validation follows against a known continuous
 transmitter (2× RTL-SDR + HackRF, docs/HARDWARE.md §7), single-host
 first.
 
-### 9.6 TDOA engine wiring — **APPROVED 2026-10-04, slice 5**
+### 9.6 TDOA engine wiring — **APPROVED 2026-10-04, slice 5 — `[implemented]`**
 
 **Design review passed 2026-10-04. The engine (`internal/tdoa`) and
 its simulator land under slice 5; wiring, §4.5 v2 delivery, and
-on-air validation follow.**
+on-air validation follow. Implemented (slice 5):** the §4.5 v2
+delivery (codec, capture stamping, dual-format consumers, per-sender
+gap counters), migration 004 quality columns, the `tdoaEngine`
+(`cmd/signal-processor/tdoa.go`: band-shift + decimate to a
+bandwidth-derived common solve rate, gap-free run assembly, the
+trigger/quality/overwrite policy below, fix persistence on the
+reference receiver's row, `signal.tdoa` events) and the hub
+allowlist. On-air validation remains the slice-5 exit criterion. One
+deliberate deviation: the engine consumes v2 frames directly at UDP
+decode rather than dual-porting the §5.1 FFT assembler — same intent
+(no duplicated IQ stream, no new service) with its own gap-aware
+contiguous runs.
 
 **Placement.** The engine is a pure-Go package `internal/tdoa`
 with three parts: `Buffer` (per-receiver contiguous-run store —
@@ -1247,6 +1267,7 @@ Applied automatically on first start via
 | verified | BOOLEAN | default false, §8 |
 | active | BOOLEAN | `[implemented]` — D6 lifecycle; partial index `idx_signals_active` (`last_seen DESC WHERE active`) |
 | method | TEXT | `[implemented]` — `rules`/`onnx`; refreshed on every upsert |
+| residual_ns / pairs_used / max_baseline_m / reference | nullable DOUBLE PRECISION / INTEGER / DOUBLE PRECISION / TEXT | `[implemented]` — §9.6 TDOA quality (migration 004); non-NULL only for accepted TDOA fixes, sticky across re-observations (COALESCE upsert) |
 
 Indexes: GIST on `location`; B-tree on `frequency_hz`, `class`,
 `last_seen DESC`, `sdr_id`; partial `idx_signals_active` on
@@ -1387,6 +1408,7 @@ counted):
 | `sdr.status` | SDRDevice object (§12.1) | device active/frequency change |
 | `track.update` | `{"signalId","lat","lon","speedKmh","headingDeg","isMoving"}` | movement refresh, ≤ 1 Hz per located signal (§9.4) |
 | `audio.level` | `{"signalId":"<uuid>","level":<0..1>}` | coarse post-AGC RMS level, ≤ 10 Hz, one event per actively demodulated signal (§10.6) |
+| `signal.tdoa` | `{"signalId","freqHz","at","accepted","persisted","reason?","reference?","receivers":["<sdr>",…],"fix":{"lat","lng","residualNs","pairsUsed","maxBaselineM","covPosDef"}?,"locus":{"lat1","lng1","lat2","lng2"}?}` | §9.6 solve outcome per attempt: accepted fix (persisted or event-only under the §9.5 covariance gate), 2-receiver locus (persist nothing), or rejection with `reason` |
 
 Full-object payloads (not deltas) make clients stateless: apply
 payload-by-`id` upsert on `new`/`update`, delete on `removed`.
@@ -1821,7 +1843,7 @@ stores and the API client; `svelte-check` for types.
 | **1 — Correctness** | D4 negative offsets; A1 unlocated signals; §6.5 class enum; dead `/ws` hub removal; FLAC-claim cleanup (code + README); CORS/origin tightening — all **done** | new tests per §17.3 green; docs match behavior |
 | **2 — Features** | §15.3 RTL-SDR defect fixes; §10.1 real SSB + pair-aware registry; §11.2 active/TTL lifecycle; `sdr.status` producer (§14.4.3); `GET /ws` gateway relay (§2.2, A3); frontend data wiring (§14.4.2); YAML config loading + `min_confidence` enforcement (§16.1); **slices 1–3:** D3 scan loop + §7.4 control status; §8 dual-SDR verification with verified latch; recorder (D1 in-band WAV + §11.3 retention); first live `TEST_DATABASE_URL` integration run (§17.3); **slice 4:** Opus live streaming recorder side (D1b, §10.3–§10.4: per-signal mux + `/ws/audio` server + `Dockerfile.recorder`); **slice 5:** `/ws/audio` gateway relay (§2.2, §10.4); control-API proxy — `PUT /api/sdrs/{id}` retune forwarding + `GET /api/sdrs/{id}/status` (§7.4, §13.1, §13.2.3) — **all delivered** | §17.3 obligations green; dashboard live end-to-end |
 | **3 — Hardware & fidelity** | RTL-SDR on-hardware validation (§15.3 defect fixes delivered in Phase 2); HackRF driver (H1/H2) — **delivered, compile-validated** (§15.4); power calibration contract (§5.6) — **delivered** (contract + mechanism + honesty flag; measuring each SDR's physical offset → docs/HARDWARE.md runbook, slice 3); **slice 0:** multi-SDR sim enablement — `driver: simulator` accepted via YAML + two-device shared-ingest-port rehearsal (§16.1, §16.4) — **delivered**; `min_confidence` enforcement (§16.1) — **delivered in Phase 2**; **slice 3:** RTL-SDR on-hardware validation runbook + calibration tooling — docs/HARDWARE.md, cmd/rtl-list, cmd/rtl-calibrate (§15.3, §5.6) — **delivered and executed 2026-10-04** (V1–V8 pass, offsets applied); **fft fidelity:** §5.7 `fft.size`/`fft.window` wired end-to-end — signal-processor assembles 4096-pair records, rtl-calibrate `-fft-size`, ONNX inference reachable on the native bench (`make ort-lib`, `-tags onnx`) — **delivered 2026-10-04** (offsets recalibrated at the 4096 geometry per §6.3; §8 session 2) | 2 real SDRs verified end-to-end; calibration documented — **met 2026-10-04** (RTL-SDR half; HackRF deferred, no hardware) |
-| **4 — Deferred** | **in progress** — **slice 0:** D2 stub removal (`cmd/classifier`, `cmd/location-service`, compose entries; `Dockerfile.classifier` builds signal-processor only) — **delivered**; **slice 1:** annotations — `GET/POST /api/signals/{id}/annotations` + SignalDetail notes UI — **delivered**; **slice 2:** `audio.level` coarse feed recorder → hub → frontend — **delivered** (scope settled: one event per actively demodulated §10.2 session); **slice 3:** tracking — populate `tracks` from consecutive placements (§9.4, §12.4) — **delivered** (1 Hz persist + `track.update`, final row on TTL sweep, `GET /api/signals/{id}/track`, SignalDetail speed/heading, MapView polyline); **slice 4:** TDOA design — normative §9.5 + §4 frame v2 sample-accurate timing (design review gate) — **delivered** (review passed 2026-10-04); **slice 5:** TDOA engine — simulator first (injected offsets), then 3-SDR on-air fix — **engine + simulator delivered 2026-10-04** (wiring, §4.5 v2 codec, migration 004, on-air validation remain); **slice 6:** multi-host + NTP/PTP — remote capture hosts, sync-quality reporting (§16); **slice 7: audio parity — [planned]:** §10.5 raw-IQ writer (`iq.enabled`), §11.1 max-duration enforcement (`iq.max_duration_s`), §10.4 live browser Opus playback (dashboard consumes `/ws/audio`) | per-slice; slices 4–5: TDOA fix on a known on-air transmitter; slice 6: second capture host with NTP/PTP sync-quality reporting; slice 7: raw-IQ + duration-cap tests, live playback on the dashboard |
+| **4 — Deferred** | **in progress** — **slice 0:** D2 stub removal (`cmd/classifier`, `cmd/location-service`, compose entries; `Dockerfile.classifier` builds signal-processor only) — **delivered**; **slice 1:** annotations — `GET/POST /api/signals/{id}/annotations` + SignalDetail notes UI — **delivered**; **slice 2:** `audio.level` coarse feed recorder → hub → frontend — **delivered** (scope settled: one event per actively demodulated §10.2 session); **slice 3:** tracking — populate `tracks` from consecutive placements (§9.4, §12.4) — **delivered** (1 Hz persist + `track.update`, final row on TTL sweep, `GET /api/signals/{id}/track`, SignalDetail speed/heading, MapView polyline); **slice 4:** TDOA design — normative §9.5 + §4 frame v2 sample-accurate timing (design review gate) — **delivered** (review passed 2026-10-04); **slice 5:** TDOA engine — simulator first (injected offsets), then 3-SDR on-air fix — **engine + simulator, §4.5 v2 codec + dual-format consumers + per-sender gap counters, migration 004 quality columns, and §9.6 processor wiring (`signal.tdoa`, fix persistence, flip-flop guard) delivered** (on-air validation remains); **slice 6:** multi-host + NTP/PTP — remote capture hosts, sync-quality reporting (§16); **slice 7: audio parity — [planned]:** §10.5 raw-IQ writer (`iq.enabled`), §11.1 max-duration enforcement (`iq.max_duration_s`), §10.4 live browser Opus playback (dashboard consumes `/ws/audio`) | per-slice; slices 4–5: TDOA fix on a known on-air transmitter; slice 6: second capture host with NTP/PTP sync-quality reporting; slice 7: raw-IQ + duration-cap tests, live playback on the dashboard |
 
 ## Appendix A — Decision Register
 

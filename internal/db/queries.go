@@ -16,13 +16,17 @@ import (
 // (modulation, subType, class, method) alongside the measurement
 // fields; first_seen is kept on conflict. verified is latched: once
 // TRUE, an unverified re-observation cannot clear it (§8) — only the
-// two-SDR verifier sets it, via MarkVerified.
+// two-SDR verifier sets it, via MarkVerified. The §9.6 TDOA quality
+// columns are sticky the same way: a nil field leaves the stored fix
+// untouched, so plain re-observations never clobber an accepted
+// solution — only a fresh solve (non-nil fields) overwrites it.
 func (d *DB) UpsertSignal(ctx context.Context, s *Signal) error {
 	query := `
 		INSERT INTO signals (id, frequency_hz, bandwidth_hz, modulation, sub_type, class, method,
-			confidence, power_dbm, power_calibrated, location, accuracy_m, first_seen, last_seen, sdr_id, verified, active)
+			confidence, power_dbm, power_calibrated, location, accuracy_m, first_seen, last_seen, sdr_id, verified, active,
+			residual_ns, pairs_used, max_baseline_m, reference)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, ST_SetSRID(ST_MakePoint($11, $12), 4326),
-			$13, $14, $15, $16, $17, $18)
+			$13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
 		ON CONFLICT (id) DO UPDATE SET
 			last_seen = EXCLUDED.last_seen,
 			bandwidth_hz = EXCLUDED.bandwidth_hz,
@@ -35,12 +39,17 @@ func (d *DB) UpsertSignal(ctx context.Context, s *Signal) error {
 			power_calibrated = EXCLUDED.power_calibrated,
 			location = EXCLUDED.location,
 			verified = signals.verified OR EXCLUDED.verified,
-			active = TRUE
+			active = TRUE,
+			residual_ns = COALESCE(EXCLUDED.residual_ns, signals.residual_ns),
+			pairs_used = COALESCE(EXCLUDED.pairs_used, signals.pairs_used),
+			max_baseline_m = COALESCE(EXCLUDED.max_baseline_m, signals.max_baseline_m),
+			reference = COALESCE(EXCLUDED.reference, signals.reference)
 	`
 	_, err := d.Pool.Exec(ctx, query,
 		s.ID, s.FreqHz, s.BandwidthHz, s.Modulation, s.SubType, s.Class, s.Method,
 		s.Confidence, s.PowerDBM, s.PowerCalibrated, s.Lon, s.Lat, s.AccuracyM,
 		s.FirstSeen, s.LastSeen, s.SDRID, s.Verified, s.Active,
+		s.ResidualNS, s.PairsUsed, s.MaxBaselineM, s.Reference,
 	)
 	return err
 }
@@ -54,7 +63,8 @@ func (d *DB) GetSignals(ctx context.Context, minLat, minLon, maxLat, maxLon floa
 		SELECT id, frequency_hz, bandwidth_hz, COALESCE(modulation,''), COALESCE(sub_type,''),
 			COALESCE(class,''), COALESCE(method,''), confidence, COALESCE(power_dbm,0), power_calibrated,
 			ST_Y(location::geometry), ST_X(location::geometry), COALESCE(accuracy_m,0),
-			first_seen, last_seen, sdr_id, verified
+			first_seen, last_seen, sdr_id, verified,
+			residual_ns, pairs_used, max_baseline_m, reference
 		FROM signals
 		WHERE active AND (location IS NULL OR location::geometry && ST_MakeEnvelope($1, $2, $3, $4, 4326))
 		ORDER BY last_seen DESC
@@ -71,7 +81,8 @@ func (d *DB) GetSignals(ctx context.Context, minLat, minLon, maxLat, maxLon floa
 		var s Signal
 		if err := rows.Scan(&s.ID, &s.FreqHz, &s.BandwidthHz, &s.Modulation, &s.SubType,
 			&s.Class, &s.Method, &s.Confidence, &s.PowerDBM, &s.PowerCalibrated, &s.Lat, &s.Lon, &s.AccuracyM,
-			&s.FirstSeen, &s.LastSeen, &s.SDRID, &s.Verified); err != nil {
+			&s.FirstSeen, &s.LastSeen, &s.SDRID, &s.Verified,
+			&s.ResidualNS, &s.PairsUsed, &s.MaxBaselineM, &s.Reference); err != nil {
 			return nil, err
 		}
 		s.Active = true
@@ -86,14 +97,16 @@ func (d *DB) GetSignal(ctx context.Context, id string) (*Signal, error) {
 		SELECT id, frequency_hz, bandwidth_hz, COALESCE(modulation,''), COALESCE(sub_type,''),
 			COALESCE(class,''), COALESCE(method,''), confidence, COALESCE(power_dbm,0), power_calibrated,
 			ST_Y(location::geometry), ST_X(location::geometry), COALESCE(accuracy_m,0),
-			first_seen, last_seen, sdr_id, verified, active
+			first_seen, last_seen, sdr_id, verified, active,
+			residual_ns, pairs_used, max_baseline_m, reference
 		FROM signals
 		WHERE id = $1
 	`
 	var s Signal
 	err := d.Pool.QueryRow(ctx, query, id).Scan(&s.ID, &s.FreqHz, &s.BandwidthHz, &s.Modulation, &s.SubType,
 		&s.Class, &s.Method, &s.Confidence, &s.PowerDBM, &s.PowerCalibrated, &s.Lat, &s.Lon, &s.AccuracyM,
-		&s.FirstSeen, &s.LastSeen, &s.SDRID, &s.Verified, &s.Active)
+		&s.FirstSeen, &s.LastSeen, &s.SDRID, &s.Verified, &s.Active,
+		&s.ResidualNS, &s.PairsUsed, &s.MaxBaselineM, &s.Reference)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, ErrNotFound
