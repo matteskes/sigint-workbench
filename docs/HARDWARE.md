@@ -269,6 +269,18 @@ for a carrier whose measured `power_db` sits comfortably below full
 scale (no clipping) yet above the −60 dB peak threshold (§5.4), so the
 live pipeline actually reports it.
 
+One caveat before you trust a carrier: **identify the emitter.**
+Confirm the station's actual channel from a station directory or its
+RDS station ID — not from memory. The hardware cannot mislabel a
+channel by much: RTL-SDR crystal error is ±20–50 ppm (≈ ±2–5 kHz at
+100 MHz) and the detector reports center + signed measured peak offset
+(D4, §5.3), so a strong carrier hundreds of kHz from the frequency you
+expected is a different station, not a tuning fault — and the
+strongest local carrier may be a broadcaster you didn't have in mind.
+Use the station you actually parked on: its licensed ERP for the §6.2
+estimate, its surveyed transmitter site for the §7.2 T3 truth
+position.
+
 ### 6.2 Measure with rtl-calibrate
 
 One run per dongle (example for index 0):
