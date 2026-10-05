@@ -1,0 +1,11 @@
+# SIGINT Workbench — macOS dev-bench overrides.
+#
+# Used ONLY by scripts/dev-macos.sh (docs/HARDWARE.md §4): the UDP pair
+# runs natively on macOS, so the native signal-processor needs a
+# loopback route to ws-hub to deliver signal/sdr/spectrum events.
+# Production keeps ws-hub internal-only per §3.2 — this file is never
+# referenced by `make deploy` or docker-compose.yml defaults.
+services:
+  ws-hub:
+    ports:
+      - "127.0.0.1:8081:8081"

@@ -11,7 +11,9 @@ export default defineConfig({
 				changeOrigin: true
 			},
 			'/ws': {
-				target: 'ws://localhost:8081',
+				// api-gateway is the single client WS ingress (§2.2 A3);
+				// ws-hub itself is internal-only on the compose network.
+				target: 'ws://localhost:8080',
 				ws: true
 			}
 		}

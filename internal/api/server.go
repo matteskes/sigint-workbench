@@ -180,6 +180,9 @@ func (s *Server) handleGetSignals(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if signals == nil {
+		signals = []db.Signal{} // encode [] not null for empty lists
+	}
 	writeJSON(w, signals)
 }
 

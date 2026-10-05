@@ -81,9 +81,10 @@ role.
 
 ## 4. Bring up the stack
 
-Build the hardware binaries first — note that `make dev` builds the
-**untagged** `sdr-capture` (simulator-only; it aborts on
-`driver: rtlsdr`), so the bench always builds and runs its own:
+Build the hardware binaries first — `make dev` prefers the
+hardware-tagged `sdr-capture` build (and warns loudly when it has to
+fall back to the simulator-only untagged build), so this section is
+both what `make dev` automates and the manual path:
 
 ```bash
 make build-capture-hw build-hw-tools

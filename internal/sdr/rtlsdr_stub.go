@@ -27,3 +27,6 @@ func (r *RTLSDR) Metadata() SDRMetadata           { return SDRMetadata{ID: "rtls
 
 // DeviceCount reports 0 when built without the rtlsdr tag.
 func DeviceCount() int { return 0 }
+
+// DeviceUSBStrings reports no hardware when built without the rtlsdr tag.
+func DeviceUSBStrings(i int) (product, serial string, ok bool) { return "", "", false }

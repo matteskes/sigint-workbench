@@ -300,3 +300,22 @@ func (r *RTLSDR) Metadata() SDRMetadata {
 func DeviceCount() int {
 	return int(C.rtlsdr_get_device_count())
 }
+
+// DeviceUSBStrings returns the product name and serial of the RTL-SDR
+// at USB index i without opening it (sdr-capture -devices). ok is
+// false when the index is out of range or the strings are unreadable.
+func DeviceUSBStrings(i int) (product, serial string, ok bool) {
+	if i < 0 || i >= DeviceCount() {
+		return "", "", false
+	}
+	var manufact, productBuf, serialBuf [256]C.char
+	if C.rtlsdr_get_device_usb_strings(C.uint32_t(i),
+		(*C.char)(unsafe.Pointer(&manufact[0])),
+		(*C.char)(unsafe.Pointer(&productBuf[0])),
+		(*C.char)(unsafe.Pointer(&serialBuf[0]))) != 0 {
+		return "", "", false
+	}
+	return C.GoString((*C.char)(unsafe.Pointer(&productBuf[0]))),
+		C.GoString((*C.char)(unsafe.Pointer(&serialBuf[0]))),
+		true
+}

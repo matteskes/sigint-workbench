@@ -1,4 +1,4 @@
-.PHONY: help dev build-capture build-capture-hw build-hw-tools build-prod test frontend-test smoke-onnx ort-lib db-init clean
+.PHONY: help dev build-capture build-capture-hw build-ingest build-processor build-hw-tools build-prod test frontend-test smoke-onnx ort-lib db-init clean
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -20,6 +20,12 @@ build-hw-tools: ## Build RTL-SDR bench tools (rtl-list + rtl-calibrate; needs li
 
 build-capture-linux: ## Cross-compile sdr-capture for Linux (requires C cross-compiler)
 	CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC=aarch64-linux-gnu-gcc go build -o bin/sdr-capture-linux ./cmd/sdr-capture
+
+build-ingest: ## Build native iq-ingest (macOS UDP bench — HARDWARE.md §4)
+	go build -o bin/iq-ingest ./cmd/iq-ingest
+
+build-processor: ## Build native signal-processor (macOS UDP bench; rules classifier unless -tags onnx)
+	go build -o bin/signal-processor ./cmd/signal-processor
 
 # ─── Production (Linux) ───
 

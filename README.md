@@ -145,9 +145,13 @@ make setup
 # 4a. macOS Development
 make dev
 # → UI at http://localhost:5173 (Vite dev server)
-# sdr-capture runs supervised: its log goes to
-# /tmp/sigint-workbench-sdr-capture.log, and Ctrl+C at the Vite
-# prompt stops it together with the frontend
+# macOS topology (docs/HARDWARE.md §4): Docker Desktop's UDP forwarder
+# silently drops at the full dual-dongle rate, so the UDP chain runs
+# natively on loopback (sdr-capture → iq-ingest → signal-processor);
+# only TCP services (db, api-gateway, ws-hub, tiles) stay in Docker.
+# All three native processes are supervised: logs go to
+# /tmp/sigint-workbench-{sdr-capture,iq-ingest,signal-processor}.log,
+# and Ctrl+C at the Vite prompt stops them together with the frontend.
 
 # 4b. Linux Production
 make deploy
@@ -195,6 +199,8 @@ sigint-workbench/
 | `make dev` | Full dev environment (macOS) |
 | `make build-capture` | Build native macOS sdr-capture |
 | `make build-capture-hw` | Build sdr-capture with rtlsdr + hackrf drivers |
+| `make build-ingest` | Build native iq-ingest (macOS UDP bench) |
+| `make build-processor` | Build native signal-processor (macOS UDP bench) |
 | `make build-capture-linux` | Cross-compile sdr-capture for Linux |
 | `make build-hw-tools` | Build RTL-SDR bench tools (rtl-list, rtl-calibrate) |
 | `make build-prod` | Build all Docker images |

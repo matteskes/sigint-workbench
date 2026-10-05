@@ -193,6 +193,8 @@ func (s *sdrSlot) status() map[string]any {
 // iqReadLoop continuously reads IQ from the SDR and streams over UDP.
 func iqReadLoop(slot *sdrSlot, buf []int16, exit <-chan struct{}) {
 	var lastSendErrLog time.Time
+	var lastZeroLog time.Time
+	var firstFrame bool
 	for {
 		select {
 		case <-exit:
@@ -214,7 +216,19 @@ func iqReadLoop(slot *sdrSlot, buf []int16, exit <-chan struct{}) {
 			n--
 		}
 		if n == 0 {
+			// Rate-limit: a device whose USB bulk pipe has wedged
+			// can return zero bytes forever, and an unlogged loop
+			// here left the whole downstream (SDR list, signals,
+			// spectrum) silently empty with a healthy-looking log.
+			if now := time.Now(); now.Sub(lastZeroLog) >= 5*time.Second {
+				lastZeroLog = now
+				log.Printf("[%s] read returned no samples (suppressing repeats for 5s)", slot.cfg.ID)
+			}
 			continue
+		}
+		if !firstFrame {
+			firstFrame = true
+			log.Printf("[%s] streaming: first frame (%d samples)", slot.cfg.ID, n)
 		}
 		slot.lastRead.Store(time.Now().UnixNano())
 		slot.mu.Lock()
@@ -248,6 +262,48 @@ func iqReadLoop(slot *sdrSlot, buf []int16, exit <-chan struct{}) {
 				log.Printf("[%s] send error: %v (suppressing repeats for 5s)",
 					slot.cfg.ID, err)
 			}
+		}
+	}
+}
+
+// watchStreamStall reports a slot that should be streaming but is not:
+// neither the zero-read log nor the send-error log can fire when a
+// blocking cgo read (rtlsdr_read_sync has no timeout) parks the
+// iqReadLoop goroutine on a wedged USB bulk pipe — the macOS failure
+// that leaves the whole downstream silently empty. Recovery: unplug /
+// replug the dongle, then restart make dev (which restarts capture).
+func watchStreamStall(slot *sdrSlot, exit <-chan struct{}) {
+	const (
+		stallAfter = 15 * time.Second
+		warnEvery  = 30 * time.Second
+	)
+	start := time.Now()
+	var lastWarn time.Time
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-exit:
+			return
+		case <-ticker.C:
+		}
+		last := slot.lastRead.Load()
+		if last == 0 {
+			if time.Since(start) < stallAfter {
+				continue // startup grace: the first read may take a moment
+			}
+		} else if age := time.Since(time.Unix(0, last)); age <= stallAfter {
+			continue // healthy: data flowed recently
+		}
+		if now := time.Now(); !lastWarn.IsZero() && now.Sub(lastWarn) < warnEvery {
+			continue
+		}
+		lastWarn = time.Now()
+		if last == 0 {
+			log.Printf("[%s] WARNING: no samples ever received — USB bulk reads are stalled; unplug/replug the dongle and restart make dev", slot.cfg.ID)
+		} else {
+			log.Printf("[%s] WARNING: no samples for %s — stream stalled; unplug/replug the dongle if it does not recover",
+				slot.cfg.ID, time.Since(time.Unix(0, last)).Round(time.Second))
 		}
 	}
 }
@@ -395,8 +451,16 @@ func main() {
 
 	if *showDevices {
 		fmt.Println("Available SDR devices:")
-		fmt.Println("  simulator-0  [Simulator]  24-1700 MHz  BW:10 MHz")
-		fmt.Println("  (requires -tags rtlsdr to query USB hardware)")
+		n := sdr.DeviceCount()
+		for i := 0; i < n; i++ {
+			if product, serial, ok := sdr.DeviceUSBStrings(i); ok {
+				fmt.Printf("  [%d] %s  serial=%s\n", i, product, serial)
+			}
+		}
+		if n == 0 {
+			fmt.Println("  (no RTL-SDR hardware found — untagged build, or no dongles attached)")
+		}
+		fmt.Println("  simulator-0  [Simulator]  24-1700 MHz  BW:10 MHz (use -sim)")
 		return
 	}
 
@@ -492,6 +556,7 @@ func main() {
 	for _, slot := range slots {
 		buf := make([]int16, bufSize)
 		go iqReadLoop(slot, buf, exit)
+		go watchStreamStall(slot, exit)
 		if slot.scanning {
 			log.Printf("[%s] scan: %.4f-%.4f MHz  step %.0f kHz  dwell %d ms",
 				slot.cfg.ID,
