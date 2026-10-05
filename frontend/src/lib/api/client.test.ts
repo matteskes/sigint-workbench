@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { fetchSignals, fetchSignal, fetchSDRs, fetchAnnotations, addAnnotation, connectWebSocket } from './client';
+import { fetchSignals, fetchSignal, fetchSDRs, retuneSdr, fetchAnnotations, addAnnotation, connectWebSocket } from './client';
 
 // Minimal WebSocket double: records the URL and lets tests emit messages.
 class FakeWebSocket {
@@ -194,5 +194,50 @@ describe('connectWebSocket', () => {
 		const ws = connectWebSocket((e) => events.push(e)) as unknown as FakeWebSocket;
 		expect(() => ws.emit('not-json')).not.toThrow();
 		expect(events).toEqual([]);
+	});
+});
+
+describe('retuneSdr (§7.4, §13.1)', () => {
+	it('PUTs {freqHz} to the sdr endpoint and returns the updated device', async () => {
+		const fetchMock = vi.fn().mockResolvedValue(
+			okJSON({ id: 'rtlsdr-0', model: 'RTL2832U', serial: '0001', gainDb: 40, freqHz: 121_500_000, active: true })
+		);
+		vi.stubGlobal('fetch', fetchMock);
+
+		const sdr = await retuneSdr('rtlsdr-0', 121_500_000);
+
+		expect(sdr).toEqual({
+			id: 'rtlsdr-0',
+			model: 'RTL2832U',
+			freqHz: 121_500_000,
+			gainDb: 40,
+			bwHz: 0,
+			active: true
+		});
+		const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+		expect(url).toContain('/api/sdrs/rtlsdr-0');
+		expect(init.method).toBe('PUT');
+		expect(init.headers).toEqual({ 'Content-Type': 'application/json' });
+		expect(JSON.parse(init.body as string)).toEqual({ freqHz: 121_500_000 });
+	});
+
+	it('encodes the device id into the path', async () => {
+		const fetchMock = vi.fn().mockResolvedValue(
+			okJSON({ id: 'a b/c', model: 'm', freqHz: 1, gainDb: 0, active: false })
+		);
+		vi.stubGlobal('fetch', fetchMock);
+
+		await retuneSdr('a b/c', 100_000_000);
+
+		const url = fetchMock.mock.calls[0][0] as string;
+		expect(url).toContain('/api/sdrs/a%20b%2Fc');
+	});
+
+	it('throws on non-OK response (capture unreachable ⇒ 502)', async () => {
+		vi.stubGlobal(
+			'fetch',
+			vi.fn().mockResolvedValue({ ok: false, status: 502, json: async () => ({}) } as Response)
+		);
+		await expect(retuneSdr('rtlsdr-0', 100_000_000)).rejects.toThrow('API error: 502');
 	});
 });

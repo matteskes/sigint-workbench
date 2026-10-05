@@ -98,6 +98,32 @@ export async function fetchSDRs(): Promise<SDRStatus[]> {
 }
 
 /**
+ * Retunes a device: PUT /api/sdrs/{id} with {freqHz} (§7.4, §13.1).
+ * The gateway persists the row AND forwards the tune to the
+ * sdr-capture control API — capture unreachable ⇒ 502, unknown
+ * device there ⇒ 404 — so success means the hardware really moved.
+ * Returns the updated device mapped to the dashboard shape. Note:
+ * a manual tune pauses that device's scan loop until restart (§7.4).
+ */
+export async function retuneSdr(id: string, freqHz: number): Promise<SDRStatus> {
+	const res = await fetch(`${API_URL}/api/sdrs/${encodeURIComponent(id)}`, {
+		method: 'PUT',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ freqHz })
+	});
+	if (!res.ok) throw new Error(`API error: ${res.status}`);
+	const d = await res.json();
+	return {
+		id: String(d.id),
+		model: String(d.model),
+		freqHz: Number(d.freqHz ?? 0),
+		gainDb: Number(d.gainDb ?? 0),
+		bwHz: 0,
+		active: Boolean(d.active)
+	};
+}
+
+/**
  * Opens the event WebSocket. onOpen fires on every (re)connect so the
  * caller can re-bootstrap state missed while disconnected.
  */
