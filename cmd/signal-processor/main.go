@@ -817,6 +817,38 @@ func main() {
 		log.Fatalf("%v", err)
 	}
 
+	// §18 spectrum tap config: enabled defaults to true (*bool nil),
+	// bins to 256, rate_hz to 5 (§18.4). bins must divide fft.size
+	// (§18.1); fft.size is a power of two, so the nearest valid
+	// divisor at or below the configured value is its largest
+	// power-of-two divisor — clamp there with a warning rather than
+	// refusing to run detection over a display-only setting.
+	spectrumEnabled := procCfg.Spectrum.Enabled == nil || *procCfg.Spectrum.Enabled
+	spectrumBins := config.ResolveInt(procCfg.Spectrum.Bins, 256)
+	spectrumRateHz := config.ResolveFloat(procCfg.Spectrum.RateHz, 5)
+	if spectrumEnabled {
+		if spectrumBins < 1 {
+			log.Printf("spectrum.bins %d invalid; using 256 (§18.4)", spectrumBins)
+			spectrumBins = 256
+		}
+		if fftSize == 0 {
+			// Legacy per-frame FFT has a variable nfft, so
+			// fft.size % spectrum.bins == 0 cannot hold (§18.1).
+			spectrumEnabled = false
+			log.Printf("spectrum: fft.size unset (per-frame FFT); spectrum tap disabled (§18.1 needs a fixed record size)")
+		} else {
+			clamped := fftSize
+			for clamped > spectrumBins {
+				clamped /= 2
+			}
+			if clamped != spectrumBins {
+				log.Printf("spectrum.bins %d does not divide fft.size %d (§18.1); clamping to %d",
+					spectrumBins, fftSize, clamped)
+				spectrumBins = clamped
+			}
+		}
+	}
+
 	// DSP components
 	peakDetector := &dsp.PeakDetector{
 		ThresholdDB: thresholdDB,
@@ -869,6 +901,14 @@ func main() {
 	ttl := time.Duration(envInt("SIGNAL_TTL", 30)) * time.Second
 	pub := newPublisher(database, wsHubURL, loadLocations(*configPath), ttl)
 	pub.initSDRs(loadSDRs(*configPath))
+
+	// §18 spectrum tap: emits decimated spectrum.frame events through
+	// the publisher's drop-never-block queue (§18.1). Nil = disabled.
+	var specTap *spectrumTap
+	if spectrumEnabled {
+		specTap = newSpectrumTap(spectrumBins, spectrumRateHz, pub.queue)
+		log.Printf("spectrum tap enabled (§18): bins=%d rate=%.0f Hz/SDR", spectrumBins, spectrumRateHz)
+	}
 	if apiPort := loadAPIPort(*configPath); apiPort != 0 {
 		// §5.6 gain polling host: where the capture control API lives
 		// relative to THIS process. Default localhost covers the
@@ -1006,11 +1046,11 @@ func main() {
 					merged := *frame
 					merged.Samples = assembled
 					events = processFrame(&merged, peakDetector,
-						classifier, fftWindow)
+						classifier, fftWindow, specTap)
 				})
 		} else {
 			events = processFrame(frame, peakDetector, classifier,
-				fftWindow)
+				fftWindow, specTap)
 		}
 
 		// §5.6: decorate each event with calibrated power before
@@ -1035,8 +1075,9 @@ func main() {
 
 // processFrame runs the DSP pipeline on one IQ frame (for §5.7
 // assembled buffers: one fft.size record carried in a frame header).
+// specTap is the §18 read-only spectrum side-tap; nil disables it.
 func processFrame(frame *sdr.IQFrame, pd *dsp.PeakDetector,
-	classifier frameClassifier, win dsp.WindowKind) []signalEvent {
+	classifier frameClassifier, win dsp.WindowKind, specTap *spectrumTap) []signalEvent {
 	pairs := len(frame.Samples) / 2
 	if pairs < 64 {
 		return nil
@@ -1060,6 +1101,13 @@ func processFrame(frame *sdr.IQFrame, pd *dsp.PeakDetector,
 
 	// Peak detection
 	peaks := pd.Detect(result)
+
+	// §18 spectrum tap: read-only side-tap on the assembled record.
+	// It runs after peak detection but before the empty-spectrum
+	// early return below, so noise-only records still feed the
+	// dashboard waterfall; it never alters detection (§18.1).
+	specTap.observe(frame, result)
+
 	if len(peaks) == 0 {
 		return nil
 	}

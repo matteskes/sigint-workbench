@@ -44,3 +44,20 @@ scan:
 #   overwrite_placement: true   # covariance-gated §9.3 overwrite
 #   locus_radius_m: 0           # 0 ⇒ 3× the pair's baseline
 #   solve_rate_hz: 0            # 0 ⇒ bandwidth-derived (default 250 kS/s)
+
+# Spectrum tap (§18) — decimated per-SDR power spectrum feeding the
+# dashboard spectrum/waterfall. A read-only side-tap on the assembled
+# §5.7 FFT: detection is untouched. Frames ride the ws-hub producer
+# queue's drop-never-block path, so saturation skips waterfall rows
+# (§14.3) rather than backing up DSP.
+spectrum:
+  # §18.4: false yields zero events and zero tap allocation.
+  enabled: true
+  # Decimated bin count; MUST divide fft.size (§18.1). 4096 / 256 =
+  # 16 source bins per displayed bin. A value that does not divide
+  # fft.size is clamped at startup to the nearest valid divisor.
+  bins: 256
+  # Max frames per second per SDR. A cap, not a guarantee: a record
+  # exists only once fft.size pairs have assembled, so retunes and
+  # UDP loss show as real gaps in the waterfall (§18.1).
+  rate_hz: 5

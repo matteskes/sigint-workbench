@@ -68,6 +68,19 @@ type SignalProcessorConfig struct {
 	// TDOA engine (§9.6). Disabled by default; see the tdoa block in
 	// config/signal-processor.yaml for the per-key semantics.
 	TDOA TDOAConfig `yaml:"tdoa"`
+
+	// Spectrum tap (§18): decimated per-SDR power spectra for the
+	// dashboard spectrum/waterfall. Enabled defaults to true (*bool
+	// nil), bins to 256, rate_hz to 5 (§18.4) — resolved in main.
+	Spectrum SpectrumConfig `yaml:"spectrum"`
+}
+
+// SpectrumConfig holds the §18.4 spectrum-tap knobs. Enabled is a
+// pointer so an absent yaml block keeps the spec default (true).
+type SpectrumConfig struct {
+	Enabled *bool   `yaml:"enabled"`
+	Bins    int     `yaml:"bins"`
+	RateHz  float64 `yaml:"rate_hz"`
 }
 
 // TDOAConfig holds the §9.6 engine knobs. Zero values take the

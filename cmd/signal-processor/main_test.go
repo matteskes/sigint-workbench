@@ -400,7 +400,7 @@ func TestProcessFrameBelowCenterOffset(t *testing.T) {
 		center = uint64(10_000_000)
 		offset = -2_000_000.0 // below center, within (-fs/2, 0) at 4.096 Msps
 	)
-	events := processFrame(pipelineFrame(t, center, offset, 0), pd, rules, dsp.WindowRectangular)
+	events := processFrame(pipelineFrame(t, center, offset, 0), pd, rules, dsp.WindowRectangular, nil)
 	if len(events) == 0 {
 		t.Fatal("no events for below-center tone")
 	}
@@ -424,7 +424,7 @@ func TestProcessFrameClampsBelowZero(t *testing.T) {
 		center = uint64(500_000)
 		offset = -2_000_000.0 // center+offset < 0 -> must clamp to 0
 	)
-	events := processFrame(pipelineFrame(t, center, offset, 0), pd, rules, dsp.WindowRectangular)
+	events := processFrame(pipelineFrame(t, center, offset, 0), pd, rules, dsp.WindowRectangular, nil)
 	if len(events) == 0 {
 		t.Fatal("no events")
 	}
@@ -460,7 +460,7 @@ func TestAssembledFramesMatchSingleFrame(t *testing.T) {
 	for f := 0; f < 4; f++ {
 		single.Samples = append(single.Samples, build(f)...)
 	}
-	want := processFrame(single, pd, rules, dsp.WindowRectangular)
+	want := processFrame(single, pd, rules, dsp.WindowRectangular, nil)
 	if len(want) == 0 {
 		t.Fatal("no events from single 4096-pair frame")
 	}
@@ -475,7 +475,7 @@ func TestAssembledFramesMatchSingleFrame(t *testing.T) {
 		asm.Offer(fr.SDRID, fr.FreqHz, fr.Samples, func(buf []int16) {
 			m := *fr
 			m.Samples = buf
-			got = processFrame(&m, pd, rules, dsp.WindowRectangular)
+			got = processFrame(&m, pd, rules, dsp.WindowRectangular, nil)
 		})
 	}
 	if len(got) == 0 {
