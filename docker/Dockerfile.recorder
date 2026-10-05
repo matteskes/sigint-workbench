@@ -20,8 +20,12 @@ RUN apt-get update \
     && CGO_ENABLED=1 go build -tags opus -ldflags="-s -w" -o /app/recorder ./cmd/recorder
 
 FROM debian:bookworm-slim
+# apt-get install --only-upgrade perl-base: the base snapshot can lag
+# the current security point release (trivy CRITICAL gate; see
+# Dockerfile.sdr-capture).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates libopus0 libopusfile0 \
+    && apt-get install -y --only-upgrade perl-base \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /app/recorder /recorder
 ENTRYPOINT ["/recorder"]

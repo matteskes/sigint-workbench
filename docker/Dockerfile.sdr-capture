@@ -17,10 +17,15 @@ COPY . .
 RUN CGO_ENABLED=1 GOOS=linux go build -tags "rtlsdr,hackrf" -ldflags="-s -w" -o /app/sdr-capture ./cmd/sdr-capture
 
 FROM debian:bookworm-slim
+# Security-upgrade the base perl-base: the debian:bookworm-slim
+# snapshot can lag the current security point release, which the
+# trivy CRITICAL gate flags (same rationale as the fresh nginx
+# install in Dockerfile.frontend).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     librtlsdr0 \
     libhackrf0 \
     ca-certificates \
+    && apt-get install -y --only-upgrade perl-base \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /app/sdr-capture /sdr-capture
 ENTRYPOINT ["/sdr-capture"]

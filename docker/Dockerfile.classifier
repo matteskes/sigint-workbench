@@ -23,8 +23,12 @@ RUN CGO_ENABLED=1 go build -tags onnx -ldflags="-s -w" -o /app/signal-processor 
 
 FROM debian:bookworm-slim
 ARG ORT_VERSION
+# apt-get install --only-upgrade perl-base: the base snapshot can lag
+# the current security point release (trivy CRITICAL gate; see
+# Dockerfile.sdr-capture).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates wget libgomp1 libstdc++6 \
+    && apt-get install -y --only-upgrade perl-base \
     && rm -rf /var/lib/apt/lists/* \
     && wget -q "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz" \
     && tar -xzf "onnxruntime-linux-x64-${ORT_VERSION}.tgz" -C /opt \
