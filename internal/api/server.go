@@ -21,6 +21,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"sigint-workbench/internal/db"
+	"sigint-workbench/internal/settings"
 	"sigint-workbench/internal/ws"
 )
 
@@ -31,10 +32,11 @@ type Server struct {
 	log    zerolog.Logger
 
 	recordingsDir  string
-	wsHubAddr      string // ws-hub host:port for the /ws relay (§2.2)
-	recorderWSAddr string // recorder host:port for the /ws/audio relay (§10.4)
-	recorderAPI    string // recorder host:port for the TFR proxy (§19.3)
-	captureCtrl    string // sdr-capture host:port for the control-API proxy (§7.4)
+	wsHubAddr      string          // ws-hub host:port for the /ws relay (§2.2)
+	recorderWSAddr string          // recorder host:port for the /ws/audio relay (§10.4)
+	recorderAPI    string          // recorder host:port for the TFR proxy (§19.3)
+	captureCtrl    string          // sdr-capture host:port for the control-API proxy (§7.4)
+	settings       *settings.Store // §20 setup screen store (writable config mount)
 }
 
 // NewServer creates a new API server.
@@ -59,6 +61,10 @@ func NewServer(database *db.DB, log zerolog.Logger) *Server {
 	if capAddr == "" {
 		capAddr = "127.0.0.1:9090"
 	}
+	cfgDir := os.Getenv("CONFIG_DIR")
+	if cfgDir == "" {
+		cfgDir = "config"
+	}
 	s := &Server{
 		db:             database,
 		log:            log,
@@ -67,6 +73,7 @@ func NewServer(database *db.DB, log zerolog.Logger) *Server {
 		recorderWSAddr: recAddr,
 		recorderAPI:    recAPI,
 		captureCtrl:    capAddr,
+		settings:       settings.NewStore(cfgDir),
 	}
 	s.buildRoutes()
 	return s
@@ -107,10 +114,6 @@ func (s *Server) buildRoutes() {
 	s.router.Get("/api/recordings/{id}/audio", s.handleGetRecordingAudio)
 	s.router.Post("/api/recordings/{id}/tfr", s.handleRecordingTFR)
 
-	// SDRs
-	s.router.Get("/api/sdrs", s.handleGetSDRs)
-	s.router.Put("/api/sdrs/{id}", s.handleUpdateSDR)
-
 	// WebSocket relays (§2.2, A3): the gateway is the single client
 	// ingress; the former in-process hub had no producers and was
 	// removed (§13.2.4). /ws relays signal events from ws-hub;
@@ -122,6 +125,14 @@ func (s *Server) buildRoutes() {
 	s.router.Get("/api/sdrs", s.handleGetSDRs)
 	s.router.Put("/api/sdrs/{id}", s.handleUpdateSDR)
 	s.router.Get("/api/sdrs/{id}/status", s.handleGetSDRStatus)
+
+	// §20 setup screen
+	s.router.Get("/api/settings", s.handleSettingsIndex)
+	s.router.Get("/api/settings/{section}", s.handleSettingsGet)
+	s.router.Put("/api/settings/{section}", s.handleSettingsPut)
+	s.router.Get("/api/setup/status", s.handleSetupStatus)
+	s.router.Get("/api/setup/state", s.handleSetupStateGet)
+	s.router.Put("/api/setup/state", s.handleSetupStatePut)
 }
 
 // Handler returns the HTTP handler.

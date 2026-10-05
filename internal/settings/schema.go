@@ -304,3 +304,13 @@ func Schema() []Section {
 		},
 	}
 }
+
+// SectionByID looks up a schema section by its ID.
+func SectionByID(id string) (Section, bool) {
+	for _, s := range Schema() {
+		if s.ID == id {
+			return s, true
+		}
+	}
+	return Section{}, false
+}

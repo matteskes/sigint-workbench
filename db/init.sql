@@ -100,3 +100,11 @@ CREATE TABLE IF NOT EXISTS verifications (
     confidence      REAL,
     created_at      TIMESTAMPTZ DEFAULT now()
 );
+-- ─── App Settings (§20 setup screen) ───
+-- Gateway-managed app state (the first-run flag). Service
+-- configuration stays in config/*.yaml (§16).
+CREATE TABLE IF NOT EXISTS app_settings (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
