@@ -1932,6 +1932,10 @@ recorder TFR API (§19).
 
 ## 17. Non-Functional Requirements, Security & Quality
 
+**Status: requirements-only — performance, security and quality
+obligations over the contracts in §§4–16; each item is enforced
+or measured where tagged. No single implementation contract.**
+
 ### 17.1 Performance & reliability (NFR)
 
 - **Throughput (SHOULD):** 2 SDRs at 2.4 MSPS ⇒ ~2 300 UDP
@@ -2276,6 +2280,12 @@ tracked in §6.6; emitter-identity research (transient capture,
 cross-receiver probes) is tracked in §6.7.
 
 ## 20. First-Run Setup Screen
+
+**Status: `[implemented]` (2026-10-05): the /setup wizard, the six
+§20.4 endpoints, the comment-preserving YAML write path with D11
+restart-to-apply, and the §20.5 app_settings store (migration 005)
+ship together; a drift-guard test pins the shipped config/*.yaml
+to the schema.**
 
 ### 20.1 Scope & semantics
 
