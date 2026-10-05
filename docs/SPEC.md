@@ -1674,7 +1674,8 @@ per-device §5.6 calibration applied; run log: docs/HARDWARE.md §9);
 HackRF driver `[implemented]`
 (build tag; compile-validated, hardware-unverified; on-hardware
 validation `[planned]`, deferred until hardware is available —
-checklist: docs/HARDWARE.md §8) (H1/H2).**
+checklist: docs/HARDWARE.md §8) (H1/H2); Heimdall DAQ front end
+`[planned]` (H3, §15.5 — Phase 4 slice 10).**
 
 ### 15.1 Driver contract
 
@@ -1701,6 +1702,7 @@ this interface.
 | Simulator | (none) | 24 MHz – 1.7 GHz (declared) | 10 MHz | no | `[implemented]` — the CI testbed |
 | RTL-SDR (RTL2832U) | `rtlsdr` (cgo, librtlsdr) | 24 MHz – 1.7 GHz | 3.2 MHz | no | `[implemented]` — §15.3 fixes hardware-validated 2026-10-04 (docs/HARDWARE.md §9) |
 | HackRF One | `hackrf` (cgo, libhackrf) | **1 MHz – 7250 MHz** (H1) | ≤ **56 MSPS** (H1; practical cap ≈ 20 MSPS) | hardware has TX; **prohibited** | `[implemented]` — compile-validated, hardware-unverified |
+| Heimdall DAQ (Kraken/KerberosSDR) | (none — pure TCP client) | 24 MHz – 1.7 GHz (RTL class) | ≤ 2.56 MSPS (daq ini) | no | `[planned]` — H3, §15.5 |
 
 **Simulator normative defaults** (testbed fixture): center set per
 launch; noise amplitude 0.005; gain factor `10^(gain/40)` with
@@ -1802,6 +1804,132 @@ CI or the dev environment):
   the 20 MSPS practical cap) remains a Phase 3 exit gate — deferred
   until hardware is available; checklist in docs/HARDWARE.md §8.
 
+### 15.5 Heimdall DAQ front end (H3) — `[planned]`
+
+Target: KrakenRF's open-source **HeIMDALL DAQ firmware**
+(github.com/krakenrf/heimdall_daq_fw, `main @ 1efc252`, DAQ config
+v7; GPL-3.0) — the stock firmware for KerberosSDR (4 ch) and
+KrakenSDR (5 ch) coherent multi-channel RTL-SDR front ends. The
+contract below was extracted from the `Firmware/_daq_core` sources
+(`iq_header.h`/`.py`, `eth_server.h`, `iq_server.c`,
+`hw_controller.py`, `daq_chain_config.ini`). Upstream is consumed
+as a **protocol client only**: no code linkage, no cgo, no new
+library dependency, no build tag (simulator precedent), and no new
+listening ports — sdr-capture makes **outbound** TCP connections to
+the DAQ host (§3.2 unchanged).
+
+**Unit model (normative).** One coherent DAQ unit (shared LO and
+clock, N receiver channels) maps to **N logical SDRs** — one
+`sdrs[]` row and one frame `sdr_id` per channel (`kraken-0` …
+`kraken-4`), grouped by a shared `unit` key. The §4 wire model, §12
+`sdrs` rows, per-channel §5.6 calibration and §9 placement are
+unchanged. Consequences:
+
+- **One connection pair per unit:** one IQ connection (TCP 5000)
+  and one control connection (TCP 5001); the driver de-interleaves
+  frames per channel and fans them out under each row's `sdr_id`
+  (multi-SDR fan-out is rehearsed by the two-simulator fixture,
+  §16.1).
+- **Tuning and gain are unit-wide** (a single `FREQ`/`GAIN`
+  command on 5001 reaches every channel): exactly one member of a
+  unit — deterministically the lowest `channel` — owns the §7.1
+  scan loop and receives §7.4 `frequency`/`gain` commands; the
+  other members MUST NOT issue duplicate retunes. A unit-wide
+  retune refreshes every member's §7.4 status row.
+- **Same-unit verification is suppressed:** §8 MUST NOT verify two
+  channels of one unit against each other (shared LO and clock
+  make a pass vacuous). The processor needs the grouping, so the
+  driver MUST expose `unit` in the §7.4 status payload.
+- **Placement:** every channel row carries the array-center
+  lat/lon; individual array elements have no independent
+  coordinates in v1.
+
+**Interface contract (normative).**
+
+IQ data — `iq_server` on TCP 5000:
+
+- The client connects and sends the ASCII token `streaming`; the
+  server then pushes frames.
+- **Stop-and-wait:** after each frame the server blocks; the
+  client MUST send the ASCII token `IQDownload` to fetch the next
+  frame. Any other command closes the connection. One client at a
+  time.
+- Frame = 1024-byte little-endian header + payload, beginning with
+  sync word `0x2bf7b95a`. Fields the driver consumes:
+  `frame_type` (0 data / 1 dummy / 2 ramp / 3 cal / 4 trig-wait),
+  `active_ant_chs`, `rf_center_freq` (u64 Hz), `sampling_freq`
+  (u64 Hz, post-decimation), `cpi_length` (samples per channel),
+  `time_stamp` (u64 Unix seconds), `cpi_index`, `data_type`
+  (0 int8 / 1 int16 / 2 float32), `if_gains[32]` (dB×10 per
+  channel), `delay_sync_flag`, `sync_state`.
+- Payload = `cpi_length × active_ant_chs` complex samples,
+  **channel-major**, interleaved I/Q; the eth server serves CF32
+  (data_type 2). The default kraken CPI is 2^20 pairs per channel.
+
+Control — `hw_controller` on TCP 5001: 128-byte frames, 4-byte
+ASCII command + 124-byte parameter area; every processed command
+answers `FNSD` plus zero padding.
+
+| Command | Parameter | Effect |
+| --------- | ----------- | -------- |
+| `FREQ` | u64 Hz | unit-wide retune |
+| `GAIN` | N × u32 dB×10 | per-channel gains |
+| `AGC` +space | none | auto gain — rejected (§5.6 needs fixed gain) |
+| `STHU` | float32 | squelch threshold — unmapped in v1 |
+| `INIT` | none | (re)initialize the DAQ chain |
+| `EXIT` | none | server exits |
+
+**Driver behavior (normative).**
+
+- Accept only `frame_type` 0 (DATA) payloads; DUMMY/RAMP/CAL/TRIGW
+  frames (noise-source calibration bursts and self-tests) MUST be
+  dropped and counted (§4.3-style drop counter).
+- Stamp each §4 frame's `freq_hz`, `sample_rate` and `timestamp`
+  from the IQ header's `rf_center_freq`, `sampling_freq` and
+  `time_stamp` — the header is authoritative per frame, so samples
+  in flight during a retune are never mislabeled (§4.2).
+- Convert CF32 → int16 with the §15.3 full-scale convention
+  (`x·32768`, clamped) and re-chunk to ≤ 1024-pair §4 frames; a
+  full CPI becomes 1024 frames per channel.
+- Report applied gain honestly from `if_gains[]` (dB×10) via
+  `AppliedGainDB`: upstream snaps requests onto the R820T gain
+  table (~29 steps, 0–49.6 dB) — the same discipline as §15.3
+  fix 4 and §5.6. Negative gain is rejected (no auto-gain mode);
+  `AGC` — whose wire token carries a trailing space — stays
+  unmapped.
+- The kit is receive-only: report `HasTX = false` (H2 holds
+  trivially).
+- Surface `delay_sync_flag`/`sync_state` in §7.4 status as
+  coherence health (informational in v1).
+
+Out of v1 scope: bias-tee and noise-source control, DAQ ini
+management, multi-unit arbitration beyond independent units, and
+**coherent AOA/DF** on the calibrated array (the real prize —
+future work building on §9.5; explicitly not a driver feature).
+
+**Deployment & sizing.** The DAQ firmware runs on its own host
+beside the receivers (RPi 4/5 or x86); sdr-capture stays on the
+workbench host. This is the **bounded exception** to §1's
+multi-host deferral: one remote IQ front end over plain TCP with
+§4.2-coarse timestamps. Generic multi-host capture and NTP/PTP
+sync-quality reporting remain Phase 4 slice 6 (§17.4) — this
+driver does not enable them. Throughput: 2.4 MSPS × 5 channels ⇒
+~11 700 §4 frames/s after re-chunking, far above the ~3 500 pkt/s
+at which the macOS Docker UDP forwarder drops (docs/HARDWARE.md
+§4) — such deployments MUST cut channel count or sample rate or
+use the native ingest path (§17.1); the upstream `cpi_size` does
+not change the §4 frame rate (it only sizes upstream frames,
+which are re-chunked anyway). CI never needs a DAQ: the §17.3
+obligations run against an in-process fake server; on the bench,
+upstream's synthetic mode (`daq_synthetic_start.sh`) exercises
+the same wire protocol without antennas. Implementation touches
+at slice time: `internal/sdr/heimdall.go` (codec + client) and
+the driver switch in `cmd/sdr-capture` plus
+`internal/sdr/config.go` and `internal/settings/{schema,validate}.go`
+(all of which reject `heimdall` today — §16.1); the bench
+validation checklist lands in docs/HARDWARE.md with the driver
+(HackRF precedent, §15.4).
+
 ## 16. Configuration Reference
 
 **Status: the YAML reference is normative and loaded — iq-ingest,
@@ -1842,6 +1970,9 @@ Known YAML-vs-behavior conflicts:
   slice 0): the loader accepts `simulator`; the two-device dev
   fixture `config/sdr-capture.sim.yaml` shares one ingest port
   (§16.4).
+- `sdr-capture.yaml` `driver: heimdall` — `[planned]` (§15.5, H3):
+  the config loader and the settings schema/validator reject the
+  value until the Heimdall slice lands.
 
 ### 16.2 `sdr-capture.yaml` (loaded)
 
@@ -1851,9 +1982,16 @@ Known YAML-vs-behavior conflicts:
 
 sdrs[]:
   id            string   required, unique; frame sdr_id + DB row
-  driver        string   rtlsdr | hackrf | simulator(-sim flag)
+  driver        string   rtlsdr | hackrf | simulator(-sim flag);
+                         heimdall [planned] (§15.5)
   usb_index     int      (rtlsdr)
   serial        string   (hackrf)
+  unit          string   (heimdall) groups channels of one coherent
+                         DAQ unit — tuning is unit-wide (§15.5)
+  channel       int      (heimdall) DAQ channel index of this row
+  host          string   (heimdall) DAQ host for both TCP links
+  ctrl_port     int      (heimdall) control port, default 5001;
+                         IQ rides stream_port (default 5000)
   default_freq  uint64   Hz
   default_gain  float    dB
   default_bw    uint32   Hz (clamped to driver maxBW)
@@ -2082,6 +2220,13 @@ stores and the API client; `svelte-check` for types.
   picker/param-panel smoke (vitest).
 - D6 (§11.2): TTL test asserting `active=false` + row survives;
   purge test for the 30-day/50 GB caps.
+- H3 (§15.5, at slice time): IQ-header codec table tests (field
+  round-trip, sync word), CF32→int16 full-scale conversion,
+  channel de-interleave into per-sdr_id §4 frames, and an
+  in-process fake `iq_server` + `hw_controller` integration test —
+  `streaming` handshake, `IQDownload` stop-and-wait, `FNSD` ack
+  parsing, DATA-only filtering with drop counters, and the
+  one-retune-per-unit rule. Hardware-free; no new CI job.
 
 ### 17.4 Roadmap (phased)
 
@@ -2091,7 +2236,7 @@ stores and the API client; `svelte-check` for types.
 | **1 — Correctness** | D4 negative offsets; A1 unlocated signals; §6.5 class enum; dead `/ws` hub removal; FLAC-claim cleanup (code + README); CORS/origin tightening — all **done** | new tests per §17.3 green; docs match behavior |
 | **2 — Features** | §15.3 RTL-SDR defect fixes; §10.1 real SSB + pair-aware registry; §11.2 active/TTL lifecycle; `sdr.status` producer (§14.4.3); `GET /ws` gateway relay (§2.2, A3); frontend data wiring (§14.4.2); YAML config loading + `min_confidence` enforcement (§16.1); **slices 1–3:** D3 scan loop + §7.4 control status; §8 dual-SDR verification with verified latch; recorder (D1 in-band WAV + §11.3 retention); first live `TEST_DATABASE_URL` integration run (§17.3); **slice 4:** Opus live streaming recorder side (D1b, §10.3–§10.4: per-signal mux + `/ws/audio` server + `Dockerfile.recorder`); **slice 5:** `/ws/audio` gateway relay (§2.2, §10.4); control-API proxy — `PUT /api/sdrs/{id}` retune forwarding + `GET /api/sdrs/{id}/status` (§7.4, §13.1, §13.2.3) — **all delivered** | §17.3 obligations green; dashboard live end-to-end |
 | **3 — Hardware & fidelity** | RTL-SDR on-hardware validation (§15.3 defect fixes delivered in Phase 2); HackRF driver (H1/H2) — **delivered, compile-validated** (§15.4); power calibration contract (§5.6) — **delivered** (contract + mechanism + honesty flag; measuring each SDR's physical offset → docs/HARDWARE.md runbook, slice 3); **slice 0:** multi-SDR sim enablement — `driver: simulator` accepted via YAML + two-device shared-ingest-port rehearsal (§16.1, §16.4) — **delivered**; `min_confidence` enforcement (§16.1) — **delivered in Phase 2**; **slice 3:** RTL-SDR on-hardware validation runbook + calibration tooling — docs/HARDWARE.md, cmd/rtl-list, cmd/rtl-calibrate (§15.3, §5.6) — **delivered and executed 2026-10-04** (V1–V8 pass, offsets applied); **fft fidelity:** §5.7 `fft.size`/`fft.window` wired end-to-end — signal-processor assembles 4096-pair records, rtl-calibrate `-fft-size`, ONNX inference reachable on the native bench (`make ort-lib`, `-tags onnx`) — **delivered 2026-10-04** (offsets recalibrated at the 4096 geometry per §6.3; §8 session 2) | 2 real SDRs verified end-to-end; calibration documented — **met 2026-10-04** (RTL-SDR half; HackRF deferred, no hardware) |
-| **4 — Deferred** | **in progress** — **slice 0:** D2 stub removal (`cmd/classifier`, `cmd/location-service`, compose entries; `Dockerfile.classifier` builds signal-processor only) — **delivered**; **slice 1:** annotations — `GET/POST /api/signals/{id}/annotations` + SignalDetail notes UI — **delivered**; **slice 2:** `audio.level` coarse feed recorder → hub → frontend — **delivered** (scope settled: one event per actively demodulated §10.2 session); **slice 3:** tracking — populate `tracks` from consecutive placements (§9.4, §12.4) — **delivered** (1 Hz persist + `track.update`, final row on TTL sweep, `GET /api/signals/{id}/track`, SignalDetail speed/heading, MapView polyline); **slice 4:** TDOA design — normative §9.5 + §4 frame v2 sample-accurate timing (design review gate) — **delivered** (review passed 2026-10-04); **slice 5:** TDOA engine — simulator first (injected offsets), then 3-SDR on-air fix — **engine + simulator, §4.5 v2 codec + dual-format consumers + per-sender gap counters, migration 004 quality columns, and §9.6 processor wiring (`signal.tdoa`, fix persistence, flip-flop guard) delivered** (on-air validation remains — runbook: docs/HARDWARE.md §7); **slice 6:** multi-host + NTP/PTP — remote capture hosts, sync-quality reporting (§16); **slice 7: audio parity — §10.5 raw-IQ writer (`iq.enabled`), §11.1 max-duration enforcement (`iq.max_duration_s`), §10.4 live browser Opus playback (dashboard consumes `/ws/audio`) — delivered 2026-10-04**; **slice 8:** dashboard retune UI wired to the `PUT /api/sdrs/{id}` control-API proxy (§7.4, §13.1) — delivered 2026-10-04; **slice 9:** spectrum analyzer + waterfall (§18) — design locked (D9), implementation planned | per-slice; slices 4–5: TDOA fix on a known on-air transmitter; slice 6: second capture host with NTP/PTP sync-quality reporting; slice 7: raw-IQ + duration-cap tests, live playback on the dashboard — **met 2026-10-04** (Go + vitest gates green; browser playback unit-tested against the §10.4 contract with stub WebCodecs — not verified in a real browser session); slice 8: retune client tests — met (vitest API-client suite, svelte-check clean); slice 9: §18 tap + display with §17.3 obligations green on the dashboard |
+| **4 — Deferred** | **in progress** — **slice 0:** D2 stub removal (`cmd/classifier`, `cmd/location-service`, compose entries; `Dockerfile.classifier` builds signal-processor only) — **delivered**; **slice 1:** annotations — `GET/POST /api/signals/{id}/annotations` + SignalDetail notes UI — **delivered**; **slice 2:** `audio.level` coarse feed recorder → hub → frontend — **delivered** (scope settled: one event per actively demodulated §10.2 session); **slice 3:** tracking — populate `tracks` from consecutive placements (§9.4, §12.4) — **delivered** (1 Hz persist + `track.update`, final row on TTL sweep, `GET /api/signals/{id}/track`, SignalDetail speed/heading, MapView polyline); **slice 4:** TDOA design — normative §9.5 + §4 frame v2 sample-accurate timing (design review gate) — **delivered** (review passed 2026-10-04); **slice 5:** TDOA engine — simulator first (injected offsets), then 3-SDR on-air fix — **engine + simulator, §4.5 v2 codec + dual-format consumers + per-sender gap counters, migration 004 quality columns, and §9.6 processor wiring (`signal.tdoa`, fix persistence, flip-flop guard) delivered** (on-air validation remains — runbook: docs/HARDWARE.md §7); **slice 6:** multi-host + NTP/PTP — remote capture hosts, sync-quality reporting (§16); **slice 7: audio parity — §10.5 raw-IQ writer (`iq.enabled`), §11.1 max-duration enforcement (`iq.max_duration_s`), §10.4 live browser Opus playback (dashboard consumes `/ws/audio`) — delivered 2026-10-04**; **slice 8:** dashboard retune UI wired to the `PUT /api/sdrs/{id}` control-API proxy (§7.4, §13.1) — delivered 2026-10-04; **slice 9:** spectrum analyzer + waterfall (§18) — design locked (D9), implementation planned; **slice 10:** Heimdall DAQ front end (H3, §15.5) — `[planned]`: `driver: heimdall` TCP client (IQ :5000 + control :5001), per-channel logical SDRs with unit-wide tuning/scan, same-unit verification suppression | per-slice; slices 4–5: TDOA fix on a known on-air transmitter; slice 6: second capture host with NTP/PTP sync-quality reporting; slice 7: raw-IQ + duration-cap tests, live playback on the dashboard — **met 2026-10-04** (Go + vitest gates green; browser playback unit-tested against the §10.4 contract with stub WebCodecs — not verified in a real browser session); slice 8: retune client tests — met (vitest API-client suite, svelte-check clean); slice 9: §18 tap + display with §17.3 obligations green on the dashboard; slice 10: §17.3 H3 suite green against the in-process fake DAQ; bench validation on a KrakenSDR deferred to hardware availability (checklist → docs/HARDWARE.md) |
 
 ## 18. Spectrum Analyzer & Waterfall
 
@@ -2388,6 +2533,7 @@ defaults — they have no separate normative surface.)
 | D9 | Spectrum: hub JSON events (`spectrum.frame`), max-pool decimation of the §5.7 FFT to `spectrum.bins`, ≤ `rate_hz` frames/s per SDR, client-side waterfall history, canvas rendering with no new frontend dependencies; dedicated binary WS relay kept as the documented bandwidth fallback | §18 |
 | D10 | Time-frequency analysis: on-demand renders over stored IQ only (§10.5, §11.3) — never in the §5 detection path, §14 events, or the §18 feed; methods `stft`/`reassigned` (+ optional `spwvd`, `cwt-morlet`); REST via the gateway proxy (A3); synchronous, canvas rendering, no new frontend deps; implementation after §18 | §19 |
 | D11 | Setup screen: browser-edited YAML with restart-to-apply semantics; schema server-authoritative in `internal/settings`; deployment wiring deliberately not exposed | §20 |
+| H3 | Heimdall DAQ: coherent N-channel RTL front end consumed as one logical SDR per channel (`unit` grouping, §16.2); one IQ + one control connection per unit; unit-wide tuning with a single scan-loop owner per unit; same-unit §8 verification suppressed; RX-only kit, `hasTX=false` — `[planned]`, Phase 4 slice 10 | §15.5 |
 
 ## Appendix B — Glossary
 
@@ -2399,3 +2545,5 @@ defaults — they have no separate normative surface.)
 | Bucket | 10 kHz frequency bucket used for signal IDs and throttling |
 | Verification | §8 dual-SDR cross-check result |
 | Throttle window | 2 s per (SDR, kHz bucket) event cap (§5.8) |
+| Heimdall DAQ | KrakenRF coherent multi-channel RTL-SDR firmware (KrakenSDR/KerberosSDR); TCP IQ :5000 + control :5001 — `[planned]` (§15.5) |
+| CPI | Coherent Processing Interval — one Heimdall frame's worth of samples per channel (§15.5) |
