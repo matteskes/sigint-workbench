@@ -6,16 +6,7 @@ help: ## Show available targets
 # ─── Development (macOS) ───
 
 dev: ## Start full dev environment (macOS: native SDR capture + Docker services)
-	@echo "=== Stopping any previous sdr-capture ==="
-	@-pkill -f 'bin/sdr-capture' 2>/dev/null || true
-	@echo "=== Building sdr-capture (native macOS, hw tags when possible) ==="
-	@$(MAKE) build-capture-hw 2>/dev/null || $(MAKE) build-capture
-	@echo "=== Starting sdr-capture ==="
-	@./bin/sdr-capture -config config/sdr-capture.yaml &
-	@echo "=== Starting Docker services ==="
-	docker compose up -d iq-ingest signal-processor recorder api-gateway ws-hub db tiles
-	@echo "=== Starting frontend dev server ==="
-	cd frontend && npm run dev
+	./scripts/dev-macos.sh
 
 build-capture: ## Build native macOS sdr-capture binary
 	CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build -o bin/sdr-capture ./cmd/sdr-capture

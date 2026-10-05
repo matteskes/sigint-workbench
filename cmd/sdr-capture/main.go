@@ -192,6 +192,7 @@ func (s *sdrSlot) status() map[string]any {
 
 // iqReadLoop continuously reads IQ from the SDR and streams over UDP.
 func iqReadLoop(slot *sdrSlot, buf []int16, exit <-chan struct{}) {
+	var lastSendErrLog time.Time
 	for {
 		select {
 		case <-exit:
@@ -237,7 +238,16 @@ func iqReadLoop(slot *sdrSlot, buf []int16, exit <-chan struct{}) {
 			SampleIndex: sampleIndex,
 		}
 		if err := slot.streamer.Send(frame); err != nil {
-			log.Printf("[%s] send error: %v", slot.cfg.ID, err)
+			// Rate-limit the log: while iq-ingest is not up yet
+			// (e.g. compose is still building images on the first
+			// run) this loop runs at frame rate and would flood the
+			// terminal one line per datagram. Sending itself never
+			// pauses — frames are dropped, the loop keeps reading.
+			if now := time.Now(); now.Sub(lastSendErrLog) >= 5*time.Second {
+				lastSendErrLog = now
+				log.Printf("[%s] send error: %v (suppressing repeats for 5s)",
+					slot.cfg.ID, err)
+			}
 		}
 	}
 }

@@ -145,6 +145,9 @@ make setup
 # 4a. macOS Development
 make dev
 # → UI at http://localhost:5173 (Vite dev server)
+# sdr-capture runs supervised: its log goes to
+# /tmp/sigint-workbench-sdr-capture.log, and Ctrl+C at the Vite
+# prompt stops it together with the frontend
 
 # 4b. Linux Production
 make deploy
