@@ -1427,6 +1427,7 @@ counted):
 | `track.update` | `{"signalId","lat","lon","speedKmh","headingDeg","isMoving"}` | movement refresh, ≤ 1 Hz per located signal (§9.4) |
 | `audio.level` | `{"signalId":"<uuid>","level":<0..1>}` | coarse post-AGC RMS level, ≤ 10 Hz, one event per actively demodulated signal (§10.6) |
 | `signal.tdoa` | `{"signalId","freqHz","at","accepted","persisted","reason?","reference?","receivers":["<sdr>",…],"fix":{"lat","lng","residualNs","pairsUsed","maxBaselineM","covPosDef"}?,"locus":{"lat1","lng1","lat2","lng2"}?}` | §9.6 solve outcome per attempt: accepted fix (persisted or event-only under the §9.5 covariance gate), 2-receiver locus (persist nothing), or rejection with `reason` |
+| `spectrum.frame` | `{"sdrId","freqHz","sampleRate","t","bins","df","db":[<float>…]}` | decimated per-SDR power spectrum for the dashboard spectrum/waterfall (§18), ≤ `rate_hz` frames/s per SDR (§18.1) |
 
 Full-object payloads (not deltas) make clients stateless: apply
 payload-by-`id` upsert on `new`/`update`, delete on `removed`.
@@ -1640,6 +1641,8 @@ Known YAML-vs-behavior conflicts:
 - `signal-processor.yaml` `fft.*` — resolved (§5.7): `size` assembles
   the FFT record from ≤ 1024-pair wire frames; `window` ships as
   `rectangular` for ONNX-model parity.
+- `signal-processor.yaml` `spectrum.*` — `[planned]` (§18.4):
+  `enabled`/`bins`/`rate_hz` for the §18 dashboard spectrum tap.
 - `sdr-capture.yaml` `driver: simulator` — resolved (Phase 3,
   slice 0): the loader accepts `simulator`; the two-device dev
   fixture `config/sdr-capture.sim.yaml` shares one ingest port
@@ -1859,6 +1862,12 @@ stores and the API client; `svelte-check` for types.
 - §7.4/§13.1 (slice 8): the dashboard retune client path —
   `retuneSdr` PUTs `{freqHz}` to `/api/sdrs/{id}` and maps the
   returned device row — covered by the vitest API-client suite.
+- §18 (slice 9): the spectrum tap — Go tests for max-pool
+  decimation (group count, ordering, per-group max), the per-SDR
+  rate cap, `spectrum.enabled: false` silence, and §18.2 payload
+  validity; publisher-queue overflow MUST NOT block DSP (§14.1).
+  Frontend: `spectrum` store upsert/eviction, gap + out-of-order +
+  malformed-frame tolerance, `SpectrumView` canvas smoke (vitest).
 - D6 (§11.2): TTL test asserting `active=false` + row survives;
   purge test for the 30-day/50 GB caps.
 
@@ -1870,7 +1879,91 @@ stores and the API client; `svelte-check` for types.
 | **1 — Correctness** | D4 negative offsets; A1 unlocated signals; §6.5 class enum; dead `/ws` hub removal; FLAC-claim cleanup (code + README); CORS/origin tightening — all **done** | new tests per §17.3 green; docs match behavior |
 | **2 — Features** | §15.3 RTL-SDR defect fixes; §10.1 real SSB + pair-aware registry; §11.2 active/TTL lifecycle; `sdr.status` producer (§14.4.3); `GET /ws` gateway relay (§2.2, A3); frontend data wiring (§14.4.2); YAML config loading + `min_confidence` enforcement (§16.1); **slices 1–3:** D3 scan loop + §7.4 control status; §8 dual-SDR verification with verified latch; recorder (D1 in-band WAV + §11.3 retention); first live `TEST_DATABASE_URL` integration run (§17.3); **slice 4:** Opus live streaming recorder side (D1b, §10.3–§10.4: per-signal mux + `/ws/audio` server + `Dockerfile.recorder`); **slice 5:** `/ws/audio` gateway relay (§2.2, §10.4); control-API proxy — `PUT /api/sdrs/{id}` retune forwarding + `GET /api/sdrs/{id}/status` (§7.4, §13.1, §13.2.3) — **all delivered** | §17.3 obligations green; dashboard live end-to-end |
 | **3 — Hardware & fidelity** | RTL-SDR on-hardware validation (§15.3 defect fixes delivered in Phase 2); HackRF driver (H1/H2) — **delivered, compile-validated** (§15.4); power calibration contract (§5.6) — **delivered** (contract + mechanism + honesty flag; measuring each SDR's physical offset → docs/HARDWARE.md runbook, slice 3); **slice 0:** multi-SDR sim enablement — `driver: simulator` accepted via YAML + two-device shared-ingest-port rehearsal (§16.1, §16.4) — **delivered**; `min_confidence` enforcement (§16.1) — **delivered in Phase 2**; **slice 3:** RTL-SDR on-hardware validation runbook + calibration tooling — docs/HARDWARE.md, cmd/rtl-list, cmd/rtl-calibrate (§15.3, §5.6) — **delivered and executed 2026-10-04** (V1–V8 pass, offsets applied); **fft fidelity:** §5.7 `fft.size`/`fft.window` wired end-to-end — signal-processor assembles 4096-pair records, rtl-calibrate `-fft-size`, ONNX inference reachable on the native bench (`make ort-lib`, `-tags onnx`) — **delivered 2026-10-04** (offsets recalibrated at the 4096 geometry per §6.3; §8 session 2) | 2 real SDRs verified end-to-end; calibration documented — **met 2026-10-04** (RTL-SDR half; HackRF deferred, no hardware) |
-| **4 — Deferred** | **in progress** — **slice 0:** D2 stub removal (`cmd/classifier`, `cmd/location-service`, compose entries; `Dockerfile.classifier` builds signal-processor only) — **delivered**; **slice 1:** annotations — `GET/POST /api/signals/{id}/annotations` + SignalDetail notes UI — **delivered**; **slice 2:** `audio.level` coarse feed recorder → hub → frontend — **delivered** (scope settled: one event per actively demodulated §10.2 session); **slice 3:** tracking — populate `tracks` from consecutive placements (§9.4, §12.4) — **delivered** (1 Hz persist + `track.update`, final row on TTL sweep, `GET /api/signals/{id}/track`, SignalDetail speed/heading, MapView polyline); **slice 4:** TDOA design — normative §9.5 + §4 frame v2 sample-accurate timing (design review gate) — **delivered** (review passed 2026-10-04); **slice 5:** TDOA engine — simulator first (injected offsets), then 3-SDR on-air fix — **engine + simulator, §4.5 v2 codec + dual-format consumers + per-sender gap counters, migration 004 quality columns, and §9.6 processor wiring (`signal.tdoa`, fix persistence, flip-flop guard) delivered** (on-air validation remains — runbook: docs/HARDWARE.md §7); **slice 6:** multi-host + NTP/PTP — remote capture hosts, sync-quality reporting (§16); **slice 7: audio parity — §10.5 raw-IQ writer (`iq.enabled`), §11.1 max-duration enforcement (`iq.max_duration_s`), §10.4 live browser Opus playback (dashboard consumes `/ws/audio`) — delivered 2026-10-04**; **slice 8:** dashboard retune UI wired to the `PUT /api/sdrs/{id}` control-API proxy (§7.4, §13.1) — delivered 2026-10-04 | per-slice; slices 4–5: TDOA fix on a known on-air transmitter; slice 6: second capture host with NTP/PTP sync-quality reporting; slice 7: raw-IQ + duration-cap tests, live playback on the dashboard — **met 2026-10-04** (Go + vitest gates green; browser playback unit-tested against the §10.4 contract with stub WebCodecs — not verified in a real browser session); slice 8: retune client tests — met (vitest API-client suite, svelte-check clean) |
+| **4 — Deferred** | **in progress** — **slice 0:** D2 stub removal (`cmd/classifier`, `cmd/location-service`, compose entries; `Dockerfile.classifier` builds signal-processor only) — **delivered**; **slice 1:** annotations — `GET/POST /api/signals/{id}/annotations` + SignalDetail notes UI — **delivered**; **slice 2:** `audio.level` coarse feed recorder → hub → frontend — **delivered** (scope settled: one event per actively demodulated §10.2 session); **slice 3:** tracking — populate `tracks` from consecutive placements (§9.4, §12.4) — **delivered** (1 Hz persist + `track.update`, final row on TTL sweep, `GET /api/signals/{id}/track`, SignalDetail speed/heading, MapView polyline); **slice 4:** TDOA design — normative §9.5 + §4 frame v2 sample-accurate timing (design review gate) — **delivered** (review passed 2026-10-04); **slice 5:** TDOA engine — simulator first (injected offsets), then 3-SDR on-air fix — **engine + simulator, §4.5 v2 codec + dual-format consumers + per-sender gap counters, migration 004 quality columns, and §9.6 processor wiring (`signal.tdoa`, fix persistence, flip-flop guard) delivered** (on-air validation remains — runbook: docs/HARDWARE.md §7); **slice 6:** multi-host + NTP/PTP — remote capture hosts, sync-quality reporting (§16); **slice 7: audio parity — §10.5 raw-IQ writer (`iq.enabled`), §11.1 max-duration enforcement (`iq.max_duration_s`), §10.4 live browser Opus playback (dashboard consumes `/ws/audio`) — delivered 2026-10-04**; **slice 8:** dashboard retune UI wired to the `PUT /api/sdrs/{id}` control-API proxy (§7.4, §13.1) — delivered 2026-10-04; **slice 9:** spectrum analyzer + waterfall (§18) — design locked (D9), implementation planned | per-slice; slices 4–5: TDOA fix on a known on-air transmitter; slice 6: second capture host with NTP/PTP sync-quality reporting; slice 7: raw-IQ + duration-cap tests, live playback on the dashboard — **met 2026-10-04** (Go + vitest gates green; browser playback unit-tested against the §10.4 contract with stub WebCodecs — not verified in a real browser session); slice 8: retune client tests — met (vitest API-client suite, svelte-check clean); slice 9: §18 tap + display with §17.3 obligations green on the dashboard |
+
+## 18. Spectrum Analyzer & Waterfall
+
+**Status: `[planned]` — design locked (D9); implementation is
+Phase 4 slice 9 (§17.4).**
+
+A live per-SDR power-spectrum line plus a scrolling waterfall on the
+dashboard — the README's remaining `*(planned)*` feature. The hard
+part already exists: signal-processor computes a full `FFTResult`
+(§5.7) for every assembled record and discards it after §5.4 peak
+detection. §18 is a read-only side-tap on that result; detection is
+untouched.
+
+### 18.1 Producer (signal-processor)
+
+- **Tap point.** After peak detection on each assembled FFT record
+  (§5.7). The tap MUST NOT alter detection results, thresholds, or
+  timing, and MUST NOT allocate on the hot path beyond the decimated
+  bin vector.
+- **Decimation.** Max-pool the record's `power_db` bins (§5.6
+  relative-dBFS domain) down to `spectrum.bins`: group `i` reports
+  the maximum of its member bins, so narrow tones survive decimation
+  (average-pooling would erase exactly the peaks a spectrum display
+  exists to show). Normative constraint: `fft.size % spectrum.bins
+  == 0` (defaults: 4096 / 256 = 16 bins per group).
+- **Pacing.** `spectrum.rate_hz` is a cap, not a guarantee: records
+  complete only once `fft.size` pairs have assembled (≈ 4 wire
+  frames at the 1024-pair default), a retune discards the partial
+  record (§5.7), and UDP loss inside a record delays it. A waterfall
+  therefore shows real gaps at retunes — honest, not a defect.
+- **Transport.** The §14.1 producer POST path: `spectrum.frame`
+  shares the 256-slot queue, the 2 s timeout, and the
+  drop-never-block policy. Under saturation the newest frames drop
+  first — correct for a display feed (§14.3 lossy semantics: a
+  dropped frame is a skipped waterfall row, and the next frame is
+  fresh data). `spectrum.enabled: false` MUST yield zero events and
+  zero tap allocation.
+
+### 18.2 Event contract (normative)
+
+```text
+{"type":"spectrum.frame","payload":{
+  "sdrId":"sim0","freqHz":100000000,"sampleRate":2400000,
+  "t":"2026-10-04T12:00:00Z","bins":256,"df":4687.5,
+  "db":[-87.3,-84.1, ...]}}
+```
+
+| Field | Meaning |
+| ----- | ------- |
+| `sdrId` | §12.1 device ID; one frame per SDR per tick |
+| `freqHz` | SDR center frequency; the span is `freqHz ± sampleRate/2`, including the below-center wrap (§5.3, D4) |
+| `sampleRate` | device sample rate; with `df` it fixes the x-axis |
+| `df` | bin width `= sampleRate / fft.size` |
+| `bins` | decimated bin count; MUST equal `len(db)` |
+| `db[i]` | max-pooled `power_db` dBFS (§5.6 uncalibrated domain); `db[0]` is the lowest-frequency bin of the span |
+
+Honesty: the axis is "dB (rel.)" — the §5.6 per-signal calibration
+flag does not extend per-bin in v1, and values inherit the §5.7
+geometry coupling (comparable only within a fixed `fft.*` geometry)
+and rectangular-window leakage. Frames MUST be envelope-valid and
+rate-capped per §18.1.
+
+### 18.3 Frontend
+
+- `spectrum` store: latest frame per SDR plus a per-SDR waterfall
+  ring buffer (300 rows default, FIFO eviction). Application is
+  idempotent per `t`; out-of-order, gap, and malformed frames are
+  tolerated (§14.3) — a gap renders as a blank waterfall row, never
+  interpolated; a malformed frame is a no-op.
+- `SpectrumView.svelte`: collapsible panel on the §13.4 dashboard
+  with a per-SDR selector. Plain `<canvas>` + requestAnimationFrame —
+  no new dependencies. Line trace for the latest frame; the
+  waterfall scrolls one row per frame. dB axis defaults to
+  −100…0 dBFS with a client-side autoscale toggle (rendering details
+  beyond the store contract are non-normative); frequency ticks
+  derive from `freqHz ± sampleRate/2`.
+
+### 18.4 Config (`signal-processor.yaml`)
+
+| Key | Default | Meaning |
+| --- | ------- | ------- |
+| `spectrum.enabled` | `true` | §18 tap on/off (§18.1) |
+| `spectrum.bins` | `256` | decimated bin count; MUST divide `fft.size` (§18.1) |
+| `spectrum.rate_hz` | `5` | max frames per second per SDR (§18.1) |
 
 ## Appendix A — Decision Register
 
@@ -1891,6 +1984,7 @@ defaults — they have no separate normative surface.)
 | H2 | TX prohibited by policy; drivers report `hasTX=false` | §1.2, §15.4, §17.2 |
 | A1 | Unlocated signals are listed & verified, never silently dropped (map omits them) | §9.3 |
 | A3 | Single client ingress: api-gateway proxies `/ws` and `/ws/audio`; hub + recorder internal-only | §2.2, §3.2 |
+| D9 | Spectrum: hub JSON events (`spectrum.frame`), max-pool decimation of the §5.7 FFT to `spectrum.bins`, ≤ `rate_hz` frames/s per SDR, client-side waterfall history, canvas rendering with no new frontend dependencies; dedicated binary WS relay kept as the documented bandwidth fallback | §18 |
 
 ## Appendix B — Glossary
 
