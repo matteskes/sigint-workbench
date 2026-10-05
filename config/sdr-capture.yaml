@@ -4,9 +4,14 @@
 # ─── IQ wire format (§4.5) ───
 # sdr1 emits the classic 40-byte-header frames; sdr2 emits the
 # sample-accurate v2 frames (per-sender seq + sample_index + ns
-# CLOCK_REALTIME anchor) required for TDOA (§9.6). Keep sdr1 until
-# every consumer of the stream accepts v2, then flip. Default: sdr1.
-# stream_format: sdr1
+# CLOCK_REALTIME anchor) required for TDOA (§9.6).
+# Flipped to sdr2 2026-10-05: v1's 1-second timestamp granularity made
+# §18.3's per-t idempotence filter drop 4 of every 5 spectrum frames,
+# crawling the dashboard waterfall at 1 row/s. Every stream consumer
+# (iq-ingest, signal-processor, sdr.Stream) decodes via the
+# magic-sniffing DecodeIQFrame, so the mixed-v1/v2 rollout rule is
+# satisfied. Enables §9.6 TDOA once receivers carry lat/lon.
+stream_format: sdr2
 
 # ─── Control API (§5.6 gain polling) ───
 # Port of this capture instance's control API (the sdr-capture
