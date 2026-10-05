@@ -185,9 +185,154 @@ full per-section distill.
   everything here is reimplementation (fits the PyTorch → ONNX
   pipeline).
 
-## Jagannath et al. 2022 — survey (§6.6/§6.7 context)
+## Jagannath et al. 2022 — RF fingerprinting survey (full distill)
 
-A. Jagannath, J. Jagannath, P. S. Pattanshetty Vasanth,
-arXiv:2201.00680 — DL-for-RF survey. §IV.C/§V-B6/§V.F feed §6.6's
-ladder and §6.7's receiver-entanglement caveat; full recipe
-detail lives in SPEC.
+A. Jagannath, J. Jagannath, and P. S. Pattanshetty Vasanth Kumar,
+"A Comprehensive Survey on Radio Frequency (RF) Fingerprinting:
+Traditional Approaches, Deep Learning, and Open Challenges,"
+arXiv:2201.00680, v3 (2022-09-06),
+<https://arxiv.org/abs/2201.00680>. arXiv Comments: "To appear in
+Computer Networks (Elsevier)" — cite as a 2022 survey. Read
+2026-10-04 (full pass; 26 content pages).
+
+### What the survey covers
+
+- Encyclopedic map of emitter identification: SIGINT background
+  (§II AMC/protocol recognition), applications (§III), ~20 years
+  of traditional fingerprinting (§IV), a DL tutorial (§V.A),
+  DL-based fingerprinting (§V.B–E), open datasets (§V.F), open
+  challenges (§VI). It is the source behind SPEC §6.6/§6.7's
+  "survey" citations; this entry is the full per-section distill.
+- Section pointers used below match the extraction: §IV = A
+  modulation-domain, B statistical, C transient-based, D wavelet,
+  E other; §V = B CNN, C GAN, D PNN, E attention, F datasets.
+
+### Traditional approaches (§IV) — the pre-DL toolbox
+
+- Modulation-domain radiometric features: PARADIS (frequency
+  error, SYNC correlation, IQ/magnitude/phase error) → SVM error
+  0.0034% on 138 identical Atheros NICs; IQ-imbalance
+  autocorrelation ≥90% ≥ 15 dB (simulated modulators); spectral
+  PCA on 50 RFID smartcards 95→97.5%; 14 weak classifiers +
+  weighted voting 88% on 6 WARP boards; constellation-error
+  features >95% on 7 TDMA satellite terminals.
+- Statistical: RF-DNA (variance/skew/kurtosis, PSD, Gabor) with
+  MDA/ML / GRLVQI — 99.7% at 3 classes, ~81% at 7; non-parametric
+  ROI features >97% ≥ 10 dB on ZigBee.
+- Transient-based (§IV.C — the classical §6.7 feature): turn-on
+  transient found by variance threshold, Bayesian step-change, or
+  phase-based detection; FFT-Fisher features ≥99.5% on 50
+  identical Tmote Sky nodes — robust to distance, multipath, and
+  voltage, but broken by antenna polarization change; 8 GSM
+  phones 100%; energy-envelope features 99.9% on 7 Bluetooth TXs
+  and FLAT from 4 GSps down to 32 MSps.
+- Wavelet: DT-CWT preamble features, 80% @ 11 dB SNR, ~7 dB gain
+  over equal-count time-domain features; DWFP+WPD+HOS 99% on RFID
+  tags; wavelet-Bayes micro-UAV detection 100% ≥ 12 dB.
+- Takeaway: near-perfect numbers come from chamber/coax/range
+  captures, few classes, handpicked features — the ceiling each
+  method hits is deployment tuning, exactly the gap the DL
+  section then claims.
+
+### DL approaches (§V) — what actually moved the needle
+
+- Scale record: ORACLE — 99% median on ≤100 COTS WiFi devices,
+  96% at 140, 98.6% on 16 bit-similar X310s; 2×conv + 2×FC on raw
+  IQ. Proposes injecting controlled TX-side impairments to help
+  the classifier; the survey itself objects that this assigns an
+  artificial tag rather than reading a true fingerprint.
+- The massive study (§V.B.6): DARPA 400 GB, 10,000 devices (5117
+  WiFi + 5000 ADS-B), 22 learning tasks. Population scaling is
+  graceful; multi-burst joint inference beats single-burst
+  decisively; ADS-B (open-air) easier than WiFi; accuracy drops
+  hard when channel/environment differs between train and
+  validation (Task 3); more training transmissions always help
+  (Task 2 — only 2% drop from 501→313 training devices in the
+  follow-up); training at low SNR and testing high works, the
+  reverse does not (Task 4). Modified 1D AlexNet beat
+  ResNet-50-1D on several tasks — deeper is not always better,
+  matching Scholl's He-ResNet negative result.
+- Channel shift in practice: hovering UAVs, train bursts 1–3 /
+  test burst 4 → 50%; ensemble of 12 AlexNet1Ds + multi-tap FIR
+  data augmentation → 91–95%, plus 99% open-set detection of
+  never-seen UAVs. Cross-domain attention model: 84.3% same-day
+  vs 63.8% mixed-day on 10 COTS chipsets — day-shift alone costs
+  ~20 pp. Multi-burst aggregation alone reaches ≥95% at
+  10k-device scale (§V.B.7 follow-up).
+- GAN (§V.C.1): AC-WGAN >95% on 4 UAV types @ 5 dB indoor
+  (10–400 m), beats SVM and vanilla AC-GAN; no supervised-CNN
+  head-to-head — precisely the evidence SPEC §6.6's B3 assessment
+  already cites; nothing new for the GAN question.
+- PNN on transients (§V.D): Bayesian ramp detector + low-pass
+  energy-spectrum coefficients (K = W/Δf); 90% @ 0 dB, 97.9% @
+  25 dB on 8 WiFi devices; accuracy essentially flat from 5 GSps
+  down to 28 MSps — transient identity survives heavy decimation.
+- Edge-relevant: the authors' own MTL work (§II.C) — radar+comms
+  multi-task on raw IQ, 8.4 ms CPU inference, INT8 11.8×
+  compression with no significant accuracy loss.
+
+### Open datasets (§V.F) — Table VI
+
+- 86 Bluetooth smartphones (real-world); 17 drone remote
+  controllers; 100 aircraft ADS-B (BladeRF) and >140 (USRP B210),
+  both 1090 MHz; ORACLE: 16 bit-similar X310s at 2–62 ft plus an
+  intentionally-impaired IQ-imbalance variant; 7 hovering DJI
+  M100s, ~13k examples × 92k IQ samples (anechoic); POWDER: 4
+  bit-similar base stations × WiFi/LTE/5G-NR on 2 days;
+  "Exposing the Fingerprint": 20 NI SDRs × 4 setups (wild
+  varying-distance, common antenna, coax + 5 dB attenuator,
+  anechoic) over 10 days, shipped as raw AND equalized IQ.
+- Four of the eight ship SigMF (the rest MATLAB .mat). The 20-SDR
+  multi-setup set is the closest public analogue to our §11.3
+  corpus plan (multi-day, multi-condition, raw + equalized).
+
+### Challenges (§VI) — absorbed vs new
+
+- Already in SPEC §6.6: the simulation-reality gap as the
+  deployment blocker; receiver hardware (IQ imbalance, phase
+  noise, clock offsets) etching itself into captures, with
+  multi-receiver training and train-on-A/test-on-B as the
+  receiver-independence probe.
+- Citation correction: SPEC §6.7 credited "§V-B6 Task 3" for
+  accuracy collapse when "the receive chain or channel differs".
+  Task 3 is the channel/environment half; the cross-receiver
+  finding is §VI — a low-end-receiver study showing the same
+  transmitter's fingerprint varies across receivers. SPEC pointer
+  fixed in the same commit as this entry.
+- New, useful for E0/§6.7: transient-based identification is
+  reported MORE resilient to impersonation/replay than
+  modulation-based; sampling-rate invariance (above); and two
+  named open problems — simultaneous multi-emitter
+  fingerprinting, and equalization that preserves fingerprints —
+  i.e. published SOTA assumes one active emitter per capture,
+  which calibrates what our on-air probes can expect.
+
+### Survey caveats
+
+- Heterogeneous evidence: chamber vs coax vs over-the-air, widely
+  varying rates/classes/receivers — cross-paper accuracy
+  comparisons are indicative only. Breadth over depth (one
+  paragraph per work): cite it as a map; the primary papers are
+  the evidence.
+- Several "open" datasets are synthetic waveforms from real SDR
+  chains (ORACLE, POWDER, Exposing-the-Fingerprint) — real
+  hardware, not on-air propagation.
+
+### What the workbench can use
+
+- §6.6: citations verified accurate, nothing to absorb; the
+  survey independently backs the B2-first instinct ("training the
+  neural networks with a larger distribution of data is the key
+  to a generalized performance").
+- §6.7/E0 design inputs: capture turn-on transients at whatever
+  rate §11.3 gives us — published transient features survive
+  decimation to 28 MSps, so low-rate attempts are defensible;
+  evaluate with day-split train/test (mixed-day costs ~20 pp in
+  the literature); try burst aggregation at inference before any
+  architecture work; the §VI train-on-receiver-A/test-on-B probe
+  maps 1:1 onto the E1 cross-receiver question (still
+  hardware-blocked).
+- Architecture prior: shallow 1D AlexNet-style stacks repeatedly
+  match or beat deep residual nets at scale — aligns the B-rung
+  shortlist with Scholl's all-conv/deep-CNN result; skip deep
+  residual stacks unless O'Shea-arranged.

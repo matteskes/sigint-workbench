@@ -718,9 +718,10 @@ staged probes below produce positive evidence.**
 §6 classifies *modes*; identifying *which emitter* is speaking is
 a different, harder problem. The classical feature is the turn-on
 transient (PA bias ramp, PLL lock, key-up click), but the survey
-(Jagannath et al. 2022, §V-B6 Task 3) shows fingerprint accuracy
-collapsing when the receive chain or channel differs between
-training and validation — the "fingerprint" is
+(Jagannath et al. 2022) shows fingerprint accuracy collapsing when
+the channel differs between training and validation (§V-B6 Task 3)
+or when the receive chain does (§VI — the transmitter's fingerprint
+"varies across the receivers") — the "fingerprint" is
 device+receiver+channel entangled. This note records the staged,
 evidence-gated probes for deciding whether emitter identity is
 tractable *through our receive chains* before any capture-mode
