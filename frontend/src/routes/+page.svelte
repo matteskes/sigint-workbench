@@ -5,7 +5,7 @@
 	import SignalDetail from '$lib/components/signals/SignalDetail.svelte';
 	import SpectrumView from '$lib/components/spectrum/SpectrumView.svelte';
 	import SDRControl from '$lib/components/control/SDRControl.svelte';
-	import { selectedSignal, signals, upsertSignal, removeSignal, type Signal } from '$lib/stores/signals';
+	import { selectedSignal, signals, upsertSignals, removeSignal, type Signal } from '$lib/stores/signals';
 	import { sdrs, applySDRStatus, type SDRStatus } from '$lib/stores/sdrs';
 	import { applyAudioLevel, pruneSignalLevels, clearSignalLevel } from '$lib/stores/audio';
 	import { applyTrackUpdate, clearTrack } from '$lib/stores/tracks';
@@ -29,12 +29,37 @@
 		}
 	}
 
+	// §14.3 lossy-by-design ingest for signal.new/update: a receiver
+	// on a busy band emits thousands of detector events per second,
+	// and each store write re-renders every $signals consumer (list
+	// diff, map rebuild) — at detector rate that starves the render
+	// loop, which is also what paints the §18 spectrum/waterfall rAF.
+	// Coalesce last-wins per id and flush on a fixed UI-rate cadence;
+	// missed intermediate states self-heal via the next event or the
+	// reconnect REST bootstrap (§14.3).
+	const SIGNAL_FLUSH_MS = 200;
+	let pendingSignals = new Map<string, Signal>();
+	let signalFlush: ReturnType<typeof setTimeout> | null = null;
+
+	function flushPendingSignals(): void {
+		signalFlush = null;
+		if (pendingSignals.size === 0) return;
+		const batch = Array.from(pendingSignals.values());
+		pendingSignals.clear();
+		upsertSignals(batch);
+	}
+
 	function handleEvent(ev: WSEvent): void {
 		switch (ev.type) {
 			case 'signal.new':
-			case 'signal.update':
-				upsertSignal(ev.payload as Signal);
+			case 'signal.update': {
+				const sig = ev.payload as Signal;
+				pendingSignals.set(sig.id, sig);
+				if (signalFlush === null) {
+					signalFlush = setTimeout(flushPendingSignals, SIGNAL_FLUSH_MS);
+				}
 				break;
+			}
 			case 'signal.removed':
 				if (ev.payload?.id) {
 					removeSignal(ev.payload.id);
@@ -93,6 +118,7 @@
 		return () => {
 			disposed = true;
 			clearInterval(levelPrune);
+			if (signalFlush !== null) clearTimeout(signalFlush);
 			ws?.close();
 		};
 	});

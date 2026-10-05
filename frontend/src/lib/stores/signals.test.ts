@@ -1,6 +1,6 @@
 import { get } from 'svelte/store';
 import { describe, it, expect, beforeEach } from 'vitest';
-import { signals, selectedSignal, signalCount, filteredSignals, upsertSignal, removeSignal, type Signal } from './signals';
+import { signals, selectedSignal, signalCount, filteredSignals, upsertSignal, upsertSignals, removeSignal, type Signal } from './signals';
 
 function makeSignal(overrides: Partial<Signal> = {}): Signal {
 	return {
@@ -82,6 +82,31 @@ describe('signals store', () => {
 		const list = get(signals);
 		expect(list.map((s) => s.id)).toEqual(['b', 'a']);
 		expect(list[1].verified).toBe(true);
+	});
+
+	it('upsertSignals applies a batch in one write with last-wins per id', () => {
+		signals.set([makeSignal({ id: 'a' })]);
+		upsertSignals([
+			makeSignal({ id: 'b', powerDbm: -80 }),
+			makeSignal({ id: 'b', powerDbm: -70 }),
+			makeSignal({ id: 'a', verified: true })
+		]);
+		const list = get(signals);
+		expect(list.map((s) => s.id)).toEqual(['b', 'a']);
+		expect(list[0].powerDbm).toBe(-70);
+		expect(list[1].verified).toBe(true);
+		expect(get(signalCount)).toBe(2);
+	});
+
+	it('upsertSignals prepends multiple new signals newest-first', () => {
+		upsertSignals([makeSignal({ id: 'x' }), makeSignal({ id: 'y' }), makeSignal({ id: 'z' })]);
+		expect(get(signals).map((s) => s.id)).toEqual(['z', 'y', 'x']);
+	});
+
+	it('upsertSignals ignores an empty batch', () => {
+		signals.set([makeSignal({ id: 'a' })]);
+		upsertSignals([]);
+		expect(get(signals).map((s) => s.id)).toEqual(['a']);
 	});
 
 	it('removeSignal drops the signal and clears a matching selection', () => {

@@ -29,7 +29,7 @@
 					SDR: {totalSdrs} idle
 				{/if}
 			</span>
-			<span class="text-xs text-slate-400" id="signal-count">{signalCount} signals</span>
+			<span class="text-xs text-slate-400" id="signal-count">{$signalCount} signals</span>
 		</div>
 	</header>
 

@@ -11,6 +11,14 @@
 		return `${(hz / 1e3).toFixed(1)} kHz`;
 	}
 
+	// §14.3: the store holds every active signal — thousands when a
+	// receiver sits on a busy band — and the keyed each below is the
+	// DOM bottleneck under saturation. Render a bounded window: the
+	// count stays exact, and the tail self-heals from the update churn.
+	const MAX_VISIBLE = 250;
+	$: visibleSignals = $signals.slice(0, MAX_VISIBLE);
+	$: hiddenCount = Math.max(0, $signals.length - visibleSignals.length);
+
 	const classColors: Record<string, string> = {
 		aviation: 'text-blue-400',
 		land_mobile: 'text-green-400',
@@ -30,7 +38,7 @@
 	</div>
 
 	<div class="flex-1 overflow-y-auto">
-		{#each $signals as signal (signal.id)}
+		{#each visibleSignals as signal (signal.id)}
 			<button
 				class="w-full px-3 py-2 text-left hover:bg-slate-800 transition-colors
 					{$selectedSignal?.id === signal.id ? 'bg-slate-800 border-l-2 border-blue-500' : 'border-l-2 border-transparent'}"
@@ -57,5 +65,10 @@
 				No signals detected
 			</div>
 		{/each}
+		{#if hiddenCount > 0}
+			<div class="px-3 py-2 text-center text-xs text-slate-600">
+				+{hiddenCount} more not rendered
+			</div>
+		{/if}
 	</div>
 </div>
