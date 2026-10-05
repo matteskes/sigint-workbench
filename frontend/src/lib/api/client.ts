@@ -49,11 +49,28 @@ export type WSEventType =
 	| 'signal.removed'
 	| 'sdr.status'
 	| 'audio.level'
-	| 'track.update';
+	| 'track.update'
+	| 'spectrum.frame';
 
 export interface WSEvent {
 	type: WSEventType;
 	payload: any;
+}
+
+/**
+ * §18.2 spectrum.frame payload (camelCase per §12.7). db[0] is the
+ * lowest-frequency bin of the span (freqHz − sampleRate/2); db values
+ * are §5.6 uncalibrated relative dB — the axis is "dB (rel.)", never
+ * "dBm".
+ */
+export interface SpectrumFrame {
+	sdrId: string;
+	freqHz: number;
+	sampleRate: number;
+	t: string;
+	bins: number;
+	df: number;
+	db: number[];
 }
 
 /** Fetches active signals, optionally limited to a bounding box. */

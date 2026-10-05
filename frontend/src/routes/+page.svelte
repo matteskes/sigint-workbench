@@ -3,12 +3,13 @@
 	import MapView from '$lib/components/map/MapView.svelte';
 	import SignalList from '$lib/components/signals/SignalList.svelte';
 	import SignalDetail from '$lib/components/signals/SignalDetail.svelte';
-	import SpectrumAnalyzer from '$lib/components/spectrum/SpectrumAnalyzer.svelte';
+	import SpectrumView from '$lib/components/spectrum/SpectrumView.svelte';
 	import SDRControl from '$lib/components/control/SDRControl.svelte';
 	import { selectedSignal, signals, upsertSignal, removeSignal, type Signal } from '$lib/stores/signals';
 	import { sdrs, applySDRStatus, type SDRStatus } from '$lib/stores/sdrs';
 	import { applyAudioLevel, pruneSignalLevels, clearSignalLevel } from '$lib/stores/audio';
 	import { applyTrackUpdate, clearTrack } from '$lib/stores/tracks';
+	import { applySpectrumFrame } from '$lib/stores/spectrum';
 	import { fetchSignals, fetchSDRs, connectWebSocket, type WSEvent } from '$lib/api/client';
 
 	// Full (re)sync from the REST API — on boot and after every
@@ -46,6 +47,11 @@
 			case 'track.update':
 				// §9.4: movement summary per located signal.
 				if (ev.payload?.signalId) applyTrackUpdate(ev.payload);
+				break;
+			case 'spectrum.frame':
+				// §18: decimated per-SDR spectrum/waterfall feed; malformed
+				// frames are no-ops in the store (§14.3).
+				applySpectrumFrame(ev.payload);
 				break;
 		}
 	}
@@ -86,7 +92,7 @@
 	<aside class="w-64 border-r border-slate-700 overflow-y-auto shrink-0">
 		<SDRControl />
 		<div class="border-t border-slate-700">
-			<SpectrumAnalyzer />
+			<SpectrumView />
 		</div>
 	</aside>
 
