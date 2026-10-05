@@ -426,3 +426,142 @@ the co-channel-overlap marker and one architecture pattern.
 - Explicitly not core-path: nothing for §6.6 ladder runs, §6.7
   transients, or E0; no SPEC cross-ref changes (§6.6/§6.7
   verified unaffected).
+
+## Dusenka 2025 — CFO-informed cross-day device ID (§6.7)
+
+Jozef Dusenka, "A Robust RF Fingerprinting Approach Using Physics-
+Informed Neural Networks," M.S. thesis, University of Arkansas, May
+2025 (director Yanjun Pan), ScholarWorks@UARK etd/5714,
+<https://scholarworks.uark.edu/etd/5714/> — no DOI, no arXiv
+preprint. Read 2026-10-05 (full text, 55-page PDF; 46 refs).
+Unpublished, not peer-reviewed. Tagged core to §6.7: the first
+real-hardware cross-day device-ID numbers in this file and the
+strongest day-split evidence yet — a closed-set, N=3, single-
+receiver upper bound whose headline still needs discounting.
+
+### The task — cross-day closed-set device ID
+
+- Identify WHICH transmitter sent each frame (3 devices), with
+  training and testing on different capture sessions. Motivation
+  is a zero-trust audit chain ("the waveform identifies the
+  device"); the experiment is classic closed-set — no Unknown
+  path, no open-set scoring, no adversary (no impersonation or
+  replay frames anywhere).
+- The robustness axis is TIME: everything hangs on one question,
+  what in a fingerprint survives a session boundary. That is the
+  E0 gate (within- vs between-emitter similarity) measured with
+  a day split.
+
+### Testbed — three USRPs, scaled-down 802.11a
+
+- 3× NI USRP X300 TX (UBX-160 daughterboards) + 1× X300 RX, GNU
+  Radio with gr-ieee802-11: 802.11a-style OFDM (64 subcarriers,
+  CP 16, QPSK payloads) at 5.69 GHz.
+- Sampling is 192 kSps vs real 802.11a's 20 MHz — a decimated
+  EMULATION of the PHY (same structure, ~1% of the bandwidth),
+  not Wi-Fi captures. Indoor lab, static devices, one fixed
+  receiver; their §6.1 rates the multipath "not as severe as
+  POWDER".
+- ~10–11k frames per device per session; ~31.5k (day 1) and
+  32,462 (day 2, per-table; the prose says 32642 — a typo).
+- Two parallel representations per frame: raw time-domain IQ
+  (2×576) and preamble-equalized frequency-domain IQ (2×432; CTF
+  estimate from the preamble, FFT after CP removal) — plus a
+  per-frame scalar CFO (Schmidl & Cox coarse + fine).
+
+### The three models
+
+- All share one CNN trunk (the Reus-Muns 2022 POWDER baseline,
+  their ref [22]): conv/pool stacks → dense → 3-way softmax.
+- (1) Baseline: equalized IQ in, cross-entropy. (2) Triplet:
+  same trunk, triplet loss (margin tuned 0.2 → 0.05).
+- (3) The "PINN": equalized IQ plus the CFO scalar as a second
+  input, min-max normalized over a FIXED −50…+50 ppm range to
+  [0, 1], concatenated at the dense layer. Physics enters as an
+  input feature, NOT a loss term or constraint — the author says
+  so himself (§4.5); the fixed range is justified by the fact
+  that with 3 devices the CFO values spread across it.
+
+### Experiments — two sessions, random day-1 split
+
+- Adam, lr 1e-4, weight decay 1e-4, batch 128, 16/12/18 epochs
+  (baseline/triplet/PINN), Colab TPU v2-8.
+- Day-one numbers: RANDOM 90/10 split of day-1 frames ("to
+  ensure a fair and unbiased evaluation") — session-correlated
+  frames land on both sides, so the day-one column is inflated.
+  This is precisely the framing the Jagannath entry warns
+  against.
+- Cross-day numbers: train on the day-1 split, test on 100% of
+  day 2. That half of the protocol is clean, and it is where
+  the paper's claim actually lives.
+
+### Results — the cross-day cliff
+
+| Model | Day 1 | Day 2 |
+| --- | --- | --- |
+| CNN baseline | 98.63% | 34.75% |
+| Triplet loss | 99.26% | 35.71% |
+| PINN (CFO + equalized IQ) | 99.54% | 97.54% |
+
+- Day-2 failures are systematic, not noise: the baseline maps
+  device 2 → 3 and device 3 → 1 (channel-flavored features
+  flipped); the triplet model nearly stops predicting device 2
+  at all (embedding collapse onto day-1 geometry).
+- Their §6.1 reading: baseline and triplet converge suspiciously
+  fast on day 1 — they memorize channel features (multipath as a
+  device proxy) that do not survive a session boundary.
+  Equalization strips most of the channel; the CFO side-input
+  restores a device-stable cue (oscillator offset).
+
+### Evidence quality — smallest N, best protocol
+
+- Strengths: real hardware captures (the rarest thing in this
+  corpus), identical data across all three models, a headline
+  metric that is structurally leak-free (day 2 never seen in
+  training), and unusually honest analysis — the "baselines
+  learn the channel" argument plus a limitations section that
+  names nearly every caveat below.
+- Weaknesses: N=3, and the author's own observation that the
+  COARSE CFO STAYED CONSTANT PER DEVICE ACROSS BOTH DAYS makes
+  the CFO input near-deterministic at this N — as much device
+  lookup key as "fingerprint". No ablation separates CFO-only
+  vs equalized-only vs raw, so the 97.54% is never decomposed —
+  the credit split between physics feature and equalized IQ is
+  unknown. One fixed high-quality receiver on both days:
+  nothing about cross-receiver transfer. And 192 kSps "802.11a"
+  is a scaled emulation, the day-one column is random-split
+  inflated, and a thesis is not peer review.
+- Verdict: cite the effect and the protocol (channel-dominated
+  raw-IQ features collapse across days; equalization plus a
+  device-stable scalar survives); discount the absolute 97.54%
+  as a 3-device, single-receiver, fixed-geometry upper bound.
+
+### Applicability — §6.7 day-split numbers, E1 CFO caution
+
+- §6.7/E0: turns the Jagannath day-split advice from folklore
+  (~20 pp in the literature) into a measured near-worst case on
+  real hardware — ~64 pp for a channel-fed raw-IQ model. Our E0
+  within/between-emitter comparison must be day-split or it
+  proves nothing.
+- Counterpoint worth keeping: here EQUALIZATION HELPED — the
+  preamble CTF estimate absorbs the channel while device
+  residuals survive — evidence against assuming equalization
+  always destroys fingerprints (the Jagannath §VI open
+  problem). Relevant if E0 ever weighs raw vs equalized
+  features.
+- E1 caution: the star input works because ONE fixed receiver
+  with a decent clock saw all devices. In our chains (stock RTL
+  clock — SPEC §6.7 hardware notes already call CFO a
+  confounder) measured CFO is RX+TX entangled, so an absolute
+  CFO feature imports RECEIVER identity and the E1
+  cross-receiver probe would eat it. If CFO ever enters our
+  features it must be differential across receivers, never
+  absolute.
+- Not B-rung input: device ID is not §6.6 mode classification;
+  "physics as an input feature" is an architecture prior only,
+  and at N=3 with no ablation it is a citation, not a shortlist
+  entry.
+- SPEC unchanged: §6.6/§6.7 status lines and the E-ladder are
+  unaffected; §6.7 references stay Jagannath-only — this entry
+  refines the survey's day-split advice, it does not replace
+  it.
