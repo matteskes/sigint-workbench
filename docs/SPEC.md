@@ -1373,6 +1373,7 @@ General contract:
 | `GET /api/sdrs/{id}/status` | `[implemented]` | Proxy of capture control `GET /api/v1/status` filtered to the device (§7.4); capture down ⇒ `502`, unknown id ⇒ `404` |
 | `GET/POST /api/signals/{id}/annotations` | `[implemented]` | List a signal's user notes (newest first) / add one — POST body `{"userNote"}` ⇒ `201` + created row; unknown signal ⇒ `404`; blank or missing note ⇒ `400` (§12.5) |
 | `GET /api/signals/{id}/track` | `[implemented]` | Current track `{"signalId","path":[{lat,lon}…],"speedKmh","headingDeg","updatedAt"}`; no track ⇒ `404` (§9.4, §12.4) |
+| `POST /api/recordings/{id}/tfr` | `[planned]` | On-demand time-frequency render over stored IQ (§19, D10): body `{"method","t0","t1","nfft","overlap?","freqSpan?"}` ⇒ PNG/tiles + metadata, proxied to the recorder; unknown recording ⇒ `404`, invalid params ⇒ `400`, span > `tfr.max_span_s` ⇒ `413`; `tfr.enabled: false` ⇒ `404` (§19.3) |
 
 ### 13.2 Gap fixes to existing endpoints
 
@@ -1701,6 +1702,9 @@ audio.format          string  wav          (wav only; FLAC unsupported, §10.5)
 audio.channels        int     1
 iq.enabled            bool    true         (raw int16 interleaved, §10.5)
 iq.max_duration_s     int     300          (session cap, §11.1; <0 uncapped)
+tfr.enabled           bool    false        (§19 TF analysis; 404 when off)
+tfr.max_span_s        int     30           (max requestable span, §19.3)
+tfr.max_nfft          int     16384        (per-request nfft cap, §19.2)
 retention.max_age_days int    30
 retention.max_size_gb  int    50
 capture.close_silence_s int   10           (§10.2 session hysteresis)
@@ -1868,6 +1872,13 @@ stores and the API client; `svelte-check` for types.
   validity; publisher-queue overflow MUST NOT block DSP (§14.1).
   Frontend: `spectrum` store upsert/eviction, gap + out-of-order +
   malformed-frame tolerance, `SpectrumView` canvas smoke (vitest).
+- §19 (after §18): TF analysis — Go tests: `reassigned` on a linear
+  chirp MUST place its ridge on the instantaneous frequency within
+  tolerance; two-tone WVD vs `spwvd` cross-term suppression;
+  gaussian-window STFT identity with the Gabor transform; API
+  contract per §19.3 (400/404/413, `tfr.enabled: false` ⇒ 404) and
+  single-ingress proxy compliance (§2.2, A3). Frontend: method
+  picker/param-panel smoke (vitest).
 - D6 (§11.2): TTL test asserting `active=false` + row survives;
   purge test for the 30-day/50 GB caps.
 
@@ -1965,6 +1976,95 @@ rate-capped per §18.1.
 | `spectrum.bins` | `256` | decimated bin count; MUST divide `fft.size` (§18.1) |
 | `spectrum.rate_hz` | `5` | max frames per second per SDR (§18.1) |
 
+## 19. Time-Frequency Analysis
+
+**Status: `[planned]` — design locked (D10); implementation after
+§18 (§19.4).**
+
+On-demand, high-resolution time-frequency renders of stored IQ —
+the analysis counterpart to §18's continuous dashboard feed,
+inspired by the Panoradio SDR project's tutorial on high-resolution
+TF representations (wavelet, Wigner-Ville, reassignment; Kodera et
+al. and Flandrin et al. are the primary references). Computation
+lives in the recorder (it owns the IQ files, §10.5/§11.3) and runs
+only when a client asks — nothing here is continuous.
+
+### 19.1 Scope & boundary (normative)
+
+- Analysis runs **only on demand** over stored recordings
+  (§10.5, §11.3). It MUST NOT alter, gate, or feed the §5 detection
+  pipeline, the §14 event stream, or the §18 tap; §18.1's hot-path
+  rules and the §5.7 geometry contracts are untouched.
+- **Boundary with §18:** §18 is the continuous, cost-bounded
+  monitoring feed (decimated, ≤ rate_hz, lossy); §19 is a
+  higher-resolution recomputation of a chosen span from full-rate
+  IQ, paid for per request. Neither substitutes for the other, and
+  §19 output MUST NOT feed the dashboard's live waterfall.
+- Requests reach the recorder only through the single client
+  ingress (§2.2, A3), like every other client surface (§13.1).
+
+### 19.2 Methods (normative)
+
+| Method | Definition | Notes |
+| ------ | ---------- | ----- |
+| `stft` | Spectrogram; `window` is `rectangular`, `gaussian`, or `hamming` | `gaussian` is the Gabor transform (uncertainty-bound optimal, per the reference) |
+| `reassigned` | STFT followed by reassignment: each (t, f) cell moves to its phase-gradient energy centroid (Kodera/Flandrin) | sharpest of the set; smears noise-dominated regions — artifact, not a bug |
+| `spwvd` | Smoothed pseudo Wigner-Ville with separable time/frequency kernels | optional in v1; suppresses WVD cross-terms at resolution cost |
+| `cwt-morlet` | Continuous Morlet wavelet transform | optional in v1; multi-scale, strong on SSB voice (§10.1) per the reference |
+
+- `nfft` MUST satisfy `256 <= nfft <= tfr.max_nfft`; overlap is
+  `0 <= overlap < 1`, default `0.75`.
+- `t0`/`t1` select the span within the recording; the span MUST NOT
+  exceed `tfr.max_span_s` (else `413`, §19.3).
+- Each response MUST carry metadata naming the method's dominant
+  artifact (reassignment smearing, WVD cross-terms, SPWVD kernel
+  smoothing) so the UI can surface it (§19.4).
+
+### 19.3 API (normative)
+
+`POST /api/recordings/{id}/tfr` — gateway-proxied to the recorder
+(§13.1):
+
+```json
+{"method":"reassigned","t0":0.5,"t1":4.0,"nfft":1024,
+ "overlap":0.75,"freqSpan":[145900000,146100000]}
+```
+
+- Response: PNG render or numeric tiles, plus metadata (method,
+  span, bin geometry, dominant artifact per §19.2).
+- Errors: `404` unknown recording; `400` invalid params (method,
+  `nfft`, overlap, span order); `413` span exceeds
+  `tfr.max_span_s`; `tfr.enabled: false` ⇒ `404` — feature absent,
+  not an error state.
+- Synchronous only: request cost is bounded by the §19.5 caps; no
+  queueing and no background jobs in v1.
+
+### 19.4 Frontend
+
+- Entry points: a SignalDetail **inspect** action on a recording
+  (works standalone), and — once §18 ships — a drag-select on the
+  §18 waterfall/spectrum canvas for the visible span.
+  **Implementation order: §18 first**; §19's best entry point is a
+  §18 gesture.
+- Canvas rendering of the returned image/tiles; a method +
+  parameter picker that surfaces the §19.2 artifact notes beside
+  the render. No new dependencies.
+
+### 19.5 Config (`recorder.yaml`, §16.5)
+
+| Key | Default | Meaning |
+| --- | ------- | ------- |
+| `tfr.enabled` | `false` | feature switch — when off, `404` (§19.3) |
+| `tfr.max_span_s` | `30` | largest requestable span |
+| `tfr.max_nfft` | `16384` | per-request `nfft` cap (§19.2) |
+
+### 19.6 Exploratory (non-normative)
+
+Reassignment-derived instantaneous-frequency estimates could
+become §6 classifier features (e.g., FSK/PSK discrimination).
+That path requires `models/train.py` feature parity, retraining,
+and a §6.2/§6.3 recalibration — explicitly out of scope for §19 v1.
+
 ## Appendix A — Decision Register
 
 Locked design decisions and the section carrying their normative
@@ -1985,6 +2085,7 @@ defaults — they have no separate normative surface.)
 | A1 | Unlocated signals are listed & verified, never silently dropped (map omits them) | §9.3 |
 | A3 | Single client ingress: api-gateway proxies `/ws` and `/ws/audio`; hub + recorder internal-only | §2.2, §3.2 |
 | D9 | Spectrum: hub JSON events (`spectrum.frame`), max-pool decimation of the §5.7 FFT to `spectrum.bins`, ≤ `rate_hz` frames/s per SDR, client-side waterfall history, canvas rendering with no new frontend dependencies; dedicated binary WS relay kept as the documented bandwidth fallback | §18 |
+| D10 | Time-frequency analysis: on-demand renders over stored IQ only (§10.5, §11.3) — never in the §5 detection path, §14 events, or the §18 feed; methods `stft`/`reassigned` (+ optional `spwvd`, `cwt-morlet`); REST via the gateway proxy (A3); synchronous, canvas rendering, no new frontend deps; implementation after §18 | §19 |
 
 ## Appendix B — Glossary
 
