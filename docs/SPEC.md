@@ -613,6 +613,101 @@ gnss, wifi, unknown
 - The string prefix `onnx:` MUST NOT appear in any persisted or
   streamed field.
 
+## 6.6 Classifier v2 — IQ-window research ladder (non-normative)
+
+**Status: research note — no contract, no obligations, no
+D-decision. Promotion to a contract follows the §20 pattern
+(design lock + D-decision + §17.3 obligations) only after the
+ladder below produces a winning rung.**
+
+The §6.3 model (MLP over the §6.4 134-dim features) has two
+structural limits: the features are hand-crafted spectral
+summaries, and training data is synthetic-only — the
+simulation-reality gap that the RF-fingerprinting literature
+names as the main blocker for deployed models (Jagannath et al.
+2022, §VI). This note tracks the staged research path toward a
+direct-IQ classifier — Scholl (2019) reaches 94% mean accuracy
+over −10…25 dB SNR (~98% above 5 dB) on 18 HF transmission modes
+from 2048-sample IQ windows with ~1.4M-parameter CNNs trained
+purely on synthetic Watterson-channel data — and records the
+conditions under which GAN-assisted training is worth its cost.
+
+### Ladder (adopt a rung only if it beats its predecessor)
+
+| Rung | Training data / method | Evidence expected | Admission criterion |
+| ----- | ---------------------- | ----------------- | ------------------- |
+| B0 | current §6.3 MLP (baseline) | — | — |
+| B1 | supervised CNN on raw IQ windows, synthetic only (`train.py`) | does direct-IQ beat 134-dim features at all? | per-class accuracy on the on-air fixture > B0 |
+| B2 | B1 + real §11.3 recordings (§6.2 weak labels, §12.5 clean labels) + traditional augmentation (frequency-offset rotation, time shift, SNR/gain jitter) | quantifies our simulation-reality gap | > B1 per class |
+| B3 | B2 + AC-WGAN augmentation (auxiliary-classifier head, Wasserstein objective) | scarce-class / impairment residuals closed | > B2 per class AND B2 error analysis shows scarce-class/impairment residuals |
+| B4 | OOD scoring for the Unknown path | critic Wasserstein distance vs cheaper scores | critic beats temperature-scaled max-softmax / energy score on the same OOD fixtures |
+
+Core protocol: **a rung is adopted only if per-class accuracy on
+the same held-out on-air fixture beats its predecessor.** Rungs
+that tie or lose are not merged.
+
+### Validation protocol
+
+- Fixture: held-out on-air recordings from §11.3, frozen per
+  model swap. Labels: §6.2 frequency rules as weak labels,
+  overridden by §12.5 user annotations where present.
+- Reporting: per-class accuracy is mandatory — aggregate numbers
+  hide the scarce classes (CW, SSB on air) where adversarial
+  augmentation would have to earn its keep. SNR-stratified
+  accuracy follows Scholl's −10…25 dB convention. The
+  Unknown/noise path is reported separately from in-class
+  accuracy.
+- Adversarial rungs additionally report seed/run variance; a
+  single-run win is not an adoption.
+
+### AC-WGAN assessment (honest)
+
+At inference, an auxiliary-classifier Wasserstein GAN's
+discriminator *is* a plain CNN — the GAN changes how the model
+is trained (Wasserstein objective for stability,
+class-conditional generation for scarce classes), not what is
+deployed; only the classifier head exports to ONNX. The
+surveyed evidence (Jagannath et al. 2022, §V.C.1, reviewing
+small-UAV AC-WGAN classification) shows wins over SVM and
+vanilla AC-GAN on 4-way indoor UAV ID at 5 dB SNR, but no
+head-to-head against a supervised CNN on equal data. The
+literature prior is that adversarial augmentation roughly ties
+supervised baselines at abundant labels and helps in
+scarce-label / distribution-coverage regimes. This product
+already owns a physics-based synthesizer (`train.py`), so the
+GAN's only marginal job is modeling real impairments the
+synthesizer misses — a property of the real recordings,
+measurable only after B2. B3 is therefore conditional on B2's
+error analysis, not scheduled.
+
+### Constraints inherited from the SPEC
+
+- Nothing enters the §5 hot path; §6.3 per-peak inference keeps
+  the 134-dim contract until a rung wins and a §20 design lock
+  changes it deliberately (§18.1/§19.1 precedent).
+- Deployment stays ONNX-in-Go via dlopen (§6.3); training stays
+  offline PyTorch in `models/train.py`, extending the existing
+  `ToVector()`/`extract_features` parity discipline to any new
+  IQ-window contract.
+- The §6.5 source-category contract (`class` = source enum, no
+  `onnx:` prefix) is unchanged by every rung.
+- Receiver-impairment caveat (survey §VI): captures etch the
+  *receiver's* IQ imbalance, phase noise, and clock offsets
+  into training data; recordings from multiple SDRs require
+  per-receiver normalization (§16.2 per-device offset
+  precedent) or training across the receiver pool.
+
+### References
+
+- S. Scholl, "Classification of Radio Signals and HF
+  Transmission Modes with Deep Learning," arXiv:1906.04459
+  (2019).
+- A. Jagannath, J. Jagannath, and P. S. Pattanshetty Vasanth
+  Kumar, "A Comprehensive Survey on Radio Frequency (RF)
+  Fingerprinting: Traditional Approaches, Deep Learning, and
+  Open Challenges," arXiv:2201.00680 (2022) — §V.C.1 (AC-WGAN
+  classification), §VI (open challenges).
+
 ## 7. Scanning
 
 **Status: `[implemented]` (D3). `sdr-capture` runs the §7.1 loop for
@@ -2064,6 +2159,8 @@ Reassignment-derived instantaneous-frequency estimates could
 become §6 classifier features (e.g., FSK/PSK discrimination).
 That path requires `models/train.py` feature parity, retraining,
 and a §6.2/§6.3 recalibration — explicitly out of scope for §19 v1.
+Classifier-feature evolution (including TF-derived features) is
+tracked in §6.6.
 
 ## Appendix A — Decision Register
 
