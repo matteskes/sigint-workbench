@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { fetchSignals, fetchSignal, fetchSDRs, retuneSdr, fetchAnnotations, addAnnotation, connectWebSocket, fetchRecordings, requestTFR } from './client';
+import { fetchSignals, fetchSignal, fetchSDRs, retuneSdr, fetchAnnotations, addAnnotation, connectWebSocket, fetchRecordings, requestTFR, fetchSettings, saveSettings, fetchSetupState, completeSetup, fetchSetupStatus } from './client';
 
 // Minimal WebSocket double: records the URL and lets tests emit messages.
 class FakeWebSocket {
@@ -354,5 +354,89 @@ describe('recordings + TFR (§19)', () => {
 			} as unknown as Response)
 		);
 		await expect(requestTFR('rec-1', { method: 'stft', nfft: 256 })).rejects.toThrow('API error: 502');
+	});
+});
+describe('setup screen (§20)', () => {
+	it('fetches the settings index', async () => {
+		const fetchMock = vi.fn().mockResolvedValue(
+			okJSON({
+				sections: [
+					{
+						id: 'ingest',
+						label: 'IQ Ingest',
+						file: 'iq-ingest.yaml',
+						description: '',
+						restart: ['iq-ingest'],
+						fields: []
+					}
+				],
+				values: { ingest: { buffer_size: 256 } }
+			})
+		);
+		vi.stubGlobal('fetch', fetchMock);
+
+		const idx = await fetchSettings();
+
+		expect(idx.sections).toHaveLength(1);
+		expect((idx.values.ingest as Record<string, unknown>).buffer_size).toBe(256);
+		const url = new URL(fetchMock.mock.calls[0][0] as string);
+		expect(url.pathname).toBe('/api/settings');
+	});
+
+	it('saves a section and surfaces 400 field errors', async () => {
+		const fetchMock = vi.fn()
+			.mockResolvedValueOnce(
+				okJSON({
+					result: { section: 'processing', file: 'signal-processor.yaml', restart: ['signal-processor'] },
+					values: {}
+				})
+			)
+			.mockResolvedValueOnce({
+				ok: false,
+				status: 400,
+				json: async () => ({ error: 'does not divide fft.size', field: 'spectrum.bins' })
+			} as Response);
+		vi.stubGlobal('fetch', fetchMock);
+
+		const res = await saveSettings('processing', { 'fft.window': 'hann' });
+		expect(res.section).toBe('processing');
+		const call = fetchMock.mock.calls[0];
+		expect((call[1] as RequestInit).method).toBe('PUT');
+		expect(JSON.parse((call[1] as RequestInit).body as string).values).toEqual({
+			'fft.window': 'hann'
+		});
+
+		await expect(saveSettings('processing', { 'spectrum.bins': 300 })).rejects.toMatchObject({
+			field: 'spectrum.bins'
+		});
+		const second = fetchMock.mock.calls[1];
+		expect(new URL(second[0] as string).pathname).toBe('/api/settings/processing');
+	});
+
+	it('reads and updates the first-run flag', async () => {
+		const fetchMock = vi.fn()
+			.mockResolvedValueOnce(okJSON({ first_run: true }))
+			.mockResolvedValueOnce(okJSON({ first_run: false }));
+		vi.stubGlobal('fetch', fetchMock);
+		expect((await fetchSetupState()).first_run).toBe(true);
+		await completeSetup(false);
+		const put = fetchMock.mock.calls[1];
+		expect((put[1] as RequestInit).method).toBe('PUT');
+		expect(JSON.parse((put[1] as RequestInit).body as string)).toEqual({ first_run: false });
+		expect(new URL(put[0] as string).pathname).toBe('/api/setup/state');
+	});
+
+	it('fetches the setup status probe', async () => {
+		const fetchMock = vi.fn().mockResolvedValue(
+			okJSON({
+				components: { db: { ok: true }, 'ws-hub': { ok: false, detail: 'unreachable' } },
+				all_ok: false,
+				config_dir_writable: true
+			})
+		);
+		vi.stubGlobal('fetch', fetchMock);
+		const st = await fetchSetupStatus();
+		expect(st.all_ok).toBe(false);
+		expect(st.components.db.ok).toBe(true);
 	});
 });

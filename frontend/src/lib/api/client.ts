@@ -309,3 +309,140 @@ export async function requestTFR(recordingId: string, req: TFRRequest): Promise<
 	}
 	return res.json();
 }
+// ─── §20 setup screen ───
+
+/** One editable scalar in a §20 section schema (server-authoritative). */
+export interface SettingsField {
+	key: string;
+	label: string;
+	type: 'number' | 'string' | 'bool' | 'select';
+	group: string;
+	unit?: string;
+	step?: number;
+	min?: number;
+	max?: number;
+	options?: string[];
+	default?: unknown;
+	integer?: boolean;
+	optional?: boolean;
+	help?: string;
+	warning?: string;
+}
+
+/** One editable YAML list (the SDR devices). */
+export interface SettingsListField {
+	key: string;
+	label: string;
+	itemLabelKey: string;
+	help?: string;
+	itemFields: SettingsField[];
+}
+
+/** One editable config file (§20 section). */
+export interface SettingsSection {
+	id: string;
+	label: string;
+	file: string;
+	description: string;
+	restart: string[];
+	fields: SettingsField[];
+	lists?: SettingsListField[];
+}
+
+export type SettingsValues = Record<string, unknown>;
+
+/** GET /api/settings: schema plus current per-section values. */
+export interface SettingsIndex {
+	sections: SettingsSection[];
+	values: Record<string, SettingsValues | null>;
+}
+
+/** SaveResult from PUT /api/settings/{section}. */
+export interface SaveResult {
+	section: string;
+	file: string;
+	restart: string[];
+}
+
+/** GET /api/setup/status component probes (§13 exception). */
+export interface SetupStatus {
+	components: Record<string, { ok: boolean; detail?: string }>;
+	all_ok: boolean;
+	config_dir_writable: boolean;
+}
+
+/** 400 from a section save: carries the offending dotted key. */
+export class SettingsValidationError extends Error {
+	field: string;
+	constructor(message: string, field: string) {
+		super(message);
+		this.field = field;
+	}
+}
+
+/** Fetches the whole editable surface: schema + current values. */
+export async function fetchSettings(): Promise<SettingsIndex> {
+	const res = await fetch(`${API_URL}/api/settings`);
+	if (!res.ok) throw new Error(`API error: ${res.status}`);
+	return res.json();
+}
+
+/** Fetches one section: schema plus current values (§20). */
+export async function fetchSettingsSection(section: string): Promise<{ section: SettingsSection; values: SettingsValues | null }> {
+	const res = await fetch(`${API_URL}/api/settings/${encodeURIComponent(section)}`);
+	if (!res.ok) throw new Error(`API error: ${res.status}`);
+	return res.json();
+}
+
+/**
+ * Saves one section (§20). A 400 answer is a validation rejection:
+ * throws SettingsValidationError carrying the server error text and
+ * the offending dotted field key for inline highlighting.
+ */
+export async function saveSettings(section: string, values: SettingsValues): Promise<SaveResult> {
+	const res = await fetch(`${API_URL}/api/settings/${encodeURIComponent(section)}`, {
+		method: 'PUT',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ values })
+	});
+	if (!res.ok) {
+		let msg = `API error: ${res.status}`;
+		let field = '';
+		try {
+			const body = await res.json();
+			if (body?.error) msg = body.error;
+			if (body?.field) field = body.field;
+		} catch {
+			// non-JSON error body — keep the status line
+		}
+		throw new SettingsValidationError(msg, field);
+	}
+	// §20 body shape: {result, values} — callers want the result.
+	const body = (await res.json()) as { result: SaveResult };
+	return body.result;
+}
+
+/** Probes db/ws-hub/recorder/capture concurrently (2 s cap each). */
+export async function fetchSetupStatus(): Promise<SetupStatus> {
+	const res = await fetch(`${API_URL}/api/setup/status`);
+	if (!res.ok) throw new Error(`API error: ${res.status}`);
+	return res.json();
+}
+
+/** Reads the §20 first-run flag (503 when the DB is down). */
+export async function fetchSetupState(): Promise<{ first_run: boolean }> {
+	const res = await fetch(`${API_URL}/api/setup/state`);
+	if (!res.ok) throw new Error(`API error: ${res.status}`);
+	return res.json();
+}
+
+/** Completes (firstRun=false) or re-arms (firstRun=true) the wizard. */
+export async function completeSetup(firstRun: boolean): Promise<{ first_run: boolean }> {
+	const res = await fetch(`${API_URL}/api/setup/state`, {
+		method: 'PUT',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ first_run: firstRun })
+	});
+	if (!res.ok) throw new Error(`API error: ${res.status}`);
+	return res.json();
+}

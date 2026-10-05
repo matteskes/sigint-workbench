@@ -11,6 +11,11 @@
 	import { applyTrackUpdate, clearTrack } from '$lib/stores/tracks';
 	import { applySpectrumFrame } from '$lib/stores/spectrum';
 	import { fetchSignals, fetchSDRs, connectWebSocket, type WSEvent } from '$lib/api/client';
+	import { fetchSetupState, completeSetup } from '$lib/api/client';
+
+	// §20 first-run banner: shown until the setup wizard is completed
+	// or dismissed. Failures leave it hidden (best-effort only).
+	let firstRun = $state(false);
 
 	// Full (re)sync from the REST API — on boot and after every
 	// (re)connect, so events missed while disconnected are healed.
@@ -59,6 +64,12 @@
 	onMount(() => {
 		bootstrap();
 
+		fetchSetupState()
+			.then((s) => (firstRun = s.first_run))
+			.catch(() => {
+				// banner is best-effort; ignore probe failures
+			});
+
 		let ws: WebSocket | undefined;
 		let retries = 0;
 		let disposed = false;
@@ -87,7 +98,18 @@
 	});
 </script>
 
-<div class="flex h-full">
+<div class="flex h-full flex-col">
+	{#if firstRun}
+		<div class="flex items-center gap-3 border-b border-blue-800 bg-blue-950/60 px-4 py-2 text-sm">
+			<span class="text-blue-200">First run: configure receivers and processing in the setup wizard.</span>
+			<a href="/setup" class="rounded bg-blue-700 px-2 py-0.5 text-xs font-medium hover:bg-blue-600">Open setup</a>
+			<button
+				class="text-xs text-slate-400 hover:text-slate-200"
+				onclick={() => completeSetup(false).then(() => (firstRun = false))}>Dismiss</button
+			>
+		</div>
+	{/if}
+	<div class="flex flex-1 min-h-0">
 	<!-- Left sidebar: SDR controls -->
 	<aside class="w-64 border-r border-slate-700 overflow-y-auto shrink-0">
 		<SDRControl />
@@ -112,4 +134,5 @@
 			<SignalDetail signal={$selectedSignal} />
 		</aside>
 	{/if}
+</div>
 </div>
