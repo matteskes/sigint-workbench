@@ -2,18 +2,20 @@
 
 Bench procedure for running SIGINT Workbench on real RTL-SDR hardware:
 identifying dongles, pinning them to config slots, validating the
-on-hardware path end to end, and measuring each device's §5.6 power
+on-hardware path end to end, measuring each device's §5.6 power
 calibration offset with the on-air method (no signal generator
-required). The HackRF half of the Phase 3 exit criteria is deferred —
-its checklist lives in §7 below.
+required), and — §7 — the slice-5 on-air TDOA validation (SPEC
+§9.5–§9.6). The HackRF half of the Phase 3 exit criteria is deferred —
+its checklist lives in §8 below.
 
-Status (Phase 3, slice 3 — SPEC §17.4):
+Status (bench — SPEC §15.3, §9.5–§9.6, §17.4):
 
 | Item | Status |
 | --- | --- |
 | RTL-SDR driver, build tag `rtlsdr` (§15.3) | `[implemented]`, hardware-validated |
-| On-hardware validation (this runbook, V1–V8) | `[done]` 2026-10-04 (§8) |
-| §5.6 per-device calibration measurement | `[done]` — offsets in config/sdr-capture.yaml (§6, §8) |
+| On-hardware validation (this runbook, V1–V8) | `[done]` 2026-10-04 (§9) |
+| §5.6 per-device calibration measurement | `[done]` — offsets in config/sdr-capture.yaml (§6, §9) |
+| On-air TDOA validation (§7, SPEC §9.5–§9.6) | `[planned]` — runbook ready; awaiting a third receiver |
 | HackRF on-hardware validation (§15.4) | deferred — no hardware |
 
 Build the tools once (§1 lists the libraries they need):
@@ -73,7 +75,7 @@ Two gotchas:
 
 Edit `config/sdr-capture.yaml` and give each `sdrs[]` entry its own
 `usb_index` (the stock config uses 0 and 1). Keep the configured
-roles: `rtlsdr-0` scanner, `rtlsdr-1` monitor. Record in §8 which
+roles: `rtlsdr-0` scanner, `rtlsdr-1` monitor. Record in §9 which
 serial (or, with colliding serials, which model + USB port) got which
 role.
 
@@ -136,7 +138,7 @@ The model path itself comes from `classifier.yaml`
 (`models/classifier.onnx`; `-model` or `MODEL_PATH` override it).
 Pass looks like a `loaded ONNX classifier …` startup line; without
 the tag or library the log says the ONNX classifier is unavailable
-and rules are used — that is what the 2026-10-04 V4 run did (§8).
+and rules are used — that is what the 2026-10-04 V4 run did (§9).
 
 On startup, check:
 
@@ -155,7 +157,7 @@ gain, and BW.
 
 ## 5. On-hardware validation checklist
 
-Work top to bottom and record every row in §8. V5 is the headline
+Work top to bottom and record every row in §9. V5 is the headline
 Phase 3 exit gate (§8: both `signals` rows flip `verified = true` and
 a `verifications` row is written).
 
@@ -320,10 +322,148 @@ Act on the warnings it prints:
    log labels that SDR's power in dBm, and the API payload carries
    `"powerCalibrated": true` (§12.7).
 4. Repeat for the other dongle. Record both offsets, gains, carriers
-   and dates in §8, then update the SPEC (§15 status block, §15.2
+   and dates in §9, then update the SPEC (§15 status block, §15.2
    matrix row, §17.4 Phase 3 row).
 
-## 7. HackRF checklist (deferred)
+## 7. On-air TDOA validation (slice 5 — SPEC §9.5–§9.6)
+
+The slice-5 exit criterion (SPEC §17.4): a TDOA **fix** on a known
+on-air transmitter. Engine, simulator, wiring, and persistence are
+delivered and CI-green (the §9.6 wiring in `cmd/signal-processor`);
+this bench session closes the slice. What the simulator cannot prove
+is the physical layer — real front-end clocks, real antennas, and
+the anchor quality of §4.5 v2 frames on hardware.
+
+Minimum hardware:
+
+- **three receivers.** Three baselines bound a point fix; with two
+  receivers §9.5 degrades the result to a hyperbolic locus by design
+  (T4 exercises that branch, but it cannot satisfy the exit
+  criterion). A third RTL-SDR dongle is enough — the "2× RTL-SDR +
+  HackRF" composition in SPEC §9.5 is the eventual shape, not a
+  prerequisite.
+- antennas for the band under test at separated, non-collinear
+  positions — baselines of hundreds of metres to a few km. Record
+  each position with a phone GPS app; 5–10 m accuracy is fine
+  against the 200 m on-air budget (§9.6).
+- a known continuous transmitter (§6.1's FM-broadcast method works:
+  licensed ERP and the transmitter site are public).
+- all three parked on the carrier (`mode: monitor` or a retune via
+  `PUT /api/sdrs/{id}`): a receiver swept off the emission
+  contributes no window (§9.6 trigger), so a scanning slot quietly
+  disables the solve. USB bandwidth stays trivial:
+  3 × 2.4 MSPS × 2 B ≈ 14.4 MB/s (§5 V7 note).
+
+Single-host first: all receivers run in one `sdr-capture` process,
+so every v2 anchor is stamped from the same CLOCK_REALTIME clock
+(§4.5). Cross-host clock offsets are slice-6 territory (§16).
+
+### 7.1 Configure
+
+```yaml
+# config/sdr-capture.yaml — v2 frames + surveyed positions
+stream_format: sdr2          # TDOA needs §4.5 anchors
+sdrs:
+  - id: "rtlsdr-0"
+    # ...existing fields, usb_index pinned per §3 ...
+    lat: 47.376900           # surveyed position — set for EVERY
+    lon: 8.541700            # receiver, or it cannot join a solve
+```
+
+```yaml
+# config/signal-processor.yaml — uncomment the block, then:
+tdoa:
+  enabled: true
+  accuracy_budget_m: 200    # the on-air budget (§9.6)
+  # Sub-km baselines: raise the solve rate. At the bandwidth-derived
+  # 250 kS/s default one correlation bin is 4 µs ≈ 1200 m of delay
+  # ambiguity and sub-bin refinement carries visible bias; 1 MHz
+  # keeps realistic geometry on the sharp part of the GCC-PHAT peak
+  # (bench finding, slice-5 wiring test: pair error 4–13 ns at
+  # 1 MHz vs 35–1020 ns at 250 kS/s).
+  solve_rate_hz: 1000000
+```
+
+Restart sdr-capture and signal-processor (native, per §4) and
+confirm clean bring-up for all three devices.
+
+### 7.2 Checklist
+
+Work top to bottom and record the run in §9.
+
+| ID | Check | Pass looks like |
+| --- | --- | --- |
+| T1 | enumeration + pinning | `rtl-list` shows three dongles; each `sdrs[]` entry pinned by `usb_index` (§3) with surveyed `lat`/`lon` |
+| T2 | v2 frames flow | startup logs `IQ wire format: sdr2 (§4.5)`; no `seq:` gap/reorder lines from iq-ingest or signal-processor (they are silent when clean); no `[tdoa]` lines yet |
+| T3 | the fix (exit gate) | all three parked ≥ 2 s → within ~1 s a `[tdoa] … accepted=true persisted=true` line; residual maps ≤ 200 m; `pairs_used ≥ 2`; quality columns populated in DB and gateway payload; fix within budget of the surveyed transmitter position |
+| T4 | degenerate pair | retire one receiver → `[tdoa] … locus` event, nothing persisted (no `method = 'tdoa'` row, quality columns untouched); restore → the fix returns |
+| T5 | flip-flop guard | force a plain re-placement of the reference receiver (retune away and back, §5 V6) → the row keeps the fix position and its quality columns |
+| T6 | honesty injection | swap two receivers' `lat`/`lon` → outlier rejections and/or `accepted=false` with a reason — never a confident fix at a wrong place |
+
+Notes and evidence per row:
+
+- T2 evidence:
+
+  ```bash
+  curl -s localhost:9090/api/v1/status | jq  # three entries, active (§4)
+  # watch ingest + processor logs: clean means no "seq:" lines at all
+  ```
+
+- T3 evidence — the engine attempts at most 1 Hz per signal (§9.6)
+  and logs one line per attempt:
+
+  ```text
+  [tdoa] 96500000 Hz fix @ 47.370000,8.530000 residual 412 ns
+    (3 pairs, 2140 m baseline) accepted=true persisted=true
+  ```
+
+  ```bash
+  curl -s localhost:8080/api/signals \
+    | jq '.[] | select(.method == "tdoa")'  # quality fields ride it
+  make db-shell
+  ```
+
+  ```sql
+  select freq_hz, method, lat, lon, residual_ns, pairs_used,
+         max_baseline_m, reference
+    from signals
+   where method = 'tdoa'
+   order by last_seen desc limit 1;
+  ```
+
+  Record the error against the surveyed transmitter position — that
+  number is what the §17.4 exit criterion is judged on. Each attempt
+  also emits `signal.tdoa` (§14.2: fix or locus, quality surface,
+  `reference`, receiver ids); the hub relays it to the dashboard.
+
+- T4 evidence: same queries during the two-receiver window — the log
+  shows `[tdoa] … locus (…)-(…)` and a `signal.tdoa` with `locus`
+  endpoints; no `method = 'tdoa'` row appears and the previous fix's
+  quality columns are untouched (§9.6: locus-only persists nothing).
+
+- T5 evidence: retune the reference receiver away and back (§5 V6
+  commands) so it re-observes the signal and would normally re-place
+  the row from its own position; the §9.5 flip-flop guard suppresses
+  that overwrite. Re-run the SQL above: `lat`/`lon` still show the
+  fix, and `residual_ns`/`pairs_used`/`max_baseline_m`/`reference`
+  are unchanged (quality columns are sticky under the COALESCE
+  upsert, migration 004).
+
+- T6 evidence: with two receivers' positions exchanged, the log shows
+  `[tdoa] … N/M pair delays rejected as outliers` and/or
+  `[tdoa] … no fix (<reason>)` with `accepted=false` — the on-air
+  shape of the simulator's anchor-corruption test (§9.5). Rejected
+  attempts persist nothing. Restore the config afterwards.
+
+### 7.3 After a pass
+
+Flip the documentation, not just the run log: the status table at the
+top of this file, SPEC §9's status line, the §9.5 validation-path
+sentence, §9.6's exit-criterion note, the §17.4 slice-5 cell and its
+exit-criteria column, and a `TDOA on-air` block in §9. Failure
+findings feed the defect notes via §9 instead.
+
+## 8. HackRF checklist (deferred)
 
 No HackRF hardware has been available; §15.4 stays compile-validated,
 hardware-unverified, and on-hardware validation remains a Phase 3 exit
@@ -339,7 +479,7 @@ gate. When hardware arrives, work the V1–V8 shape above plus:
 - calibration: same §6 procedure — the HackRF gain chain is
   deterministic (IF ≈ LNA + VGA, amp off, §15.4).
 
-## 8. Run log
+## 9. Run log
 
 Append one block per bench session; failures feed the §15.3 defect
 notes in SPEC, successes flip the §15 and §17.4 statuses.
@@ -438,4 +578,16 @@ notes in SPEC, successes flip the §15 and §17.4 statuses.
 - calibration: index 0 = <offset> dB @ <gain> dB (carrier <station>,
   est. <dBm>, stddev <dB>); index 1 = ...
 - SPEC updates: §15 status, §15.2 matrix row, §17.4 Phase 3 row
+
+### YYYY-MM-DD — <host>, <OS> — TDOA on-air (T1–T6, §7)
+
+- hardware: index 0/1/2 = <model>/<port>; surveyed positions
+  (<lat>,<lon> × 3); baselines <m>/<m>/<m>, non-collinear
+- T1–T6: pass/fail + notes (failures → defect notes below)
+- T3 fix: <freq> Hz @ <lat>,<lng> residual <ns> (<pairs> pairs,
+  <m> baseline) accepted=true persisted=true; reference <sdr_id>;
+  error vs surveyed transmitter <m>
+- config: stream_format sdr2; tdoa enabled (solve_rate_hz <value>);
+  calibration/carriers unchanged
+- SPEC updates: §9 status, §9.5/§9.6 notes, §17.4 slice-5 row
 ```
