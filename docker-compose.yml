@@ -142,8 +142,15 @@ services:
       context: .
       dockerfile: docker/Dockerfile.services
       args: { SERVICE: ws-hub }
-    # No published ports (§3.2): clients reach ws-hub only through
-    # the api-gateway /ws relay.
+    # §3.2: the hub stays client-facing-internal — browsers reach it only
+    # through the api-gateway /ws relay. The loopback-only publish below
+    # exists for the macOS dev pair: the signal-processor/recorder run
+    # natively there (USB / port conflicts) and publish events from the
+    # host (WS_HUB_URL=http://127.0.0.1:8081, commit b04bd50d). Binding
+    # to 127.0.0.1 keeps the hub unreachable off-host. Linux prod runs
+    # every publisher in-container and would still work without it.
+    ports:
+      - "127.0.0.1:8081:8081"
     environment:
       - DB_URL=${DB_URL:-postgres://sdr:sdr@db:5432/sdr?sslmode=disable}
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:5173}
