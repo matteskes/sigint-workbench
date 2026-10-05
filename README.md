@@ -25,6 +25,9 @@ and geospatial visualization.
 - **Dashboard control** — retune receivers from the UI via the
   capture control API (§7.4); per-signal user notes
 - **Spectrum analyzer** and **waterfall display** *(planned)*
+- **Time-frequency analysis** — on-demand STFT/reassigned
+  spectrograms per recording *(planned; lands after the spectrum
+  analyzer, §19)*
 - **Extensible demodulator and classifier framework** — add new modes
   by implementing one interface
 
