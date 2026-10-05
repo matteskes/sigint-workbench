@@ -33,6 +33,7 @@ var eventTypes = map[string]bool{
 	"sdr.status":     true,
 	"audio.level":    true,
 	"track.update":   true,
+	"spectrum.frame": true, // §18 spectrum/waterfall display feed
 }
 
 // handleWS upgrades an HTTP connection to a WebSocket client.

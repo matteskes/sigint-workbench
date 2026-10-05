@@ -79,6 +79,50 @@ func TestIngestBroadcastsToClients(t *testing.T) {
 	}
 }
 
+func TestIngestBroadcastsSpectrumFrame(t *testing.T) {
+	// §18: the hub must relay spectrum.frame display feed events.
+	srv, hub := testServer(t)
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws"
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	waitForClients(t, hub, 1)
+
+	payload := map[string]interface{}{
+		"sdrId": "sim0", "freqHz": 100000000, "sampleRate": 2400000,
+		"t": "2026-10-04T12:00:00Z", "bins": 4, "df": 585.9375,
+		"db": []float64{-87.3, -84.1, -90.0, -88.5},
+	}
+	body := `{"type":"spectrum.frame","payload":` + mustJSON(t, payload) + `}`
+	resp, err := http.Post(srv.URL+"/api/events", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("post status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, data, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	var ev ws.Event
+	if err := json.Unmarshal(data, &ev); err != nil {
+		t.Fatalf("unmarshal event: %v", err)
+	}
+	if ev.Type != "spectrum.frame" {
+		t.Fatalf("event type = %q, want spectrum.frame", ev.Type)
+	}
+	if !bytes.Equal(ev.Payload, mustJSONBytes(t, payload)) {
+		t.Fatalf("payload = %s, want %s", ev.Payload, payload)
+	}
+}
+
 func TestIngestRejectsUnknownType(t *testing.T) {
 	srv, _ := testServer(t)
 	resp, err := http.Post(srv.URL+"/api/events", "application/json",
