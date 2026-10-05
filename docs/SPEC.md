@@ -708,6 +708,97 @@ error analysis, not scheduled.
   Open Challenges," arXiv:2201.00680 (2022) — §V.C.1 (AC-WGAN
   classification), §VI (open challenges).
 
+## 6.7 Emitter identity — transient fingerprinting research (non-normative)
+
+**Status: research note — no contract, no obligations, no
+D-decision. Promotion to a contract follows the §20 pattern
+(design lock + D-decision + §17.3 obligations) only after the
+staged probes below produce positive evidence.**
+
+§6 classifies *modes*; identifying *which emitter* is speaking is
+a different, harder problem. The classical feature is the turn-on
+transient (PA bias ramp, PLL lock, key-up click), but the survey
+(Jagannath et al. 2022, §V-B6 Task 3) shows fingerprint accuracy
+collapsing when the receive chain or channel differs between
+training and validation — the "fingerprint" is
+device+receiver+channel entangled. This note records the staged,
+evidence-gated probes for deciding whether emitter identity is
+tractable *through our receive chains* before any capture-mode
+design is attempted.
+
+### E0 — corpus feasibility (no new hardware, no pipeline change)
+
+Transient-lite pass over existing §11.3 recordings: slice the
+first ~500 ms of each §10.2 session and extract per-session
+features — CTCSS/CDCSS turn-on timing, turn-on data bursts,
+first-syllable envelope, key-up frequency settling. These are the
+*late*-transient artifacts that survive §10.2's
+detector-confirmed session opens (the µs-scale turn-on itself is
+already lost; see the pipeline-gap note below). Proceed only if
+within-emitter similarity exceeds between-emitter similarity on
+multi-session emitters.
+
+Labeling dependency: this assumes we can group sessions by
+emitter — §6.2 frequency rules and §12.5 annotations as labels,
+with spoken repeater IDs as self-labeling anchors. If the local
+population cannot be labeled, E0 starts from a hand-labeled
+subset.
+
+### E1 — cross-receiver probe (blocked on §17.4 hardware items)
+
+Capture the same on-air emitter's key-up simultaneously on 2×
+RTL-SDR + 1× HackRF (§15.4). Within-receiver vs cross-receiver
+feature correlation is the go/no-go: correlated features say
+emitter identity survives our chains; uncorrelated features say
+the "fingerprint" is our dongles (the survey's Task-3 collapse,
+project edition). The same captures double as a receive-chain
+calibration probe.
+
+H2 note (§15.4, §1.2): a controlled-transmitter bench source, if
+used, lives outside this repository — `TestHackRFH2Guard` forbids
+transmit APIs anywhere in the driver tree, and the HackRF's own
+key-up is calibration stimulus, not a stand-in for the monitored
+PMR/ham/marine population.
+
+### Capture-pipeline gap (design candidate, not a promise)
+
+§10.2 opens sessions on detector confirmation; there is no IQ
+pre-trigger buffer (the §16 ring buffer holds waterfall rows
+only); §7.1 retune queue-flushes make a scanning receiver
+structurally blind to pre-detection samples. A real transient mode
+is therefore a *new capture mode* — an IQ pre-trigger ring buffer
+beside the §10.5 raw-IQ writer, or scheduled wideband dumps
+(~80 MB/s at 20 MSPS) — and gets its own design lock. Nothing here
+modifies §5, §7, or §10 normative behavior.
+
+### Hardware notes (as-built §15.4)
+
+- Pro: 20 MSPS sees the wideband key-up click signature that an
+  RTL-SDR's ±1.2 MHz window cannot; manual-only gain (VGA+LNA)
+  means no AGC pumping — the RTL driver's auto-gain mode is a
+  transient killer and would need manual gain staging for any
+  RTL-side work; the IF = LNA + VGA chain is deterministic
+  (HARDWARE.md §8).
+- Con: 8-bit samples limit amplitude-precision features; the
+  stock clock is a CFO confounder (TCXO/CLKIN upgrade territory).
+
+### Constraints on the §6.7 probes
+
+- Nothing enters the §5 hot path; §10.2 session lifecycle
+  unchanged.
+- H2 intact: §15.4 stays RX-only; the guard test is untouched.
+- Any adopted capture mode gets its own section and D-decision.
+- §6.6 rungs and the §6.5 source-category contract are
+  unaffected.
+
+### §6.7 references
+
+- A. Jagannath, J. Jagannath, and P. S. Pattanshetty Vasanth
+  Kumar, "A Comprehensive Survey on Radio Frequency (RF)
+  Fingerprinting: Traditional Approaches, Deep Learning, and Open
+  Challenges," arXiv:2201.00680 (2022) — §IV.C (transient-based
+  approaches), §V-B6 (Tasks 1–4), §V.F (open datasets).
+
 ## 7. Scanning
 
 **Status: `[implemented]` (D3). `sdr-capture` runs the §7.1 loop for
@@ -2160,7 +2251,8 @@ become §6 classifier features (e.g., FSK/PSK discrimination).
 That path requires `models/train.py` feature parity, retraining,
 and a §6.2/§6.3 recalibration — explicitly out of scope for §19 v1.
 Classifier-feature evolution (including TF-derived features) is
-tracked in §6.6.
+tracked in §6.6; emitter-identity research (transient capture,
+cross-receiver probes) is tracked in §6.7.
 
 ## Appendix A — Decision Register
 
