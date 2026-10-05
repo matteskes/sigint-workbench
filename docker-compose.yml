@@ -110,6 +110,9 @@ services:
       # /ws/audio relay target (§10.4): the recorder's internal
       # audio WS, reachable only on sdr-net.
       - RECORDER_WS_ADDR=recorder:9012
+      # TFR proxy (§19.3): recorder-internal render endpoint, reachable
+      # only on sdr-net; responses pass through with §19.3 statuses.
+      - RECORDER_API_ADDR=recorder:9013
       # Control-API proxy (§7.4). In macOS dev capture runs natively
       # on the host — set CAPTURE_CTRL_ADDR=host.docker.internal:9090
       # in .env to reach it from the container.

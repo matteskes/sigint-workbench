@@ -33,6 +33,7 @@ type Server struct {
 	recordingsDir  string
 	wsHubAddr      string // ws-hub host:port for the /ws relay (§2.2)
 	recorderWSAddr string // recorder host:port for the /ws/audio relay (§10.4)
+	recorderAPI    string // recorder host:port for the TFR proxy (§19.3)
 	captureCtrl    string // sdr-capture host:port for the control-API proxy (§7.4)
 }
 
@@ -50,6 +51,10 @@ func NewServer(database *db.DB, log zerolog.Logger) *Server {
 	if recAddr == "" {
 		recAddr = "127.0.0.1:9012"
 	}
+	recAPI := os.Getenv("RECORDER_API_ADDR")
+	if recAPI == "" {
+		recAPI = "127.0.0.1:9013"
+	}
 	capAddr := os.Getenv("CAPTURE_CTRL_ADDR")
 	if capAddr == "" {
 		capAddr = "127.0.0.1:9090"
@@ -60,6 +65,7 @@ func NewServer(database *db.DB, log zerolog.Logger) *Server {
 		recordingsDir:  dir,
 		wsHubAddr:      hubAddr,
 		recorderWSAddr: recAddr,
+		recorderAPI:    recAPI,
 		captureCtrl:    capAddr,
 	}
 	s.buildRoutes()
@@ -99,6 +105,7 @@ func (s *Server) buildRoutes() {
 	// Recordings
 	s.router.Get("/api/recordings", s.handleGetRecordings)
 	s.router.Get("/api/recordings/{id}/audio", s.handleGetRecordingAudio)
+	s.router.Post("/api/recordings/{id}/tfr", s.handleRecordingTFR)
 
 	// SDRs
 	s.router.Get("/api/sdrs", s.handleGetSDRs)
@@ -357,6 +364,52 @@ func audioContentType(format string) string {
 		return "audio/wav"
 	}
 	return "application/octet-stream"
+}
+
+// tfrProxyTimeout bounds the synchronous §19.3 render: request cost
+// is bounded by the §19.5 caps, so a generous fixed ceiling covers
+// the worst in-cap render without ever queueing (§19.3).
+const tfrProxyTimeout = 120 * time.Second
+
+// handleRecordingTFR proxies POST /api/recordings/{id}/tfr to the
+// recorder (§19.3, §13.1/A3 — single client ingress). The body is
+// forwarded untouched and the upstream status passes through, so the
+// §19.3 contract (400/404/413, disabled ⇒ 404) is preserved verbatim;
+// an unreachable recorder answers 502. Like every /api/* route the
+// gateway answers 503 when the database is down.
+func (s *Server) handleRecordingTFR(w http.ResponseWriter, r *http.Request) {
+	if !s.requireDB(w) {
+		return
+	}
+	id := chi.URLParam(r, "id")
+	body, err := io.ReadAll(io.LimitReader(r.Body, 64<<10))
+	if err != nil {
+		http.Error(w, `{"error":"could not read request body"}`, http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), tfrProxyTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		"http://"+s.recorderAPI+"/api/recordings/"+url.PathEscape(id)+"/tfr",
+		bytes.NewReader(body))
+	if err != nil {
+		http.Error(w, `{"error":"tfr proxy request failed"}`, http.StatusBadGateway)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		s.log.Error().Err(err).Str("id", id).Str("upstream", s.recorderAPI).Msg("tfr proxy: recorder unreachable")
+		http.Error(w, `{"error":"recorder unreachable"}`, http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(resp.StatusCode)
+	_, _ = io.Copy(w, resp.Body)
 }
 
 // handleGetSDRs returns all registered SDRs.

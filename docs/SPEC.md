@@ -165,6 +165,7 @@ published-port reduction is partially done — `db:5432` and
 | 9010 | UDP | processor IQ input | internal only | `[implemented]` |
 | 9011 | UDP | recorder IQ input | internal only | `[implemented]` — `CONSUMERS` fan-out; published for host-side dev |
 | 9012 | TCP | recorder live audio WS (`/ws/audio`) | internal only | `[implemented]` (§10.4) — via the gateway `/ws/audio` relay |
+| 9013 | TCP | recorder TFR API (`/api/recordings/{id}/tfr`) | internal only | `[implemented]` (§19) — via the gateway TFR proxy |
 | 8081 | TCP | ws-hub (events) | internal only | `[implemented]` — via gateway `/ws` relay |
 | 9090 | TCP | capture control API | internal only | `[implemented]` — loopback bind in dev, unpublished in compose; gateway proxies tune/gain/status (§13.1) |
 | 5432 | TCP | db (PostGIS) | internal only | `[implemented]` — compose publish removed (`make db-migrate` / `exec psql` for host access) |
@@ -1892,6 +1893,7 @@ iq.max_duration_s     int     300          (session cap, §11.1; <0 uncapped)
 tfr.enabled           bool    false        (§19 TF analysis; 404 when off)
 tfr.max_span_s        int     30           (max requestable span, §19.3)
 tfr.max_nfft          int     16384        (per-request nfft cap, §19.2)
+tfr.listen_port       int     9013         (internal TFR API, §19.3)
 retention.max_age_days int    30
 retention.max_size_gb  int    50
 capture.close_silence_s int   10           (§10.2 session hysteresis)
@@ -1911,6 +1913,7 @@ stream.bitrate_bps     int    24000        (Opus CBR, mono, 20 ms frames)
 | `SIGNAL_PROCESSOR_PORT` | signal-processor | 9010 |
 | `RECORDER_PORT` | recorder | 9011 (UDP IQ in) |
 | `RECORDER_WS_PORT` | recorder | 9012 (`/ws/audio` WS, §10.4) |
+| `RECORDER_API_ADDR` | api-gateway | `recorder:9013` (TFR proxy target, §19.3) |
 | `API_GATEWAY_PORT` / `WS_HUB_PORT` | gateway / hub | 8080 / 8081 |
 | `TILE_SERVER_PORT` | tiles | 8082 |
 | `VITE_API_URL` / `VITE_WS_URL` / `VITE_TILE_URL` | frontend build | gateway `:8080` (target), tiles `:8082` |
@@ -1918,7 +1921,8 @@ stream.bitrate_bps     int    24000        (Opus CBR, mono, 20 ms frames)
 
 Legacy vars `CLASSIFIER_PORT` (9011) and
 `LOCATION_SERVICE_PORT` (9013) belong to the retired stubs and are
-removed from compose with the stubs (D2).
+removed from compose with the stubs (D2); 9013 is reused by the
+recorder TFR API (§19).
 
 ## 17. Non-Functional Requirements, Security & Quality
 
