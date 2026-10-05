@@ -2,9 +2,11 @@ package record
 
 import (
 	"bytes"
+	"encoding/binary"
 	"math"
 	"math/cmplx"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -107,7 +109,7 @@ func TestSessionRoundTrip(t *testing.T) {
 	sig := testSignal()
 	now := time.Now()
 
-	sess, err := newSession(audio.DefaultRegistry(), dir, sig, now)
+	sess, err := newSession(audio.DefaultRegistry(), dir, sig, now, false)
 	if err != nil {
 		t.Fatalf("newSession: %v", err)
 	}
@@ -123,21 +125,24 @@ func TestSessionRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("finalize: %v", err)
 	}
-
-	if rec.SignalID != sig.ID || rec.FileFormat != "wav" {
-		t.Errorf("recording row = %+v", rec)
+	if len(rec) != 1 || rec[0].FileFormat != "wav" {
+		t.Fatalf("rows = %+v, want exactly the wav row", rec)
 	}
-	if rec.SampleRate != 48000 {
-		t.Errorf("sample rate = %d, want 48000", rec.SampleRate)
+	row := rec[0]
+	if row.SignalID != sig.ID {
+		t.Errorf("recording row = %+v", row)
 	}
-	info, err := os.Stat(rec.FilePath)
+	if row.SampleRate != 48000 {
+		t.Errorf("sample rate = %d, want 48000", row.SampleRate)
+	}
+	info, err := os.Stat(row.FilePath)
 	if err != nil {
 		t.Fatalf("recording file missing: %v", err)
 	}
 	if info.Size() <= 44 {
 		t.Fatalf("file too small (%d bytes) for a fed session", info.Size())
 	}
-	raw, _ := os.ReadFile(rec.FilePath)
+	raw, _ := os.ReadFile(row.FilePath)
 	if !bytes.HasPrefix(raw, []byte("RIFF")) {
 		t.Error("finalized file is not a WAV")
 	}
@@ -253,4 +258,155 @@ func TestSelectPurge(t *testing.T) {
 	if got := SelectPurge(recs, now, 0, 0); len(got) != 0 {
 		t.Fatalf("no-limit purge = %+v, want empty", got)
 	}
+}
+
+// TestSessionRawIQ (§10.5): with the raw-IQ side file enabled, a fed
+// session finalizes into a wav row plus an iq row carrying the
+// capture sample rate, and the .iq file is the headerless int16-LE
+// interleave of the shifted baseband (offset 0 ⇒ the input samples).
+func TestSessionRawIQ(t *testing.T) {
+	dir := t.TempDir()
+	sig := testSignal()
+
+	sess, err := newSession(audio.DefaultRegistry(), dir, sig, time.Now(), true)
+	if err != nil {
+		t.Fatalf("newSession: %v", err)
+	}
+	frame := testFrame(sig.FreqHz, 512)
+	if _, err := sess.Feed(frame, 0); err != nil {
+		t.Fatalf("feed: %v", err)
+	}
+	rows, err := sess.finalize()
+	if err != nil {
+		t.Fatalf("finalize: %v", err)
+	}
+
+	var wav, iq *db.Recording
+	for i := range rows {
+		switch rows[i].FileFormat {
+		case "wav":
+			wav = &rows[i]
+		case "iq":
+			iq = &rows[i]
+		}
+	}
+	if wav == nil || iq == nil {
+		t.Fatalf("rows = %+v, want one wav and one iq row", rows)
+	}
+	if iq.SampleRate != int32(frame.SampleRate) {
+		t.Errorf("iq sample rate = %d, want capture rate %d", iq.SampleRate, frame.SampleRate)
+	}
+	if iq.CenterFreq != sig.FreqHz || iq.BandwidthHz != sig.BandwidthHz {
+		t.Errorf("iq row = %+v", iq)
+	}
+
+	raw, err := os.ReadFile(iq.FilePath)
+	if err != nil {
+		t.Fatalf("read iq: %v", err)
+	}
+	// 512 complex samples → 1024 int16 → 2048 bytes, headerless.
+	if len(raw) != len(frame.Samples)*2 {
+		t.Fatalf("iq size = %d bytes, want %d", len(raw), len(frame.Samples)*2)
+	}
+	if iq.SizeBytes != int64(len(raw)) {
+		t.Errorf("iq SizeBytes = %d, want %d", iq.SizeBytes, len(raw))
+	}
+	for i, want := range frame.Samples { // offset 0: the mixer is a no-op
+		if got := int16(binary.LittleEndian.Uint16(raw[i*2:])); got != want {
+			t.Fatalf("iq sample %d = %d, want %d", i, got, want)
+		}
+	}
+	if _, err := os.Stat(wav.FilePath); err != nil {
+		t.Fatalf("wav missing: %v", err)
+	}
+}
+
+// TestRecorderIQOffByDefault (§10.5): without IQEnabled the session
+// records the WAV only — no .iq file ever appears.
+func TestRecorderIQOffByDefault(t *testing.T) {
+	dir := t.TempDir()
+	rec := NewRecorder(Config{Dir: dir}, nil)
+	sig := testSignal()
+	start := time.Now()
+
+	rec.ObserveFrame(testFrame(146_520_000, 256), []db.Signal{sig})
+	if n := rec.CloseIdle(start.Add(15 * time.Second)); n != 1 {
+		t.Fatalf("finalized = %d, want 1", n)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("want exactly one file (err=%v, n=%d)", err, len(entries))
+	}
+	if filepath.Ext(entries[0].Name()) != ".wav" {
+		t.Fatalf("file = %s, want .wav only", entries[0].Name())
+	}
+}
+
+// TestRecorderRawIQEnabled (§10.5): IQEnabled yields both files per
+// finalized session.
+func TestRecorderRawIQEnabled(t *testing.T) {
+	dir := t.TempDir()
+	rec := NewRecorder(Config{Dir: dir, IQEnabled: true}, nil)
+	sig := testSignal()
+	start := time.Now()
+
+	rec.ObserveFrame(testFrame(146_520_000, 256), []db.Signal{sig})
+	if n := rec.CloseIdle(start.Add(15 * time.Second)); n != 1 {
+		t.Fatalf("finalized = %d, want 1", n)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 2 {
+		t.Fatalf("want wav+iq files (err=%v, n=%d)", err, len(entries))
+	}
+	exts := map[string]bool{}
+	for _, e := range entries {
+		exts[filepath.Ext(e.Name())] = true
+	}
+	if !exts[".wav"] || !exts[".iq"] {
+		t.Fatalf("extensions = %v, want .wav and .iq", exts)
+	}
+}
+
+// TestRecorderMaxDurationCap (§11.1): CloseIdle finalizes a session
+// once it runs past iq.max_duration_s even while audio keeps flowing,
+// and the still-tracked signal rolls over into a fresh session.
+func TestRecorderMaxDurationCap(t *testing.T) {
+	rec := NewRecorder(Config{
+		Dir:          t.TempDir(),
+		CloseSilence: time.Hour, // silence must not be the trigger
+		MaxDuration:  50 * time.Millisecond,
+	}, nil)
+	sig := testSignal()
+	tracked := []db.Signal{sig}
+	start := time.Now()
+
+	rec.ObserveFrame(testFrame(146_520_000, 256), tracked)
+	if n := rec.CloseIdle(start.Add(20 * time.Millisecond)); n != 0 {
+		t.Fatalf("capped %d session(s) before max duration", n)
+	}
+	if n := rec.CloseIdle(start.Add(100 * time.Millisecond)); n != 1 {
+		t.Fatalf("cap finalized %d session(s), want 1", n)
+	}
+
+	// Roll-over: the next in-band frame opens a fresh session.
+	rec.ObserveFrame(testFrame(146_520_000, 256), tracked)
+	if got := rec.OpenSessions(); got != 1 {
+		t.Fatalf("open sessions after roll-over = %d, want 1", got)
+	}
+	rec.Close()
+}
+
+// TestRecorderCapDisabled (§11.1): a negative MaxDuration disables
+// the cap entirely — only the silence hysteresis finalizes.
+func TestRecorderCapDisabled(t *testing.T) {
+	rec := NewRecorder(Config{
+		Dir:          t.TempDir(),
+		CloseSilence: 72 * time.Hour,
+		MaxDuration:  -time.Second,
+	}, nil)
+	rec.ObserveFrame(testFrame(146_520_000, 64), []db.Signal{testSignal()})
+	if n := rec.CloseIdle(time.Now().Add(24 * time.Hour)); n != 0 {
+		t.Fatalf("cap fired despite being disabled: %d", n)
+	}
+	rec.Close()
 }

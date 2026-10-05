@@ -1145,16 +1145,19 @@ Per recording session the recorder writes:
 - **WAV** (`[implemented]`, always): 16-bit PCM mono, 48 kHz —
   `EncodeWAV` (RIFF, `fmt` chunk PCM/1ch/16-bit, `data` chunk,
   all little-endian).
-- **Raw IQ** (`[planned]`, slice 7): `int16[2n]` interleaved I/Q,
-  headerless, at the capture sample rate. The config surface exists
-  (`iq.enabled` / `iq.format`, §16.5) but no writer is implemented
-  yet; `recordings.file_format` (§12.3) keeps the `iq` value
-  reserved.
+- **Raw IQ** (`[implemented]`, slice 7, when `iq.enabled`, §16.5):
+  `int16[2n]` interleaved I/Q, headerless, little-endian, at the
+  capture sample rate — the per-signal **frequency-shifted baseband**
+  (post-mixer, pre-demod), not the full tuned band. It lands as a
+  second file beside the WAV and gets its own `recordings` row with
+  `file_format='iq'` (§12.3: `iq` is no longer reserved-only). Empty
+  files are removed (§10.2); §11.3 retention sweeps `.iq` with
+  `.wav`.
 
 **FLAC is not supported and MUST NOT be claimed** (the README's
 former "raw IQ + decoded audio (WAV/FLAC)" claim was removed in the
 README realignment). File names are **flat under `recordings_dir`**:
-`<signalid8>-<yyyymmddThhmmss>.wav` — first 8 characters of the
+`<signalid8>-<yyyymmddThhmmss>.{wav,iq}` — first 8 characters of the
 signal UUID + UTC timestamp, filesystem-safe and sortable. There are
 no per-SDR or per-date subdirectories; §11.3 retention scans this
 one directory.
@@ -1192,12 +1195,15 @@ A recording starts when a **demodulable** signal appears
 (modulation ∈ {FM, AM, SSB} with a matching registry entry) and ends
 when its §10.2 session finalizes — the `capture.close_silence_s`
 silence hysteresis, typically because the signal left the active set
-(TTL, §11.2). A max-duration cap is **`[planned]`** (slice 7): the
-config key exists (`iq.max_duration_s`, default **300 s**, §16.5) but
-is not enforced yet. Each recording writes a `recordings` row plus
-the files of §10.5 (empty sessions write nothing). Multiple
-simultaneous signals record independently, capped by
-`capture.max_concurrent` (§10.2).
+(TTL, §11.2) — or when it runs past the **max-duration cap**
+(`[implemented]`, slice 7): `iq.max_duration_s` (default **300 s**,
+§16.5; negative disables the cap) is checked on the recorder's 5 s
+housekeeping poll, finalizes the session normally (row + §10.5
+files), and a still-active signal rolls over into a fresh session on
+its next in-band frame. Each recording writes a `recordings` row per
+file of §10.5 (empty sessions write nothing). Multiple simultaneous
+signals record independently, capped by `capture.max_concurrent`
+(§10.2).
 
 ### 11.2 Signal lifecycle (D6)
 
@@ -1680,8 +1686,8 @@ Stats log interval: 5 s. Buffer: 256 frames.
 audio.sample_rate     int     48000
 audio.format          string  wav          (wav only; FLAC unsupported, §10.5)
 audio.channels        int     1
-iq.enabled            bool    true         (raw int16 interleaved)
-iq.max_duration_s     int     300
+iq.enabled            bool    true         (raw int16 interleaved, §10.5)
+iq.max_duration_s     int     300          (session cap, §11.1; <0 uncapped)
 retention.max_age_days int    30
 retention.max_size_gb  int    50
 capture.close_silence_s int   10           (§10.2 session hysteresis)
@@ -1834,6 +1840,10 @@ stores and the API client; `svelte-check` for types.
   for mono 20 ms) on the recorder's WS — **delivered**: encoder
   contract test + end-to-end `TestWSAudioOpusFrameCounter` over the
   real libopus path (`-tags opus`, CI-guarded).
+- §10.5/§11.1 (slice 7): raw-IQ writer + max-duration cap —
+  **delivered**: `TestSessionRawIQ` (byte-exact int16-LE interleave,
+  capture-rate iq row), enabled/disabled file-shape tests, and
+  `TestRecorderMaxDurationCap` + `TestRecorderCapDisabled`.
 - D6 (§11.2): TTL test asserting `active=false` + row survives;
   purge test for the 30-day/50 GB caps.
 

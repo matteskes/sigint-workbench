@@ -20,6 +20,8 @@ type Config struct {
 	PollInterval  time.Duration // active-signal poll period
 	CloseSilence  time.Duration // idle time before a session finalizes
 	MaxConcurrent int           // simultaneous session cap
+	IQEnabled     bool          // raw-IQ side recording (§10.5, iq.enabled)
+	MaxDuration   time.Duration // recording cap (§11.1, iq.max_duration_s); <0 uncapped
 	Streamer      *Streamer     // live audio mux (§10.4); nil disables
 }
 
@@ -48,6 +50,9 @@ func NewRecorder(cfg Config, database *db.DB) *Recorder {
 	}
 	if cfg.Dir == "" {
 		cfg.Dir = "./recordings"
+	}
+	if cfg.MaxDuration == 0 {
+		cfg.MaxDuration = 300 * time.Second // §16.5 iq.max_duration_s default
 	}
 	return &Recorder{
 		cfg:      cfg,
@@ -86,7 +91,7 @@ func (r *Recorder) ObserveFrame(frame *sdr.IQFrame, tracked []db.Signal) {
 				continue // at capacity; strongest-first compaction is future work (§10.2)
 			}
 			var err error
-			sess, err = newSession(r.registry, r.cfg.Dir, sig, now)
+			sess, err = newSession(r.registry, r.cfg.Dir, sig, now, r.cfg.IQEnabled)
 			if err != nil {
 				continue // unsupported modulation etc. — skip quietly
 			}
@@ -105,15 +110,18 @@ func (r *Recorder) ObserveFrame(frame *sdr.IQFrame, tracked []db.Signal) {
 }
 
 // CloseIdle finalizes sessions idle for longer than the silence
-// hysteresis and persists their recording rows. Empty recordings are
-// discarded. Returns the number of recordings finalized.
+// hysteresis — or running longer than the §11.1 max-duration cap —
+// and persists their recording rows. Empty recordings are discarded.
+// Returns the number of recordings finalized.
 func (r *Recorder) CloseIdle(now time.Time) int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	var done []*Session
 	for id, sess := range r.sessions {
-		if now.Sub(sess.lastFeed) >= r.cfg.CloseSilence {
+		silence := now.Sub(sess.lastFeed) >= r.cfg.CloseSilence
+		capped := r.cfg.MaxDuration > 0 && now.Sub(sess.start) >= r.cfg.MaxDuration
+		if silence || capped {
 			done = append(done, sess)
 			delete(r.sessions, id)
 		}
@@ -124,10 +132,10 @@ func (r *Recorder) CloseIdle(now time.Time) int {
 	return len(done)
 }
 
-// PurgeFiles applies file retention (§11): deletes WAVs older than
-// MaxAgeDays, then — while the directory exceeds MaxSizeGB — the
-// oldest files. For every deleted file, remove(path) is invoked so
-// the caller can delete the matching DB row.
+// PurgeFiles applies file retention (§11): deletes WAV/IQ files
+// (§10.5) older than MaxAgeDays, then — while the directory exceeds
+// MaxSizeGB — the oldest files. For every deleted file, remove(path)
+// is invoked so the caller can delete the matching DB row.
 func (r *Recorder) PurgeFiles(now time.Time, remove func(path string)) {
 	entries, err := os.ReadDir(r.cfg.Dir)
 	if err != nil {
@@ -141,7 +149,8 @@ func (r *Recorder) PurgeFiles(now time.Time, remove func(path string)) {
 	var wavs []meta
 	var total int64
 	for _, e := range entries {
-		if e.IsDir() || filepath.Ext(e.Name()) != ".wav" {
+		ext := filepath.Ext(e.Name())
+		if e.IsDir() || (ext != ".wav" && ext != ".iq") {
 			continue
 		}
 		info, err := e.Info()
@@ -231,23 +240,25 @@ func (r *Recorder) endStreamLocked(id string) {
 	}
 }
 
-// finalizeLocked persists a finalized session's recording row.
+// finalizeLocked persists a finalized session's recording rows.
 func (r *Recorder) finalizeLocked(sess *Session) {
 	r.endStreamLocked(sess.Signal.ID) // the live stream ends with the session (§10.4.4)
-	rec, err := sess.finalize()
+	rows, err := sess.finalize()
 	if err != nil {
 		sess.abandon()
 		return
 	}
-	if rec.SizeBytes <= 0 {
-		sess.abandon() // a recording with zero data bytes carries no audio (§10.2)
+	if len(rows) == 0 {
+		sess.abandon() // no file carried data bytes (§10.2)
 		return
 	}
 	if r.db != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		if err := r.db.InsertRecording(ctx, &rec); err != nil {
-			// Keep the file; the row can be reconciled later.
+		for i := range rows {
+			if err := r.db.InsertRecording(ctx, &rows[i]); err != nil {
+				// Keep the file; the row can be reconciled later.
+			}
 		}
 	}
 }

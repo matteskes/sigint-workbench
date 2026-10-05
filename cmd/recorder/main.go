@@ -81,6 +81,8 @@ func main() {
 	var cfg config.RecorderConfig
 	if err := config.Load(*cfgPath, &cfg); err != nil {
 		log.Printf("%v; using defaults", err)
+		cfg.IQ.Enabled = true     // §16.5: raw IQ on by default
+		cfg.IQ.MaxDurationS = 300 // §16.5: 5 min session cap
 	}
 	port := config.ResolveInt(*listenPort, config.GetEnvInt("RECORDER_PORT", 0), cfg.ListenPort, 9011)
 	wsPort := config.ResolveInt(*wsPortFlag, config.GetEnvInt("RECORDER_WS_PORT", 0), cfg.Stream.ListenPort, 9012)
@@ -122,6 +124,8 @@ func main() {
 		MaxSizeGB:     cfg.Retention.MaxSizeGB,
 		CloseSilence:  time.Duration(cfg.Capture.CloseSilenceS) * time.Second,
 		MaxConcurrent: cfg.Capture.MaxConcurrent,
+		IQEnabled:     cfg.IQ.Enabled,                                   // §10.5 raw IQ
+		MaxDuration:   time.Duration(cfg.IQ.MaxDurationS) * time.Second, // §11.1 cap
 		Streamer:      streamer,
 	}, database)
 
@@ -150,8 +154,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("listen UDP :%d: %v", port, err)
 	}
-	log.Printf("listening on UDP :%d  dir=%s  retention=%dd/%.0fGB",
-		port, dirPath, cfg.Retention.MaxAgeDays, cfg.Retention.MaxSizeGB)
+	log.Printf("listening on UDP :%d  dir=%s  retention=%dd/%.0fGB  rawIQ=%t cap=%ds",
+		port, dirPath, cfg.Retention.MaxAgeDays, cfg.Retention.MaxSizeGB,
+		cfg.IQ.Enabled, cfg.IQ.MaxDurationS)
 
 	// Active-signal snapshot for ObserveFrame, refreshed on the poll
 	// interval (§10.2: record what the processor currently tracks).

@@ -8,11 +8,12 @@ audio:
   format: wav          # wav only — FLAC is not supported (docs/SPEC.md §10.5)
   channels: 1
 
-# IQ recording (optional, for later analysis)
+# IQ recording (§10.5): a second, headerless int16-LE file of the
+# shifted baseband per session, plus a file_format='iq' DB row.
 iq:
   enabled: true
-  format: raw          # raw (int16 interleaved)
-  max_duration_s: 300  # 5 min max per recording
+  format: raw          # raw (int16 interleaved, little-endian)
+  max_duration_s: 300  # session cap, §11.1; negative disables the cap
 
 # In-band audio capture (D1, §10.2): the recorder demodulates tracked
 # signals straight off the shared IQ stream — no extra tuners.
