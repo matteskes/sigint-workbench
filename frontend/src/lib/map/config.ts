@@ -17,7 +17,7 @@ export const mapStyle: StyleSpecification = {
 	sources: {
 		osm: {
 			type: 'vector',
-			url: TILE_URL
+			tiles: [TILE_URL]
 		}
 	},
 	layers: [

@@ -16,7 +16,7 @@ Status:
 | `make dev` bring-up, healthy single-owner bench | `[done]` (see §5 — took 3 launches) |
 | Route/asset/API/CORS/WS/tile sweep | `[done]` (§4) |
 | Bugs filed (B1–B6, §2; N1, §3) | B1–B6 `[fixed]`; N1 `[documented]` |
-| §2 re-verification in a real browser (Playwright MCP, WebKit) | `[done]` — found B6, fixed |
+| §2 re-verification in a real browser (Playwright MCP, WebKit) | `[done]` — found B6, B7, B8; fixed |
 
 ## 1. Bench shape under test
 
@@ -153,6 +153,24 @@ Fixed 2026-10-06: `glyphs: FONTS_URL` added to the style and
 `text-font: ['Noto Sans Regular']` on the labels layer; the validation
 error is gone in the live browser. Source loading then proceeded for
 the first time and surfaced B7, which this failure had been masking.
+
+### B7 — basemap vector source passed a tile template as TileJSON `url`
+
+`config.ts` built the `osm` source as `{ type: 'vector', url: TILE_URL }`
+where `VITE_TILE_URL` is a `{z}/{x}/{y}` template. MapLibre's `url`
+expects a TileJSON, so the map fetched the literal templated path
+(`data/v3/%7Bz%7D/%7Bx%7D/%7By%7D.pbf` → 404) and the vector basemap
+never loaded — only the background color painted. Fully masked by B6
+(the style validation failure aborted the pipeline before the source
+fetch); it surfaced the moment B6 was fixed.
+
+Fix: move the template to `tiles: [TILE_URL]` — MapLibre's template
+form. `VITE_TILE_URL` semantics unchanged.
+
+Fixed 2026-10-06: verified in-browser — tile requests now hit real
+`…/{z}/{x}/{y}.pbf` paths; Arizona-covering tiles return 200 with
+geometry, off-coverage tiles 204 as designed. Loading those tiles
+surfaced B8.
 
 ## 3. Ops note
 
