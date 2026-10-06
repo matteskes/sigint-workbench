@@ -15,7 +15,7 @@ Status:
 | Fresh image build (incl. frontend, post-2026-10-06 edits) | `[done]` — all 6 images |
 | `make dev` bring-up, healthy single-owner bench | `[done]` (see §5 — took 3 launches) |
 | Route/asset/API/CORS/WS/tile sweep | `[done]` (§4) |
-| Bugs filed (B1–B5, §2; N1, §3) | `[open]` — none fixed yet |
+| Bugs filed (B1–B5, §2; N1, §3) | B1 `[fixed]`; B2–B5, N1 `[open]` |
 
 ## 1. Bench shape under test
 
@@ -38,6 +38,9 @@ fires `GET /favicon.png → 404`; the nginx production build copies
 and each page load logs console noise.
 
 Fix: add `frontend/static/favicon.png`, or drop the `<link>`.
+
+Fixed 2026-10-06: added a generated 64x64 RGBA icon (slate rounded
+square, cyan spectrum bars); the `<link>` stays.
 
 ### B2 — §20 setup check reports capture "ok" while its HTTP API is dead
 
