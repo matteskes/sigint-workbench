@@ -145,3 +145,97 @@ func TestEvent_JSONShape(t *testing.T) {
 		t.Fatalf("Payload = %s", ev.Payload)
 	}
 }
+
+// TestHub_DeliverShedsOldest pins the §14.3 shed-oldest contract of
+// the per-client queue: overflow evicts the OLDEST frame (newest
+// state wins for last-wins consumers like signal.update), and deliver
+// never blocks even when nobody drains.
+func TestHub_DeliverShedsOldest(t *testing.T) {
+	c := &client{send: make(chan []byte, 2)}
+	deliver(c, []byte("a"))
+	deliver(c, []byte("b"))
+	// Queue full: the next push sheds "a", keeps the newest two.
+	deliver(c, []byte("c"))
+	if got := string(<-c.send); got != "b" {
+		t.Fatalf("first frame after shed = %q, want %q", got, "b")
+	}
+	if got := string(<-c.send); got != "c" {
+		t.Fatalf("second frame after shed = %q, want %q", got, "c")
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 1000; i++ {
+			deliver(c, []byte("x"))
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("deliver blocked on a full queue; expected shed-oldest")
+	}
+}
+
+// TestHub_SlowClientDoesNotStallHealthyClients is the A1 regression
+// test: a client that stops reading must not delay delivery to other
+// clients (the old hub wrote synchronously inside the broadcast loop).
+func TestHub_SlowClientDoesNotStallHealthyClients(t *testing.T) {
+	hub, srv := newTestHub(t)
+	healthy := dialWS(t, srv)
+	waitClientCount(t, hub, 1)
+
+	// A second client that never reads: its server-side queue (and
+	// kernel buffers) fill while the healthy client must keep flowing.
+	_ = dialWS(t, srv)
+	waitClientCount(t, hub, 2)
+
+	for i := 0; i < sendQueueSize*4; i++ {
+		hub.Broadcast(Event{Type: "signal.update", Payload: json.RawMessage(`{"id":"x"}`)})
+	}
+	healthy.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, _, err := healthy.ReadMessage(); err != nil {
+		t.Fatalf("healthy client starved by slow peer: %v", err)
+	}
+}
+
+// TestHub_SilentClientIsEvicted is the A12 regression test: a client
+// that never answers pings is dropped once the read deadline lapses
+// (zoomed-out constants keep the test fast; production uses 25s/60s).
+func TestHub_SilentClientIsEvicted(t *testing.T) {
+	hub := NewHub()
+	hub.pingPeriod = 100 * time.Millisecond
+	hub.pongWait = 250 * time.Millisecond
+	go hub.Run()
+	upgrader := websocket.Upgrader{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		hub.Register(conn)
+		go func() {
+			defer hub.Unregister(conn)
+			for {
+				if _, _, err := conn.ReadMessage(); err != nil {
+					return
+				}
+			}
+		}()
+	}))
+	t.Cleanup(srv.Close)
+
+	dialWS(t, srv)
+	waitClientCount(t, hub, 1)
+
+	// The client never reads (so never pongs). Its server-side read
+	// deadline lapses, the handler's read loop exits, and the hub
+	// drops the zombie instead of accumulating dead peers.
+	deadline := time.Now().Add(3 * time.Second)
+	for hub.ClientCount() == 1 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := hub.ClientCount(); got != 0 {
+		t.Fatalf("silent client still connected after pongWait; count = %d", got)
+	}
+}

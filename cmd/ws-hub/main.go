@@ -43,8 +43,10 @@ func handleWS(hub *ws.Hub) http.HandlerFunc {
 		if err != nil {
 			return
 		}
-		hub.Register(conn)
-		// Read loop (discard client messages for now)
+		hub.Register(conn) // installs the keepalive contract (A12)
+		// Read loop (client→server messages are unused). Its exit —
+		// disconnect or pong silence past the read deadline — is what
+		// unregisters the client.
 		go func() {
 			defer hub.Unregister(conn)
 			for {
