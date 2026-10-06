@@ -56,7 +56,7 @@ export const mapStyle: StyleSpecification = {
 			source: 'osm',
 			'source-layer': 'place',
 			layout: {
-				'text-field': ['get', 'name'],
+				'text-field': ['coalesce', ['get', 'name:latin'], ['get', 'name']],
 				'text-font': ['Noto Sans Regular'],
 				'text-size': 12
 			},

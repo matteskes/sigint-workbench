@@ -172,6 +172,22 @@ Fixed 2026-10-06: verified in-browser — tile requests now hit real
 geometry, off-coverage tiles 204 as designed. Loading those tiles
 surfaced B8.
 
+### B8 — labels read `name`, but this tileset stores `name:latin`
+
+Even with B6+B7 fixed, the `labels` layer rendered nothing: its
+`text-field` was `['get', 'name']`, while this tileset's `place`
+features carry `name:latin` — confirmed by decoding
+`…/7/24/49.pbf` (keys `rank`, `class`, `name:latin`; a feature with
+`class=city`, name "Page"). A missing property makes `text-field`
+evaluate to null: zero symbols, no glyph fetch, and no error at all.
+
+Fix: `['coalesce', ['get', 'name:latin'], ['get', 'name']]`.
+
+Fixed 2026-10-06: verified in-browser — MapLibre now fetches
+`/fonts/Noto Sans Regular/0-255.pbf` (200, its first-ever glyph
+request) and the vector basemap visibly renders (place/water
+geometry on screen).
+
 ## 3. Ops note
 
 ### N1 — backgrounded `make dev` freezes under job control
