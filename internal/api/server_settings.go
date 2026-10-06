@@ -56,7 +56,9 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	go probe("db", func() componentStatus { return s.probeDB(ctx) })
 	go probe("ws-hub", func() componentStatus { return probeTCP(ctx, s.wsHubAddr) })
 	go probe("recorder", func() componentStatus { return probeTCP(ctx, s.recorderAPI) })
-	go probe("capture", func() componentStatus { return probeTCP(ctx, s.captureCtrl) })
+	go probe("capture", func() componentStatus {
+		return probeHTTP(ctx, "http://"+s.captureCtrl+"/api/v1/status")
+	})
 	wg.Wait()
 
 	allOK := true
@@ -85,6 +87,8 @@ func (s *Server) probeDB(ctx context.Context) componentStatus {
 }
 
 // probeTCP checks plain TCP reachability of an internal service.
+// Dial-only is honest for ws-hub and recorder (no request they must
+// answer), but not for capture — see probeHTTP.
 func probeTCP(ctx context.Context, addr string) componentStatus {
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "tcp", addr)
@@ -92,6 +96,32 @@ func probeTCP(ctx context.Context, addr string) componentStatus {
 		return componentStatus{Detail: "unreachable"}
 	}
 	_ = conn.Close()
+	return componentStatus{OK: true}
+}
+
+// probeHTTPClient has no overall Timeout: the §20 probe context
+// (2 s, handleSetupStatus) bounds every request.
+var probeHTTPClient = &http.Client{}
+
+// probeHTTP fetches a service URL and requires HTTP 200 within the
+// probe budget. Used for the capture control API (B2): a wedged or
+// SIGSTOP'd process's kernel listen backlog still accepts bare TCP
+// dials, so its §20 check must exercise the GET /api/v1/status the
+// UI actually needs — the same request the §7.4 SDR-rail proxy makes.
+func probeHTTP(ctx context.Context, url string) componentStatus {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return componentStatus{Detail: "bad probe url"}
+	}
+	resp, err := probeHTTPClient.Do(req)
+	if err != nil {
+		return componentStatus{Detail: "unreachable"}
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
+	if resp.StatusCode != http.StatusOK {
+		return componentStatus{Detail: "http " + resp.Status}
+	}
 	return componentStatus{OK: true}
 }
 

@@ -15,7 +15,7 @@ Status:
 | Fresh image build (incl. frontend, post-2026-10-06 edits) | `[done]` — all 6 images |
 | `make dev` bring-up, healthy single-owner bench | `[done]` (see §5 — took 3 launches) |
 | Route/asset/API/CORS/WS/tile sweep | `[done]` (§4) |
-| Bugs filed (B1–B5, §2; N1, §3) | B1 `[fixed]`; B2–B5, N1 `[open]` |
+| Bugs filed (B1–B5, §2; N1, §3) | B1–B2 `[fixed]`; B3–B5, N1 `[open]` |
 
 ## 1. Bench shape under test
 
@@ -54,6 +54,10 @@ unreachable" in the gateway log).
 
 Fix: make the §20 probe issue `GET /api/v1/status` with a short timeout
 (~2 s) and require a 200, matching what the UI actually needs.
+
+Fixed 2026-10-06: the capture probe now runs `probeHTTP` (GET
+`/api/v1/status`, 200 required) inside the existing 2 s budget;
+ws-hub/recorder stay dial-only.
 
 ### B3 — Arizona MBTiles TileJSON metadata is corrupt
 

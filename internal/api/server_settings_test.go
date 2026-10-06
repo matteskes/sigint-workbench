@@ -226,6 +226,71 @@ func TestSetupStatusEndpoint(t *testing.T) {
 	}
 }
 
+// B2: the capture probe must require HTTP 200 from GET /api/v1/status,
+// not just a TCP dial — a wedged capture's listen backlog accepts
+// dials while serving nothing (docs/UI-BUGCHECK.md B2).
+func TestSetupStatusCaptureProbeRequiresHTTP200(t *testing.T) {
+	var seenPath string
+	okUp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer okUp.Close()
+	badUp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer badUp.Close()
+
+	// captureCtrl is a host:port (probeTCP/probeHTTP dial address);
+	// httptest URLs carry the scheme.
+	addr := func(ts *httptest.Server) string {
+		return strings.TrimPrefix(ts.URL, "http://")
+	}
+	newBench := func(captureAddr string) map[string]any {
+		t.Helper()
+		log := zerolog.Nop()
+		srv := NewServer(nil, log)
+		srv.captureCtrl = captureAddr
+		ts := httptest.NewServer(srv.Handler())
+		t.Cleanup(ts.Close)
+		_, body := getJSON(t, ts.URL+"/api/setup/status")
+		components, ok := body["components"].(map[string]any)
+		if !ok {
+			t.Fatalf("components = %#v", body["components"])
+		}
+		return components
+	}
+
+	components := newBench(addr(okUp))
+	capture, ok := components["capture"].(map[string]any)
+	if !ok {
+		t.Fatalf("capture component = %#v", components["capture"])
+	}
+	if ok, _ := capture["ok"].(bool); !ok {
+		t.Fatalf("capture with a 200ing /api/v1/status must be ok, got %#v", capture)
+	}
+	if seenPath != "/api/v1/status" {
+		t.Fatalf("probe hit %q, want /api/v1/status", seenPath)
+	}
+
+	components = newBench(addr(badUp))
+	capture, ok = components["capture"].(map[string]any)
+	if !ok {
+		t.Fatalf("capture component = %#v", components["capture"])
+	}
+	if ok, _ := capture["ok"].(bool); ok {
+		t.Fatal("capture answering 500 must not report ok")
+	}
+
+	// A dead address (the wedged-process stand-in for a hard-down
+	// capture) still reports not-ok, not a hang.
+	components = newBench("127.0.0.1:1")
+	capture, _ = components["capture"].(map[string]any)
+	if ok, _ := capture["ok"].(bool); ok {
+		t.Fatal("unreachable capture must not report ok")
+	}
+}
+
 func TestSetupStateWithoutDB(t *testing.T) {
 	ts := newSettingsTestServer(t, nil)
 	resp, err := http.Get(ts.URL + "/api/setup/state")
