@@ -15,7 +15,7 @@ Status:
 | Fresh image build (incl. frontend, post-2026-10-06 edits) | `[done]` — all 6 images |
 | `make dev` bring-up, healthy single-owner bench | `[done]` (see §5 — took 3 launches) |
 | Route/asset/API/CORS/WS/tile sweep | `[done]` (§4) |
-| Bugs filed (B1–B5, §2; N1, §3) | B1–B2 `[fixed]`; B3–B5, N1 `[open]` |
+| Bugs filed (B1–B5, §2; N1, §3) | B1–B3 `[fixed]`; B4–B5, N1 `[open]` |
 
 ## 1. Bench shape under test
 
@@ -72,6 +72,11 @@ fit-to-data/fit-to-receivers feature) lands in the ocean.
 Fix: rebuild `tiles/data/north-america_us_arizona.mbtiles` so the
 `metadata` table's bounds/center are correct, or patch the metadata
 table in place.
+
+Fixed 2026-10-06: metadata patched in place (east -108.994756, center
+-111.913628,33.532435,7) and a post-render Step-5 sanity check added
+to `tiles/setup-tiles.sh` (rejects east == 0 and a center outside the
+bounds).
 
 ### B4 — airband noise classified as confident wideband-FM "aviation"
 

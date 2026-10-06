@@ -134,6 +134,51 @@ else
         --process "/work/tilemaker/process-openmaptiles.lua"
 fi
 
+# ─── Step 5: Metadata sanity check ───
+# tilemaker has a known metadata bug: for regions west of the prime
+# meridian it can write the east bound as 0.000000 (and derive a
+# mid-Atlantic center from it) — docs/UI-BUGCHECK.md B3, observed on
+# north-america_us_arizona. Anything bounds-driven (tileserver-gl's
+# preview page, a future fit-to-data camera) would land in the ocean,
+# so validate and fail loudly rather than ship a corrupt tileset.
+if command -v sqlite3 &>/dev/null; then
+    BOUNDS="$(sqlite3 "$OUTPUT" "SELECT value FROM metadata WHERE name='bounds';" 2>/dev/null || true)"
+    CENTER="$(sqlite3 "$OUTPUT" "SELECT value FROM metadata WHERE name='center';" 2>/dev/null || true)"
+    if [ -z "$BOUNDS" ]; then
+        echo "WARNING: could not read metadata bounds from ${OUTPUT}"
+        echo "(sqlite3 read failed) — skipping the sanity check."
+    elif ! echo "$BOUNDS" | awk -F, -v center="$CENTER" '
+        NF != 4 { print "bounds \"" $0 "\" is not west,south,east,north"; exit 1 }
+        $3 == 0 { print "east bound is exactly 0 — tilemaker B3 bug " \
+                  "(regions west of the prime meridian); patch the " \
+                  "metadata table"; exit 1 }
+        $3 <= $1 { print "east (" $3 ") <= west (" $1 ")"; exit 1 }
+        $1 < -180 || $1 > 180 || $3 < -180 || $3 > 180 \
+                { print "longitude out of range: " $0; exit 1 }
+        $2 <  -90 || $2 >  90 || $4 <  -90 || $4 >   90 || $4 <= $2 \
+                { print "latitude out of range: " $0; exit 1 }
+        {
+            n = split(center, c, ",")
+            if (n != 3) {
+                print "center \"" center "\" is not lon,lat,zoom"; exit 1
+            }
+            if (c[1] < $1 || c[1] > $3 || c[2] < $2 || c[2] > $4) {
+                print "center (" c[1] "," c[2] ") lies outside bounds " $0
+                exit 1
+            }
+        }
+        ' ; then
+        echo "ERROR: rendered tile metadata looks corrupt (bounds=${BOUNDS} center=${CENTER})"
+        echo "  Fix in place, e.g.:"
+        echo "    sqlite3 $OUTPUT \\"
+        echo "      \"UPDATE metadata SET value='<w>,<s>,<e>,<n>' WHERE name='bounds';\""
+        echo "      \"UPDATE metadata SET value='<lon>,<lat>,<z>' WHERE name='center';\""
+        exit 1
+    fi
+else
+    echo "WARNING: sqlite3 not found — skipping the metadata bounds check."
+fi
+
 echo ""
 echo "=== Done! ==="
 echo "MBTiles file: ${OUTPUT}"
