@@ -133,11 +133,16 @@ make setup
 #    sharing one iq-ingest port (SPEC §16.4).
 
 # 3. Set Up Map Tiles
-./tiles/setup-tiles.sh california 10 16
-#    Full-region render (needs `brew install tilemaker`; downloads a
-#    Geofabrik PBF). Skipping this leaves tiles/data empty and the
-#    tiles container crash-loops — its /data mount is read-only, so
-#    it cannot fetch its own sample data. Minimal fallback instead:
+./tiles/setup-tiles.sh europe/monaco
+#    Downloads the Geofabrik PBF and renders MBTiles. Regions are
+#    Geofabrik extract paths (europe/monaco,
+#    north-america/us/california — bare state names 404). There is NO
+#    `brew install tilemaker` (no core formula; the old tap was
+#    removed): the script uses tilemaker from PATH, else the project
+#    Docker image, automatically. Skipping this leaves tiles/data
+#    empty and the tiles container crash-loops — its /data mount is
+#    read-only, so it cannot fetch its own sample data. Minimal
+#    fallback instead:
 #    curl -fsSL -o tiles/data/zurich_switzerland.mbtiles \
 #      https://github.com/maptiler/tileserver-gl/releases/download/v1.3.0/zurich_switzerland.mbtiles
 #    Custom regions serve under their file stem, so set

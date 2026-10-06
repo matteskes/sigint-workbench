@@ -21,6 +21,10 @@ recordings/*
 tiles/data/*
 !tiles/data/.gitkeep
 
+# Geofabrik PBFs (downloaded by tiles/setup-tiles.sh)
+tiles/pbfs/*
+!tiles/pbfs/.gitkeep
+
 # Environment
 .env
 .env.local
