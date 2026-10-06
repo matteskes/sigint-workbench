@@ -3,11 +3,17 @@ import type { StyleSpecification } from 'maplibre-gl';
 const TILE_URL =
 	import.meta.env.VITE_TILE_URL ?? 'http://localhost:8082/data/v3/{z}/{x}/{y}.pbf';
 
-export { TILE_URL };
+// MapLibre requires a `glyphs` property on the style for any text rendering
+// (symbol layers); tileserver-gl serves its bundled "Noto Sans Regular".
+const FONTS_URL =
+	import.meta.env.VITE_FONTS_URL ?? 'http://localhost:8082/fonts/{fontstack}/{range}.pbf';
+
+export { TILE_URL, FONTS_URL };
 
 // Dark basemap style for the MapLibre map
 export const mapStyle: StyleSpecification = {
 	version: 8,
+	glyphs: FONTS_URL,
 	sources: {
 		osm: {
 			type: 'vector',
@@ -51,6 +57,7 @@ export const mapStyle: StyleSpecification = {
 			'source-layer': 'place',
 			layout: {
 				'text-field': ['get', 'name'],
+				'text-font': ['Noto Sans Regular'],
 				'text-size': 12
 			},
 			paint: {

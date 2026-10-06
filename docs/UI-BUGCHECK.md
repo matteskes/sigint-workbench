@@ -15,7 +15,8 @@ Status:
 | Fresh image build (incl. frontend, post-2026-10-06 edits) | `[done]` — all 6 images |
 | `make dev` bring-up, healthy single-owner bench | `[done]` (see §5 — took 3 launches) |
 | Route/asset/API/CORS/WS/tile sweep | `[done]` (§4) |
-| Bugs filed (B1–B5, §2; N1, §3) | B1–B5 `[fixed]`; N1 `[documented]` |
+| Bugs filed (B1–B6, §2; N1, §3) | B1–B6 `[fixed]`; N1 `[documented]` |
+| §2 re-verification in a real browser (Playwright MCP, WebKit) | `[done]` — found B6, fixed |
 
 ## 1. Bench shape under test
 
@@ -132,6 +133,26 @@ PIDs) run for all three ports before anything spawns, and
 success only when the child's own PID holds its port) after each
 spawn — the any-listener readiness loop is gone. Smoke-tested all
 five paths live (free/held/escalation/never-frees/early-exit).
+
+### B6 — map style missing `glyphs`: label layer can't render (console error on every map load)
+
+Found during the browser-based §2 re-verification (Playwright MCP,
+WebKit) — the HTTP-probing sweep could not see console errors.
+`frontend/src/lib/map/config.ts` declares a `labels` symbol layer
+(`layers[4]`, `text-field`), but the style has no `glyphs` property,
+which MapLibre requires for any text rendering. Every map load logs
+`layers[4].layout.text-field: use of "text-field" requires a style
+"glyphs" property` and OSM place names never render.
+
+Fix: set `glyphs` on the style and pin the layer's `text-font` to a
+stack the tiles server actually serves — probed live: `Noto Sans
+Regular` → 200 `application/x-protobuf`; Open Sans / Arial Unicode
+variants → 400. `VITE_FONTS_URL` overrides, mirroring `VITE_TILE_URL`.
+
+Fixed 2026-10-06: `glyphs: FONTS_URL` added to the style and
+`text-font: ['Noto Sans Regular']` on the labels layer; the validation
+error is gone in the live browser. Source loading then proceeded for
+the first time and surfaced B7, which this failure had been masking.
 
 ## 3. Ops note
 
