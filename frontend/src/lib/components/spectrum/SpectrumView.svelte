@@ -282,25 +282,53 @@
 			ctx.stroke();
 		}
 
-		// Active-signal ticks (white) — derived once per redraw.
+		// Active-signal ticks (white) — derived once per redraw. Ticks
+		// render for the leftmost 24 visible signals; labels pack
+		// greedily into two staggered lanes so clustered carriers stay
+		// legible, and anything that fits nowhere is counted into a
+		// "+N" marker (§7: no overlapping text).
 		ctx.strokeStyle = '#e2e8f0';
 		ctx.fillStyle = '#cbd5e1';
 		ctx.font = '8px ui-monospace, monospace';
 		ctx.textAlign = 'center';
-		let drawn = 0;
-		for (const s of $signals) {
-			if (s.freqHz + s.bandwidthHz / 2 < lo || s.freqHz - s.bandwidthHz / 2 > lo + span) continue;
-			if (drawn >= 24) break; // label budget on narrow canvases
-			const x = Math.round(xFor(s.freqHz)) + 0.5;
-			if (x < 0 || x > w) continue;
+		const LANE_Y = [10, 19];
+		// Lane 0 shares the top strip with the grid-label row (x ≈ 2–16,
+		// same baseline), so it only accepts labels clear of that zone;
+		// lane 1 sits below it and is unconstrained.
+		const laneRight = [17, -Infinity];
+		const visible = $signals
+			.filter(
+				(s) => s.freqHz + s.bandwidthHz / 2 >= lo && s.freqHz - s.bandwidthHz / 2 <= lo + span
+			)
+			.map((s) => ({ s, x: Math.round(xFor(s.freqHz)) + 0.5 }))
+			.filter(({ x }) => x >= 0 && x <= w)
+			.sort((a, b) => a.x - b.x)
+			.slice(0, 24);
+		let skipped = 0;
+		for (const { s, x } of visible) {
 			ctx.beginPath();
 			ctx.moveTo(x, 0);
 			ctx.lineTo(x, 6);
 			ctx.stroke();
-			if (w / (f.sampleRate / 1e6) > 30 || drawn < 8) {
-				ctx.fillText(`${(s.freqHz / 1e6).toFixed(2)}`, x, 14);
+			const label = `${(s.freqHz / 1e6).toFixed(2)}`;
+			const half = ctx.measureText(label).width / 2;
+			const lane = laneRight.findIndex((right) => x - half >= right + 1);
+			if (lane === -1 || x - half < 0 || x + half > w) {
+				skipped++;
+				continue;
 			}
-			drawn++;
+			ctx.fillText(label, x, LANE_Y[lane]);
+			laneRight[lane] = x + half;
+		}
+		if (skipped > 0) {
+			const badge = `+${skipped}`;
+			const half = ctx.measureText(badge).width / 2;
+			const bx = w - 1 - half;
+			const lane = laneRight.findIndex((right) => bx - half >= right + 1);
+			if (lane !== -1) {
+				ctx.fillStyle = '#64748b';
+				ctx.fillText(badge, bx, LANE_Y[lane]);
+			}
 		}
 	}
 

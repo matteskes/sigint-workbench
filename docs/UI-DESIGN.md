@@ -358,7 +358,9 @@ shape it.
   solid red.
 - **Signal overlay (new, passive)** — active signals from `$signals`
   whose `freqHz ± bandwidthHz/2` intersects the frame span render as
-  small ticks + freq labels on the spectrum line. Derived once per
+  small ticks + freq labels on the spectrum line. Labels pack into
+  staggered lanes to avoid collisions; ones that fit nowhere are
+  counted into a `+N` marker instead of overlapping. Derived once per
   coalesced flush (no per-event work, §14.3).
 - **Receiver controls (left rail)** — per device: freq/gain readout,
   frequency input (`retuneSdr`), **gain input (new)** — the endpoint has
