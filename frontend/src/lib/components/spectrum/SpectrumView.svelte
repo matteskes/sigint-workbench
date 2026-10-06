@@ -374,13 +374,19 @@
 
 		<!-- role="img" + aria-label is the intended ARIA pattern for these
 		canvases (UI-DESIGN.md); Svelte's a11y heuristic counts <canvas> as
-		interactive, so the non-interactive role gets flagged. -->
+		interactive, so the non-interactive role gets flagged. Display
+		heights are pinned via CSS: the bitmaps keep their native
+		resolution (bins × rows — the §19.4 drag→bin math maps X through
+		rect.width only, so it is unaffected), but canvas is a replaced
+		element and w-full alone scales height by the same factor as the
+		width (~3.7× on this column), which rendered the waterfall
+		~1100 px tall. -->
 		<!-- svelte-ignore a11y_no_interactive_element_to_noninteractive_role -->
 		<canvas
 			bind:this={lineEl}
 			width={bins}
 			height={96}
-			class="w-full rounded bg-slate-950"
+			class="h-32 w-full rounded bg-slate-950"
 			role="img"
 			aria-label="Spectrum line, {spanLabel}, dB relative"
 		></canvas>
@@ -390,7 +396,7 @@
 				bind:this={waterfallEl}
 				width={bins}
 				height={WATERFALL_ROWS}
-				class="mt-1 block w-full rounded bg-slate-950 cursor-crosshair"
+				class="mt-1 block h-64 w-full rounded bg-slate-950 cursor-crosshair"
 				role="img"
 				aria-label="Waterfall, {spanLabel}, drag to pick an analysis span"
 				on:pointerdown={dragDown}
@@ -408,7 +414,7 @@
 				></div>
 			{/if}
 		</div>
-		<canvas bind:this={tickEl} width={bins} height={14} class="w-full"></canvas>
+		<canvas bind:this={tickEl} width={bins} height={14} class="h-3.5 w-full"></canvas>
 
 		<div class="mt-1 text-[10px] text-slate-500">
 			{spanLabel} · dB (rel.)
