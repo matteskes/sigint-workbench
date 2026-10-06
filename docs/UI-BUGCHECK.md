@@ -15,7 +15,7 @@ Status:
 | Fresh image build (incl. frontend, post-2026-10-06 edits) | `[done]` — all 6 images |
 | `make dev` bring-up, healthy single-owner bench | `[done]` (see §5 — took 3 launches) |
 | Route/asset/API/CORS/WS/tile sweep | `[done]` (§4) |
-| Bugs filed (B1–B5, §2; N1, §3) | B1–B4 `[fixed]`; B5, N1 `[open]` |
+| Bugs filed (B1–B5, §2; N1, §3) | B1–B5 `[fixed]`; N1 `[documented]` |
 
 ## 1. Bench shape under test
 
@@ -125,6 +125,14 @@ spawning; after spawn, verify the listener is the child just launched
 (`$!`), not merely that something holds the port. Optionally treat a
 child that exits within a few seconds as fatal.
 
+Fixed 2026-10-06: `scripts/dev-macos.sh` gained `wait_port_free`
+(20 s TERM grace → `pkill -9` → 10 s KILL grace → fatal with holder
+PIDs) run for all three ports before anything spawns, and
+`verify_child` (fail fast on early child exit with the log tail;
+success only when the child's own PID holds its port) after each
+spawn — the any-listener readiness loop is gone. Smoke-tested all
+five paths live (free/held/escalation/never-frees/early-exit).
+
 ## 3. Ops note
 
 ### N1 — backgrounded `make dev` freezes under job control
@@ -135,6 +143,10 @@ dev` is backgrounded from a terminal, Vite gets SIGTTIN and stops
 this run: `nohup make dev < /dev/null > /tmp/sigint-dev.log 2>&1 &`.
 Worth one line in the README/Makefile comments for anyone scripting the
 bench.
+
+Documented 2026-10-06: the `nohup make dev < /dev/null > /tmp/
+sigint-dev.log 2>&1 &` recipe is in the `dev:` target comment
+(Makefile) and the README's macOS-development section.
 
 ## 4. Verified-good checklist (all live-data, 2026-10-06)
 

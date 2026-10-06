@@ -160,6 +160,13 @@ make dev
 # All three native processes are supervised: logs go to
 # /tmp/sigint-workbench-{sdr-capture,iq-ingest,signal-processor}.log,
 # and Ctrl+C at the Vite prompt stops them together with the frontend.
+# Backgrounding instead? (N1) Vite reads stdin, so a plain
+# `make dev &` gets SIGTTIN-stopped — detach stdin:
+#    nohup make dev < /dev/null > /tmp/sigint-dev.log 2>&1 &
+#    tail -f /tmp/sigint-dev.log
+#    # stop the bench:
+#    pkill -f 'bin/sdr-capture'; pkill -f 'bin/iq-ingest'
+#    pkill -f 'bin/signal-processor'
 
 # 4b. Linux Production
 make deploy

@@ -36,6 +36,9 @@ fi
 export CAPTURE_CTRL_ADDR="${CAPTURE_CTRL_ADDR:-host.docker.internal:9090}"
 
 UDP_PORT="${IQ_INGEST_UDP_PORT:-9000}"
+# Native capture control port (§7.4/§20) — derived from the exported
+# CAPTURE_CTRL_ADDR above; used by the B5 port-free/health checks.
+CAPTURE_CTRL_PORT="${CAPTURE_CTRL_ADDR##*:}"
 # A21: timestamped per-run log files — no unbounded appends to one
 # /tmp log across bench runs. Explicit overrides are honored as-is.
 RUN_STAMP="$(date +%Y%m%d-%H%M%S)"
@@ -58,10 +61,75 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# B5 (docs/UI-BUGCHECK.md): a previous bench can outlive pkill —
+# SIGKILL'd wrappers skip the cleanup trap, SIGTTIN-stopped children
+# still hold their listeners and USB claims. These two checks turn
+# "spawn and hope" into verify-or-fail.
+
+# wait_port_free PORT NAME — poll until nothing holds PORT (either
+# end of the socket), escalating to pkill -9 once, then fail with
+# the holder PIDs instead of spawning into a zombie bench.
+wait_port_free() {
+    local port="$1" name="$2" holders
+    for _ in $(seq 1 40); do # 20 s TERM grace
+        if ! lsof -nP -i :"$port" >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 0.5
+    done
+    echo "  :$port still held after SIGTERM — sending SIGKILL to $name"
+    pkill -9 -f "bin/$name" 2>/dev/null || true
+    for _ in $(seq 1 20); do # 10 s KILL grace
+        if ! lsof -nP -i :"$port" >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 0.5
+    done
+    holders="$(lsof -t -i :"$port" 2>/dev/null | tr '\n' ' ' || true)"
+    echo "ERROR: :$port is still held by PID(s): ${holders:-unknown} ($name)"
+    echo "  Free it manually (kill -9 <pid>) — often a SIGKILL'd bench"
+    echo "  still claiming the USB dongles — then re-run make dev."
+    return 1
+}
+
+# verify_child PID PROTO PORT NAME LOG — fail fast when a freshly
+# spawned child dies (with its last log lines), and succeed only when
+# that child itself holds its port. The old readiness loop accepted
+# ANY listener on the port, which passed against the previous bench's
+# orphan and produced the zombie bench from the bugcheck.
+verify_child() {
+    local pid="$1" proto="$2" port="$3" name="$4" log="$5" holders
+    for _ in $(seq 1 40); do # 20 s startup grace (slow USB bring-up)
+        if ! kill -0 "$pid" 2>/dev/null; then
+            echo "ERROR: $name (pid $pid) exited during startup — last lines of $log:"
+            tail -5 "$log" 2>/dev/null || true
+            return 1
+        fi
+        holders="$(lsof -t -i "$proto:$port" 2>/dev/null | tr '\n' ' ' || true)"
+        case " ${holders}" in
+            *" $pid "*)
+                echo "$name (pid $pid) holds $proto :$port"
+                return 0 ;;
+        esac
+        sleep 0.5
+    done
+    echo "ERROR: $name (pid $pid) never took $proto :$port within 20 s"
+    echo "  (holders now: ${holders:-none}) — last lines of $log:"
+    tail -5 "$log" 2>/dev/null || true
+    return 1
+}
+
 echo "=== Stopping any previous bench processes ==="
 pkill -f 'bin/sdr-capture' 2>/dev/null || true
 pkill -f 'bin/iq-ingest' 2>/dev/null || true
 pkill -f 'bin/signal-processor' 2>/dev/null || true
+# B5: TERM alone doesn't guarantee a clean bench. Wait until the UDP
+# pair and the capture control port are actually free before building
+# or spawning anything — spawning into held ports produced the
+# usb_claim_interface / bind: address already in use cascade.
+wait_port_free "$UDP_PORT" iq-ingest || exit 1
+wait_port_free 9010 signal-processor || exit 1
+wait_port_free "$CAPTURE_CTRL_PORT" sdr-capture || exit 1
 
 echo "=== Building native binaries (capture with hw tags when possible) ==="
 if make build-capture-hw; then
@@ -83,10 +151,15 @@ docker compose up -d \
 cat db/migrations/*.sql 2>/dev/null | docker compose exec -T db psql -U sdr -d sdr >/dev/null 2>&1 || true
 
 echo "=== Starting native UDP pair (iq-ingest :$UDP_PORT -> processor :9010) ==="
+echo "    capture   log: $CAP_LOG"
+echo "    ingest    log: $INGEST_LOG"
+echo "    processor log: $PROC_LOG"
 CONFIG=config/iq-ingest.yaml LISTEN_PORT="$UDP_PORT" \
     CONSUMERS=localhost:9010 \
     nohup ./bin/iq-ingest >>"$INGEST_LOG" 2>&1 &
 ingest_pid=$!
+verify_child "$ingest_pid" udp "$UDP_PORT" iq-ingest "$INGEST_LOG" || exit 1
+
 LISTEN_PORT=9010 SIGNAL_TTL=30 \
     DB_URL="${DB_URL_LOCAL:-postgres://sdr:sdr@localhost:5432/sdr?sslmode=disable}" \
     WS_HUB_URL=http://127.0.0.1:8081 \
@@ -96,29 +169,12 @@ LISTEN_PORT=9010 SIGNAL_TTL=30 \
     CLASSIFIER_CONFIG=config/classifier.yaml \
     nohup ./bin/signal-processor >>"$PROC_LOG" 2>&1 &
 processor_pid=$!
-
-echo "=== Waiting for the native iq-ingest listener on :$UDP_PORT ==="
-ready=0
-for _ in $(seq 1 20); do
-    if lsof -nP -i :"$UDP_PORT" 2>/dev/null | grep -qi udp; then
-        ready=1
-        break
-    fi
-    sleep 3
-done
-if [ "$ready" = 1 ]; then
-    echo "iq-ingest UDP :$UDP_PORT is up"
-else
-    echo "WARNING: nothing listening on UDP :$UDP_PORT; starting sdr-capture" \
-        "anyway — it recovers once the ingest appears"
-fi
+verify_child "$processor_pid" udp 9010 signal-processor "$PROC_LOG" || exit 1
 
 echo "=== Starting sdr-capture ==="
-echo "    capture   log: $CAP_LOG"
-echo "    ingest    log: $INGEST_LOG"
-echo "    processor log: $PROC_LOG"
 nohup ./bin/sdr-capture -config config/sdr-capture.yaml >>"$CAP_LOG" 2>&1 &
 capture_pid=$!
+verify_child "$capture_pid" tcp "$CAPTURE_CTRL_PORT" sdr-capture "$CAP_LOG" || exit 1
 
 echo "=== Starting frontend dev server (Ctrl+C stops the whole bench) ==="
 cd frontend

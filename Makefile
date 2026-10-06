@@ -5,6 +5,10 @@ help: ## Show available targets
 
 # ─── Development (macOS) ───
 
+# N1 (docs/UI-BUGCHECK.md): `make dev` runs Vite in the foreground and
+# Vite reads stdin — backgrounding this target from a terminal without
+# detaching stdin SIGTTIN-stops the whole bench. Use:
+#   nohup make dev < /dev/null > /tmp/sigint-dev.log 2>&1 &
 dev: ## Start full dev environment (macOS: native SDR capture + Docker services)
 	./scripts/dev-macos.sh
 
