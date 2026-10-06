@@ -30,7 +30,6 @@ describes the state *before* implementation and is kept for the record.
 - **Inspector recordings load on first expand** (plus manual refresh)
   instead of on every selection — same cancellation-guard pattern.
 
-
 Everything here is grounded in what ships today: the §13.1 endpoint table,
 the §14 event set, the existing components under `frontend/src/lib`, and the
 SPEC's binding constraints (D9/D10, §5.6, §14.3, §18, §19, §20). No UI
@@ -117,7 +116,7 @@ waterfall seed via the existing `spectrumSelection` store).
 
 ### 3.2 App shell (persistent on every route)
 
-```
+```text
 ┌──────────────────────────────────────────────────────────────────────────┐
 │ SIGINT Workbench   Operations  Spectrum  Signals  Recordings  Analysis   │
 │                                                    ── top bar ──         │
@@ -127,7 +126,7 @@ waterfall seed via the existing `spectrumSelection` store).
 │                        active view (per route)                           │
 │                                                                          │
 └──────────────────────────────────────────────────────────────────────────┘
-```
+```text
 
 - **View tabs** — plain links; active tab underlined `sky-400`.
 - **Connection pill** — from a new `connection` store fed by the WS
@@ -197,7 +196,7 @@ inline in three components).
 Purpose: geographic situational awareness. Default landing; what the
 dashboard is today, minus the crowding.
 
-```
+```text
 ┌ top bar ────────────────────────────────────────────────────────────────┐
 ├──────────────────────────────────────────────────────┬───────────────────┤
 │                                                      │ INSPECTOR         │
@@ -212,7 +211,7 @@ dashboard is today, minus the crowding.
 │  145.500 MHz  amateur  FM(NFM)  −62.1 dB (rel.)            2s   rtlsdr-0 │
 │  …  (window of 250, §14.3)            +412 more not rendered             │
 └──────────────────────────────────────────────────────────────────────────┘
-```
+```text
 
 **Map (existing `MapView`, extended):**
 
@@ -257,7 +256,7 @@ One component, used by Operations and Signals (overlay drawer on narrow
 screens). Reorganizes today's `SignalDetail` into collapsible sections,
 reordered by frequency of use:
 
-```
+```text
 ┌ INSPECTOR ────────────────────────────────┐
 │ 145.500 MHz                    ✓ verified │  ← identity (open)
 │ amateur · FM (NFM) · 12.5 kHz · conf 0.82 │
@@ -278,7 +277,7 @@ reordered by frequency of use:
 ├───────────────────────────────────────────┤
 │ ▾ NOTES (1)                    [add note] │
 └───────────────────────────────────────────┘
-```
+```text
 
 - **Identity** — existing fields, one card: frequency (large mono), class
   chip, modulation + subType, bandwidth, confidence (thin bar, §6.1
@@ -313,7 +312,7 @@ Purpose: promote §18 — the system's richest live feed — from a 160 px
 sidebar widget to a first-class view, and co-locate the RF controls that
 shape it.
 
-```
+```text
 ┌ top bar ─────────────────────────────────────────────────────────────────┐
 ├───────────────┬──────────────────────────────────────────────────────────┤
 │ SOURCES       │  spectrum line (dB grid, center marker, signal ticks)    │
@@ -328,7 +327,7 @@ shape it.
 │  [resume ▶]   │  selection: 145.312–145.438 MHz · 12.0–28.4 s            │
 │ rtlsdr-1 …    │            [analyze ↗]  [clear]                          │
 └───────────────┴──────────────────────────────────────────────────────────┘
-```
+```text
 
 - **Sources** — the existing per-SDR picker (`spectrumSdrIds` /
   `selectedSdrId` stores), kept and extended with staleness: a source is
@@ -387,7 +386,7 @@ Operations table, but with room to breathe.
 Purpose: the cross-signal library that `GET /api/recordings` has always
 supported but no screen shows.
 
-```
+```text
 ┌ RECORDINGS ──────────────────────────────────────────────────────────────┐
 │ filter: [all formats ▾] [signal: 145.500 MHz amateur ▾]  showing 50 ⏳30s │
 ├──────────────────────────────────────────────────────────────────────────┤
@@ -396,7 +395,7 @@ supported but no screen shows.
 │ 09:14:03        145.500 MHz · amateur       8.2s   WAV  48 kS/s [▶][⭳]     │
 │ 08:51:22        162.400 MHz · marine        12.0s  WAV  48 kS/s [▶][⭳]     │
 └──────────────────────────────────────────────────────────────────────────┘
-```
+```text
 
 - Data: `fetchRecordings` extended to accept `{ signalId?, limit? }` —
   the API already takes `?limit` (default 50, cap 500) and `?signalId`
@@ -427,7 +426,7 @@ supported but no screen shows.
 Purpose: the §19 time-frequency instrument at full size — where the
 inline `TfrPanel` canvas graduates to a real view.
 
-```
+```text
 ┌ ANALYSIS ────────────────────────────────────────────────────────────────┐
 │ recording: 09:14:03 · 145.500 MHz · IQ · 48 kS/s · 8.2 s        [param ▾]│
 ├──────────────────────────────────────────────────────────────────────────┤
@@ -440,7 +439,7 @@ inline `TfrPanel` canvas graduates to a real view.
 │ PARAMETERS  [stft ▾] window [hamming ▾] nfft [1024] overlap [50]%        │
 │  t0 [0.0] t1 [8.2] s  freq crop [full]         [render]   status: ready  │
 └──────────────────────────────────────────────────────────────────────────┘
-```
+```text
 
 - **Parameter form** — identical controls to today's `TfrPanel`:
   method (with each method's artifact description from the
