@@ -352,7 +352,10 @@ shape it.
 - **Canvas block** — `SpectrumView`'s internals move here unchanged in
   behavior: line + quarter-dB grid, center-frequency marker, waterfall
   (300-row ring, heat palette, dB-rel axis), autoscale toggle, tick
-  axis. The rAF dirty-flag loop is untouched.
+  axis. The rAF dirty-flag loop is untouched. Autoscale defaults on
+  (quantized to 10 dB steps): the §5.2 uncalibrated floor rides near
+  0 dBFS on a live feed, and a fixed −100…0 span painted the waterfall
+  solid red.
 - **Signal overlay (new, passive)** — active signals from `$signals`
   whose `freqHz ± bandwidthHz/2` intersects the frame span render as
   small ticks + freq labels on the spectrum line. Derived once per

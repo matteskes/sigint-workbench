@@ -26,11 +26,12 @@
 		typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 	// §18.2 honesty: db values are §5.6 uncalibrated relative dB, so the
-	// axis reads "dB (rel.)" — default span −100…0 with an autoscale
-	// toggle (§18.3).
+	// axis reads "dB (rel.)". Autoscale defaults on: the uncalibrated
+	// floor rides near 0 dBFS on a live feed, so a fixed −100…0 span
+	// saturated the heat palette into a uniform red wash (§18.3).
 	const DB_MIN = -100;
 	const DB_MAX = 0;
-	let autoDb = false;
+	let autoDb = true;
 
 	// The rAF loop redraws at most once per animation frame, and only
 	// when the selected spectrum actually changed (feed ≤ rate_hz, §18.1).
@@ -76,7 +77,10 @@
 			}
 		}
 		if (!Number.isFinite(lo)) return [DB_MIN, DB_MAX];
-		return [Math.floor(lo) - 5, Math.ceil(hi) + 5];
+		// Quantize to 10 dB steps so the scale only moves when the data
+		// crosses a boundary (no frame-to-frame pumping), and one hot bin
+		// cannot crush the noise floor onto the bottom palette color.
+		return [Math.floor(lo / 10) * 10, Math.ceil(hi / 10) * 10];
 	}
 
 	function drawLine(f: SpectrumFrame | null, lo: number, hi: number): void {
