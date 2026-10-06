@@ -1,9 +1,35 @@
 # SIGINT Workbench — Complete UI Design
 
-**Status:** design proposal (2026-10-05). Covers every *implemented* backend
-capability and the frontend surface needed to operate it. This is a design
-document, not an implementation: the Svelte app is unchanged until the
-roadmap in §18 is scheduled.
+**Status:** implemented (2026-10-05). This document was the design; the
+frontend now implements it — all six routes, the shell, and the P1–P4
+roadmap below have shipped. See "Implementation notes" at the end of this
+section for the (small) deviations made during the build. The audit in §1
+describes the state *before* implementation and is kept for the record.
+
+**Implementation notes (deviations & decisions made while building):**
+
+- **Sweep ring on the map is a static sky halo**, not a rotating dash —
+  a rotating dash would repaint the map every frame for zero extra
+  information (§17 render budget).
+- **`prefers-reduced-motion` throttles the spectrum/waterfall to 1 fps**
+  with a "waterfall paused (reduced motion)" caption, rather than freezing
+  it entirely — data stays current without streaming motion (§16).
+- **`TfrPanel` and `SignalDetail` were deleted, not kept**: the Inspector
+  replaces SignalDetail entirely, and AnalysisView + the extracted
+  `TfrCanvas` replace TfrPanel's only consumer (inline expansion). §13's
+  delete list grows accordingly.
+- **`AudioPlayer` was recording-scoped while being kept** (§13 listed it
+  unchanged): it had a latent bug — it fetched
+  `/api/recordings/{signal.id}/audio`, passing a *signal* id where the
+  gateway expects a *recording* id, so playback could never find a row.
+  It now takes a `Recording` prop and enforces one-WAV-at-a-time via a
+  claim/release pair in the audio store (F4 semantics for recordings).
+- **`SDRStatus` gained `lat`/`lon`** — the db rows always had them
+  (§12.1); `fetchSDRs` just dropped them. `applySDRStatus` preserves a
+  registered position when a positionless `sdr.status` event arrives.
+- **Inspector recordings load on first expand** (plus manual refresh)
+  instead of on every selection — same cancellation-guard pattern.
+
 
 Everything here is grounded in what ships today: the §13.1 endpoint table,
 the §14 event set, the existing components under `frontend/src/lib`, and the
@@ -546,9 +572,11 @@ frame application — they are the system's load-bearing pieces);
 `AudioPlayer`, `LiveAudioPlayer`, `VUMeter`, `SystemCheck`,
 `FieldInput`, `SdrListEditor`, `setup/+page.svelte` semantics.
 
-**Delete after migration:** `SignalList.svelte` and `SearchPanel.svelte`
-as separate components (absorbed by `SignalTable`); `sdrCount` if the
-shell derives counts from `$sdrs` directly.
+**Delete after migration (all deleted):** `SignalList.svelte` and
+`SearchPanel.svelte` (absorbed by `SignalTable`); `SignalDetail.svelte`
+(replaced by `Inspector`); `TfrPanel.svelte` (replaced by `AnalysisView` +
+the extracted `TfrCanvas`). `sdrCount` remains (store tests reference it;
+the shell derives counts from `$sdrs` directly).
 
 ---
 
@@ -633,23 +661,24 @@ Nothing in this design adds per-event work; every loop is bounded:
 
 ## 18. Implementation roadmap
 
-Each phase ships independently; none changes an API contract.
+Each phase ships independently; none changes an API contract. **All four
+phases shipped on 2026-10-05** (single implementation pass).
 
-- **P1 — Shell & truth (half day):** routes + `+layout` shell, `AppBar`,
+- **[x] P1 — Shell & truth:** routes + `+layout` shell, `AppBar`,
   `connection`/`health` stores, connection pill + health chips,
-  fail-loud util extraction, wire `SearchPanel` filters into the
-  existing `SignalList` (quick win before the full table lands).
-- **P2 — Spectrum workbench (1 day):** `/spectrum` route,
+  fail-loud util extraction, `SearchPanel` filters wired into the
+  shared table.
+- **[x] P2 — Spectrum workbench:** `/spectrum` route,
   `SpectrumWorkbench` hosting the existing canvases, receiver rail with
   gain + sweep, selection bar → `/analysis` deep link, receiver map
   layer + layer toggles.
-- **P3 — Data surfaces (1–2 days):** `SignalTable` (absorbing
+- **[x] P3 — Data surfaces:** `SignalTable` (absorbing
   `SignalList`/`SearchPanel`), `Inspector` reorganization,
   `RecordingsLibrary` + `client.ts` `fetchRecordings`/`setGain`
   additions, `/recordings` route.
-- **P4 — Analysis & polish (1 day):** `AnalysisView` with extracted TFR
+- **[x] P4 — Analysis & polish:** `AnalysisView` with extracted TFR
   renderer, keyboard shortcuts, a11y pass (§16), empty-state copy pass
-  (§14), reduced-motion, delete superseded components.
+  (§14), reduced-motion, superseded components deleted.
 
 ---
 

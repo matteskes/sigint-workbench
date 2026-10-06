@@ -2,6 +2,7 @@
 	import { LiveOpusPlayer, type LiveState } from '$lib/audio/liveOpus';
 	import VUMeter from './VUMeter.svelte';
 	import type { Signal } from '$lib/stores/signals';
+	import { registerLiveAudioToggle } from '$lib/stores/ui';
 
 	let { signal }: { signal: Signal } = $props();
 
@@ -43,6 +44,13 @@
 			detail = String(e);
 		}
 	}
+
+	// §15 Space shortcut: this player owns the global toggle while
+	// mounted (only one inspector player exists at a time).
+	$effect(() => {
+		registerLiveAudioToggle(toggle);
+		return () => registerLiveAudioToggle(null);
+	});
 </script>
 
 <div class="space-y-2">

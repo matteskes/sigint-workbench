@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { fetchSignals, fetchSignal, fetchSDRs, retuneSdr, fetchAnnotations, addAnnotation, connectWebSocket, fetchRecordings, requestTFR, fetchSettings, saveSettings, fetchSetupState, completeSetup, fetchSetupStatus } from './client';
+import { fetchSignals, fetchSignal, fetchSDRs, retuneSdr, setGain, fetchAnnotations, addAnnotation, connectWebSocket, fetchRecordings, requestTFR, fetchSettings, saveSettings, fetchSetupState, completeSetup, fetchSetupStatus } from './client';
 
 // Minimal WebSocket double: records the URL and lets tests emit messages.
 class FakeWebSocket {
@@ -151,8 +151,8 @@ describe('fetchSDRs', () => {
 		const sdrs = await fetchSDRs();
 
 		expect(sdrs).toEqual([
-			{ id: 'rtlsdr-0', model: 'RTL2832U', freqHz: 146_520_000, gainDb: 40, bwHz: 0, active: true },
-			{ id: 'simulator-0', model: 'Simulator', freqHz: 0, gainDb: 40, bwHz: 0, active: false }
+			{ id: 'rtlsdr-0', model: 'RTL2832U', freqHz: 146_520_000, gainDb: 40, bwHz: 0, active: true, lat: 40.7, lon: -74.0 },
+			{ id: 'simulator-0', model: 'Simulator', freqHz: 0, gainDb: 40, bwHz: 0, active: false, lat: null, lon: null }
 		]);
 		const url = new URL(fetchMock.mock.calls[0][0] as string);
 		expect(url.pathname).toBe('/api/sdrs');
@@ -212,7 +212,9 @@ describe('retuneSdr (§7.4, §13.1)', () => {
 			freqHz: 121_500_000,
 			gainDb: 40,
 			bwHz: 0,
-			active: true
+			active: true,
+			lat: null,
+			lon: null
 		});
 		const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
 		expect(url).toContain('/api/sdrs/rtlsdr-0');
@@ -243,7 +245,7 @@ describe('retuneSdr (§7.4, §13.1)', () => {
 });
 
 describe('recordings + TFR (§19)', () => {
-	it('fetchRecordings queries by signalId', async () => {
+	it('fetchRecordings queries by signalId and defaults the limit', async () => {
 		const fetchMock = vi.fn().mockResolvedValue(
 			okJSON([
 				{
@@ -263,13 +265,40 @@ describe('recordings + TFR (§19)', () => {
 		);
 		vi.stubGlobal('fetch', fetchMock);
 
-		const recs = await fetchRecordings('sig-1');
+		const recs = await fetchRecordings({ signalId: 'sig-1' });
 
 		expect(recs).toHaveLength(1);
 		expect(recs[0].fileFormat).toBe('iq');
 		const url = new URL(fetchMock.mock.calls[0][0] as string);
 		expect(url.pathname).toBe('/api/recordings');
 		expect(url.searchParams.get('signalId')).toBe('sig-1');
+		expect(url.searchParams.get('limit')).toBe('50');
+	});
+
+	it('fetchRecordings sends a raised limit and omits signalId when unset', async () => {
+		const fetchMock = vi.fn().mockResolvedValue(okJSON([]));
+		vi.stubGlobal('fetch', fetchMock);
+
+		await fetchRecordings({ limit: 500 });
+
+		const url = new URL(fetchMock.mock.calls[0][0] as string);
+		expect(url.searchParams.get('signalId')).toBeNull();
+		expect(url.searchParams.get('limit')).toBe('500');
+	});
+
+	it('setGain PUTs the gainDb field and maps the updated device', async () => {
+		const fetchMock = vi.fn().mockResolvedValue(
+			okJSON({ id: 'rtlsdr-0', model: 'RTL-SDR', freqHz: 145_500_000, gainDb: 32.8, active: true, lat: 37.77, lon: -122.42 })
+		);
+		vi.stubGlobal('fetch', fetchMock);
+
+		const sdr = await setGain('rtlsdr-0', 32.8);
+
+		expect(sdr.gainDb).toBeCloseTo(32.8);
+		const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+		expect(url).toContain('/api/sdrs/rtlsdr-0');
+		expect(init.method).toBe('PUT');
+		expect(JSON.parse(init.body as string)).toEqual({ gainDb: 32.8 });
 	});
 
 	it('requestTFR posts the picker parameters and returns tiles', async () => {

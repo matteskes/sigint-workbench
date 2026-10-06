@@ -65,3 +65,25 @@ export function clearSignalLevel(signalId: string): void {
 		return out;
 	});
 }
+
+// ─── WAV playback singleton (§9: one recording at a time) ────────────
+
+let activeWavStop: (() => void) | null = null;
+
+/**
+ * Claims exclusive WAV playback: stops whatever recording is playing,
+ * marks the store. Returns the previous owner's stop having been
+ * called (F4: one stream at a time, made explicit).
+ */
+export function claimWavPlayback(sourceId: string, stop: () => void): void {
+	if (activeWavStop) activeWavStop();
+	activeWavStop = stop;
+	audioState.update((s) => ({ ...s, playing: true, signalId: sourceId, level: 0 }));
+}
+
+/** Releases the claim when `sourceId` still owns it (stop/ended). */
+export function releaseWavPlayback(sourceId: string): void {
+	if (!activeWavStop) return;
+	activeWavStop = null;
+	audioState.update((s) => (s.playing && s.signalId === sourceId ? { ...s, playing: false, level: 0 } : s));
+}

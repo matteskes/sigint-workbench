@@ -1,62 +1,25 @@
 <script lang="ts">
-	import type { Signal } from '$lib/stores/signals';
+	// §9/§6: WAV playback for one recording via the gateway's
+	// /api/recordings/{id}/audio (A3). Recording-scoped — the old
+	// version passed a signal id into the recordings path and could
+	// never find a row; the library and inspector play real rows now.
+	// IQ recordings get no play button (§9: honest about formats).
+	import type { Recording } from '$lib/api/client';
+	import { recordingAudioUrl } from '$lib/api/client';
+	import { audioState, claimWavPlayback, releaseWavPlayback } from '$lib/stores/audio';
 	import VUMeter from './VUMeter.svelte';
-	import { audioState } from '$lib/stores/audio';
 
-	let { signal }: { signal: Signal } = $props();
+	let { recording }: { recording: Recording } = $props();
+
 	let audioCtx: AudioContext | undefined;
 	let sourceNode: AudioBufferSourceNode | undefined;
 	let analyser: AnalyserNode | undefined;
 	let animFrame = 0;
+	let error = $state('');
 
-	async function togglePlayback() {
-		if ($audioState.playing && $audioState.signalId === signal.id) {
-			stopPlayback();
-			return;
-		}
+	const isOurs = $derived($audioState.playing && $audioState.signalId === recording.id);
 
-		try {
-			if (!audioCtx) {
-				audioCtx = new AudioContext();
-			}
-			if (audioCtx.state === 'suspended') {
-				await audioCtx.resume();
-			}
-
-			const res = await fetch(`/api/recordings/${signal.id}/audio`);
-			if (!res.ok) throw new Error('No recording available');
-
-			const arrayBuf = await res.arrayBuffer();
-		 const audioBuffer = await audioCtx.decodeAudioData(arrayBuf);
-
-			sourceNode = audioCtx.createBufferSource();
-			sourceNode.buffer = audioBuffer;
-			analyser = audioCtx.createAnalyser();
-			analyser.fftSize = 256;
-
-			sourceNode.connect(analyser);
-			analyser.connect(audioCtx.destination);
-			sourceNode.start();
-
-			sourceNode.onended = () => {
-				audioState.update((s) => ({ ...s, playing: false }));
-			};
-
-			audioState.update((s) => ({ ...s, playing: true, signalId: signal.id }));
-			updateLevel();
-		} catch (e) {
-			console.error('Audio playback error:', e);
-		}
-	}
-
-	function stopPlayback() {
-		sourceNode?.stop();
-		sourceNode = undefined;
-		audioState.update((s) => ({ ...s, playing: false, level: 0 }));
-		cancelAnimationFrame(animFrame);
-	}
-
-	function updateLevel() {
+	function updateLevel(): void {
 		if (!analyser) return;
 		const data = new Float32Array(analyser.fftSize);
 		analyser.getFloatTimeDomainData(data);
@@ -66,24 +29,67 @@
 		audioState.update((s) => ({ ...s, level: rms }));
 		animFrame = requestAnimationFrame(updateLevel);
 	}
+
+	function stopPlayback(): void {
+		sourceNode?.stop();
+		sourceNode = undefined;
+		cancelAnimationFrame(animFrame);
+		releaseWavPlayback(recording.id);
+	}
+
+	async function togglePlayback(): Promise<void> {
+		if (isOurs) {
+			stopPlayback();
+			return;
+		}
+		error = '';
+		try {
+			if (!audioCtx) audioCtx = new AudioContext();
+			if (audioCtx.state === 'suspended') await audioCtx.resume();
+
+			// F4: one stream at a time — claiming stops any other row.
+			const res = await fetch(recordingAudioUrl(recording.id));
+			if (!res.ok) throw new Error(`playback failed (recorder ${res.status})`);
+			const arrayBuf = await res.arrayBuffer();
+			const audioBuffer = await audioCtx.decodeAudioData(arrayBuf);
+
+			sourceNode = audioCtx.createBufferSource();
+			sourceNode.buffer = audioBuffer;
+			analyser = audioCtx.createAnalyser();
+			analyser.fftSize = 256;
+			sourceNode.connect(analyser);
+			analyser.connect(audioCtx.destination);
+
+			claimWavPlayback(recording.id, () => {
+				// Called when another recording claims playback.
+				sourceNode?.stop();
+				sourceNode = undefined;
+				cancelAnimationFrame(animFrame);
+			});
+			sourceNode.onended = () => stopPlayback();
+			sourceNode.start();
+			updateLevel();
+		} catch (e) {
+			error = e instanceof Error ? e.message : String(e);
+			releaseWavPlayback(recording.id);
+		}
+	}
 </script>
 
-<div class="space-y-2">
-	<div class="text-xs font-semibold text-slate-400">Recording</div>
-
+<div class="space-y-1">
 	<button
-		class="w-full py-2 rounded text-sm font-medium
-			{$audioState.playing && $audioState.signalId === signal.id
-				? 'bg-red-900/50 text-red-400 hover:bg-red-900'
-				: 'bg-blue-900/50 text-blue-400 hover:bg-blue-900'}"
+		class="w-full rounded py-1 text-xs font-medium
+			{isOurs
+			? 'bg-red-900/50 text-red-300 hover:bg-red-900'
+			: 'bg-sky-900/50 text-sky-300 hover:bg-sky-900'}"
 		onclick={togglePlayback}
 	>
-		{#if $audioState.playing && $audioState.signalId === signal.id}
-			■ Stop
-		{:else}
-			▶ Play
-		{/if}
+		{isOurs ? '■ Stop' : '▶ Play'}
 	</button>
-
-	<VUMeter level={$audioState.level} />
+	{#if isOurs}
+		<VUMeter level={$audioState.level} />
+	{/if}
+	{#if error}
+		<div class="text-[10px] text-red-400">{error}</div>
+	{/if}
 </div>

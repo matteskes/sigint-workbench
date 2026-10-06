@@ -34,6 +34,29 @@ export interface SDRStatus {
 	gainDb: number;
 	bwHz: number;
 	active: boolean;
+	/**
+	 * Registered receiver position (§12.1 sdr_devices.lat/lon) — the map
+	 * receiver layer plots from this. null = unplaced device (the row
+	 * stores 0/0), never plotted.
+	 */
+	lat: number | null;
+	lon: number | null;
+}
+
+/** Maps one db.SDRDevice JSON row (§12.1) to the SDRStatus shape. */
+function mapSdrDevice(d: any): SDRStatus {
+	// The row stores 0/0 for "no position"; null island has no receivers.
+	const hasPos = d.lat != null && d.lon != null && !(Number(d.lat) === 0 && Number(d.lon) === 0);
+	return {
+		id: String(d.id),
+		model: String(d.model ?? ''),
+		freqHz: Number(d.freqHz ?? 0),
+		gainDb: Number(d.gainDb ?? 0),
+		bwHz: 0,
+		active: Boolean(d.active),
+		lat: hasPos ? Number(d.lat) : null,
+		lon: hasPos ? Number(d.lon) : null
+	};
 }
 
 export interface BBox {
@@ -104,40 +127,41 @@ export async function fetchSDRs(): Promise<SDRStatus[]> {
 	const res = await fetch(`${API_URL}/api/sdrs`);
 	if (!res.ok) throw new Error(`API error: ${res.status}`);
 	const devices: any[] = await res.json();
-	return devices.map((d) => ({
-		id: String(d.id),
-		model: String(d.model),
-		freqHz: Number(d.freqHz ?? 0),
-		gainDb: Number(d.gainDb ?? 0),
-		bwHz: 0,
-		active: Boolean(d.active)
-	}));
+	return devices.map(mapSdrDevice);
 }
 
 /**
- * Retunes a device: PUT /api/sdrs/{id} with {freqHz} (§7.4, §13.1).
- * The gateway persists the row AND forwards the tune to the
- * sdr-capture control API — capture unreachable ⇒ 502, unknown
+ * Partial device update shared by retuneSdr / setGain: PUT /api/sdrs/{id}
+ * (§7.4, §13.1). The gateway persists the row AND forwards the change
+ * to the sdr-capture control API — capture unreachable ⇒ 502, unknown
  * device there ⇒ 404 — so success means the hardware really moved.
- * Returns the updated device mapped to the dashboard shape. Note:
- * a manual tune pauses that device's scan loop until restart (§7.4).
+ * Returns the updated device mapped to the dashboard shape.
  */
-export async function retuneSdr(id: string, freqHz: number): Promise<SDRStatus> {
+async function putSdr(id: string, body: Record<string, number>): Promise<SDRStatus> {
 	const res = await fetch(`${API_URL}/api/sdrs/${encodeURIComponent(id)}`, {
 		method: 'PUT',
 		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ freqHz })
+		body: JSON.stringify(body)
 	});
 	if (!res.ok) throw new Error(`API error: ${res.status}`);
-	const d = await res.json();
-	return {
-		id: String(d.id),
-		model: String(d.model),
-		freqHz: Number(d.freqHz ?? 0),
-		gainDb: Number(d.gainDb ?? 0),
-		bwHz: 0,
-		active: Boolean(d.active)
-	};
+	return mapSdrDevice(await res.json());
+}
+
+/**
+ * Retunes a device (§7.4). Note: a manual tune pauses that device's
+ * scan loop until restart (§7.4).
+ */
+export async function retuneSdr(id: string, freqHz: number): Promise<SDRStatus> {
+	return putSdr(id, { freqHz });
+}
+
+/**
+ * Sets a device's gain in dB (§13.1 — the PUT endpoint has always
+ * accepted gainDb; this is the first client function to expose it).
+ * Unlike a retune, a gain change does not park the sweep.
+ */
+export async function setGain(id: string, gainDb: number): Promise<SDRStatus> {
+	return putSdr(id, { gainDb });
 }
 
 /**
@@ -290,13 +314,28 @@ export interface Recording {
 	sizeBytes: number;
 }
 
-/** Lists recordings, optionally for one signal, newest first (§12.3). */
-export async function fetchRecordings(signalId: string): Promise<Recording[]> {
-	const res = await fetch(
-		`${API_URL}/api/recordings?${new URLSearchParams({ signalId, limit: '20' })}`
-	);
+/**
+ * Lists recordings (§12.3, §13.1). The endpoint takes an optional
+ * `?signalId=` filter and `?limit=` (API cap 500); the client defaults
+ * to the latest 50. Returns newest first.
+ */
+export async function fetchRecordings(
+	opts: { signalId?: string; limit?: number } = {}
+): Promise<Recording[]> {
+	const params = new URLSearchParams();
+	if (opts.signalId) params.set('signalId', opts.signalId);
+	params.set('limit', String(opts.limit ?? 50));
+	const res = await fetch(`${API_URL}/api/recordings?${params}`);
 	if (!res.ok) throw new Error(`API error: ${res.status}`);
 	return res.json();
+}
+
+/**
+ * WAV/IQ audio stream URL for one recording (§11): the playback and
+ * download actions share this gateway-routed endpoint (A3).
+ */
+export function recordingAudioUrl(recordingId: string): string {
+	return `${API_URL}/api/recordings/${encodeURIComponent(recordingId)}/audio`;
 }
 
 /**

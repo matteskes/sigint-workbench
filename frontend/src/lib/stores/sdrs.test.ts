@@ -1,6 +1,6 @@
 import { get } from 'svelte/store';
 import { describe, it, expect, beforeEach } from 'vitest';
-import { sdrs, sdrCount, selectSDR, applySDRStatus, type SDRStatus } from './sdrs';
+import { sdrs, sdrCount, sdrRuntime, selectSDR, applySDRStatus, applySdrRuntime, type SDRStatus } from './sdrs';
 
 function makeSDR(overrides: Partial<SDRStatus> = {}): SDRStatus {
 	return {
@@ -10,6 +10,8 @@ function makeSDR(overrides: Partial<SDRStatus> = {}): SDRStatus {
 		gainDb: 40,
 		bwHz: 2_000_000,
 		active: true,
+		lat: 37.7749,
+		lon: -122.4194,
 		...overrides
 	};
 }
@@ -59,5 +61,22 @@ describe('sdrs store', () => {
 		expect(list).toHaveLength(1);
 		expect(list[0].freqHz).toBe(121_500_000);
 		expect(list[0].active).toBe(false);
+	});
+
+	it('applySDRStatus preserves the registered position when an update carries none (sdr.status events)', () => {
+		applySDRStatus(makeSDR({ id: 'rtlsdr-0', lat: 47.6, lon: 8.5 }));
+		// §14.4.3 sdr.status payloads have no position fields.
+		applySDRStatus(makeSDR({ id: 'rtlsdr-0', freqHz: 121_500_000, lat: null, lon: null }));
+		const [sdr] = get(sdrs);
+		expect(sdr.lat).toBeCloseTo(47.6);
+		expect(sdr.lon).toBeCloseTo(8.5);
+	});
+
+	it('applySdrRuntime caches live sweep state per device', () => {
+		applySdrRuntime({ id: 'rtlsdr-0', model: 'RTL-SDR', active: true, freqHz: 1e8, gainDb: 0, bwHz: 0, mode: 'scan', scanning: true, scanPaused: false });
+		applySdrRuntime({ id: 'rtlsdr-1', model: 'RTL-SDR', active: true, freqHz: 1e8, gainDb: 0, bwHz: 0, mode: 'scan', scanning: true, scanPaused: true });
+		const runtime = get(sdrRuntime);
+		expect(runtime['rtlsdr-0'].scanPaused).toBe(false);
+		expect(runtime['rtlsdr-1'].scanPaused).toBe(true);
 	});
 });

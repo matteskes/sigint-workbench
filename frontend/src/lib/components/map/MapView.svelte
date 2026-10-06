@@ -1,25 +1,41 @@
 <script lang="ts">
+	// §5 Operations map. Carries over the signal dots + accuracy halos +
+	// track polyline, and adds: the §12.1 receiver layer (solid dot +
+	// green ring = active, hollow = idle, sky halo = sweeping, §7.4 —
+	// sweep state from the shared sdrRuntime cache), layer toggles
+	// (state in the ui store), selected-only labels (declutter),
+	// click-to-select for signals and receivers, and the Inspector's
+	// "center map" command (reduced-motion aware). The class palette
+	// comes from classColor.ts — the duplicate map that used to live
+	// here is gone (§4).
 	import maplibregl from 'maplibre-gl';
 	import { mapStyle } from '$lib/map/config';
-	import { selectedSignal, signals } from '$lib/stores/signals';
+	import { signals, selectedSignal, type Signal } from '$lib/stores/signals';
 	import { tracks } from '$lib/stores/tracks';
-	import { derived } from 'svelte/store';
+	import { sdrs, sdrRuntime } from '$lib/stores/sdrs';
+	import { layers, mapReceiverId, mapCenterRequest, type LayerToggles } from '$lib/stores/ui';
+	import { classHex } from '$lib/ui/classColor';
+	import { get, derived } from 'svelte/store';
 	import { onMount } from 'svelte';
 
 	let mapEl: HTMLDivElement;
 	let map: maplibregl.Map;
 
-	// Signal color by class
-	const classColors: Record<string, string> = {
-		aviation: '#3b82f6',
-		land_mobile: '#22c55e',
-		marine: '#06b6d4',
-		broadcast: '#f59e0b',
-		amateur: '#a855f7',
-		gnss: '#ef4444',
-		wifi: '#6366f1',
-		unknown: '#64748b'
-	};
+	// §16: honour reduced motion — no animated fly-to.
+	function prefersReducedMotion(): boolean {
+		return (
+			typeof matchMedia === 'function' &&
+			matchMedia('(prefers-reduced-motion: reduce)').matches
+		);
+	}
+
+	function point(id: string, lon: number, lat: number, props: Record<string, unknown>): GeoJSON.Feature {
+		return {
+			type: 'Feature',
+			geometry: { type: 'Point', coordinates: [lon, lat] },
+			properties: { id, ...props }
+		};
+	}
 
 	onMount(() => {
 		map = new maplibregl.Map({
@@ -33,14 +49,12 @@
 		map.addControl(new maplibregl.NavigationControl(), 'top-right');
 		map.addControl(new maplibregl.ScaleControl(), 'bottom-left');
 
-		// Add signal markers layer
 		map.on('load', () => {
+			// ── signals: dots + accuracy halos (labels are separate) ──
 			map.addSource('signals', {
 				type: 'geojson',
 				data: { type: 'FeatureCollection', features: [] }
 			});
-
-			// Accuracy circles
 			map.addLayer({
 				id: 'signal-accuracy',
 				type: 'circle',
@@ -54,8 +68,6 @@
 					'circle-stroke-opacity': 0.3
 				}
 			});
-
-			// Signal dots
 			map.addLayer({
 				id: 'signal-dots',
 				type: 'circle',
@@ -68,11 +80,16 @@
 				}
 			});
 
-			// Labels
+			// ── selected-signal label: one feature, so 500 signals never
+			// become 500 labels (§5 declutter) ──
+			map.addSource('signal-labels', {
+				type: 'geojson',
+				data: { type: 'FeatureCollection', features: [] }
+			});
 			map.addLayer({
 				id: 'signal-labels',
 				type: 'symbol',
-				source: 'signals',
+				source: 'signal-labels',
 				layout: {
 					'text-field': ['get', 'label'],
 					'text-size': 11,
@@ -85,7 +102,39 @@
 				}
 			});
 
-			// Selected signal's track (§9.4)
+			// ── receivers (§12.1): active = solid dot; idle = hollow;
+			// sweeping = outer sky halo (static — a rotating dash would
+			// repaint the map every frame for zero information) ──
+			map.addSource('receivers', {
+				type: 'geojson',
+				data: { type: 'FeatureCollection', features: [] }
+			});
+			map.addLayer({
+				id: 'receiver-sweep',
+				type: 'circle',
+				source: 'receivers',
+				filter: ['==', ['get', 'sweeping'], true],
+				paint: {
+					'circle-radius': 12,
+					'circle-color': '#00000000',
+					'circle-stroke-color': '#38bdf8',
+					'circle-stroke-width': 2,
+					'circle-stroke-opacity': 0.9
+				}
+			});
+			map.addLayer({
+				id: 'receiver-dots',
+				type: 'circle',
+				source: 'receivers',
+				paint: {
+					'circle-radius': 5,
+					'circle-color': ['case', ['get', 'active'], '#22c55e', '#0f172a'],
+					'circle-stroke-width': 1.5,
+					'circle-stroke-color': '#e2e8f0'
+				}
+			});
+
+			// ── selected signal's persisted track (§9.4) ──
 			map.addSource('signal-track', {
 				type: 'geojson',
 				data: { type: 'FeatureCollection', features: [] }
@@ -101,35 +150,85 @@
 					'line-opacity': 0.9
 				}
 			});
-		});
 
-		// Update markers when signals change
-		const unsub = signals.subscribe(($signals) => {
-			const features = $signals.flatMap((s) => {
-				// A1 (§9.3): unlocated signals (null lat/lon) are omitted from the map
-				if (s.lat == null || s.lon == null) return [];
-				return [{
-					type: 'Feature' as const,
-					geometry: { type: 'Point' as const, coordinates: [s.lon, s.lat] },
-					properties: {
-						id: s.id,
-						color: classColors[s.class] ?? '#64748b',
-						accuracy: s.accuracyM || 1000,
-						label: `${(s.freqHz / 1e6).toFixed(1)} MHz`
-					}
-				}];
+			applyVisibility(get(layers));
+
+			// F1: map dot click selects (row click / map dot / ?signal= —
+			// all coherent). Selection alone never moves the viewport.
+			map.on('click', 'signal-dots', (e) => {
+				const id = e.features?.[0]?.properties?.id as string | undefined;
+				if (!id) return;
+				const sig = get(signals).find((s) => s.id === id);
+				if (sig) selectedSignal.set(sig);
 			});
-
-			const source = map.getSource('signals') as maplibregl.GeoJSONSource;
-			if (source) {
-				source.setData({ type: 'FeatureCollection', features });
+			map.on('click', 'receiver-dots', (e) => {
+				const id = e.features?.[0]?.properties?.id as string | undefined;
+				if (id) mapReceiverId.set(id);
+			});
+			for (const layer of ['signal-dots', 'receiver-dots']) {
+				map.on('mouseenter', layer, () => (map.getCanvas().style.cursor = 'pointer'));
+				map.on('mouseleave', layer, () => (map.getCanvas().style.cursor = ''));
 			}
 		});
 
-		// Selected signal's track polyline (§9.4): drawn once a REST
-		// fetch has delivered a path with two or more fixes.
+		function applyVisibility($l: LayerToggles): void {
+			if (!map.getSource('signals')) return;
+			const groups: Record<string, string[]> = {
+				signals: ['signal-accuracy', 'signal-dots'],
+				labels: ['signal-labels'],
+				tracks: ['signal-track-line'],
+				receivers: ['receiver-dots', 'receiver-sweep']
+			};
+			for (const [key, names] of Object.entries(groups) as [keyof LayerToggles, string[]][]) {
+				for (const name of names) {
+					if (map.getLayer(name)) {
+						map.setLayoutProperty(name, 'visibility', $l[key] ? 'visible' : 'none');
+					}
+				}
+			}
+		}
+
+		// ── SUBSCRIPTIONS ──
+		// Signals: rebuilt on coalesced flush boundaries only (§14.3).
+		const unsubSignals = signals.subscribe(($signals) => {
+			const features: GeoJSON.Feature[] = [];
+			// A1 (§9.3): unlocated signals are omitted from the map — the
+			// table's unlocated chip is their honest representation.
+			for (const s of $signals) {
+				if (s.lat == null || s.lon == null) continue;
+				features.push(
+					point(s.id, s.lon, s.lat, {
+						color: classHex(s.class),
+						accuracy: s.accuracyM || 1000
+					})
+				);
+			}
+			const source = map.getSource('signals') as maplibregl.GeoJSONSource | undefined;
+			source?.setData({ type: 'FeatureCollection', features });
+		});
+
+		// Selected-signal label (single feature).
+		const labelData = derived(selectedSignal, ($sel) => {
+			const empty = { type: 'FeatureCollection' as const, features: [] as GeoJSON.Feature[] };
+			if (!$sel || $sel.lat == null || $sel.lon == null) return empty;
+			return {
+				type: 'FeatureCollection' as const,
+				features: [
+					point($sel.id, $sel.lon, $sel.lat, {
+						label: `${($sel.freqHz / 1e6).toFixed(3)} MHz`
+					})
+				]
+			};
+		});
+		const unsubLabels = labelData.subscribe((data) => {
+			const source = map.getSource('signal-labels') as maplibregl.GeoJSONSource | undefined;
+			source?.setData(data as Parameters<maplibregl.GeoJSONSource['setData']>[0]);
+		});
+
+		// Selected signal's track polyline: drawn once a REST fetch has
+		// delivered a path with two or more fixes (§9.4).
 		const trackData = derived([selectedSignal, tracks], ([$sel, $t]) => {
-			const empty = { type: 'FeatureCollection' as const, features: [] as unknown[] };
+			const empty = { type: 'FeatureCollection' as const, features: [] as GeoJSON.Feature[] };
 			if (!$sel) return empty;
 			const tr = $t[$sel.id];
 			if (!tr || tr.path.length < 2) return empty;
@@ -143,7 +242,7 @@
 							coordinates: tr.path.map((p) => [p.lon, p.lat])
 						},
 						properties: {}
-					}
+					} as GeoJSON.Feature
 				]
 			};
 		});
@@ -152,12 +251,48 @@
 			source?.setData(data as Parameters<maplibregl.GeoJSONSource['setData']>[0]);
 		});
 
+		// Receivers: plotted only when the device row carries a position
+		// (0/0 rows are "unplaced" — never invented onto the map).
+		const receiverData = derived([sdrs, sdrRuntime], ([$sdrs, $rt]) => {
+			const features: GeoJSON.Feature[] = [];
+			for (const d of $sdrs) {
+				if (d.lat == null || d.lon == null) continue;
+				const rt = $rt[d.id];
+				features.push(
+					point(d.id, d.lon, d.lat, {
+						active: d.active,
+						sweeping: Boolean(rt?.scanning && !rt?.scanPaused)
+					})
+				);
+			}
+			return { type: 'FeatureCollection' as const, features };
+		});
+		const unsubReceivers = receiverData.subscribe((data) => {
+			const source = map.getSource('receivers') as maplibregl.GeoJSONSource | undefined;
+			source?.setData(data as Parameters<maplibregl.GeoJSONSource['setData']>[0]);
+		});
+
+		// Layer toggles (§5 bottom-left popover, state in the ui store).
+		const unsubLayers = layers.subscribe(($l) => applyVisibility($l));
+
+		// Inspector "center map" command — explicit action only (F1).
+		const unsubCenter = mapCenterRequest.subscribe((req) => {
+			if (!req || !map) return;
+			const target: maplibregl.LngLatLike = [req.lon, req.lat];
+			if (prefersReducedMotion()) map.jumpTo({ center: target, zoom: Math.max(map.getZoom(), 13) });
+			else map.easeTo({ center: target, zoom: Math.max(map.getZoom(), 13), duration: 500 });
+		});
+
 		return () => {
-			unsub();
+			unsubSignals();
+			unsubLabels();
 			unsubTrack();
+			unsubReceivers();
+			unsubLayers();
+			unsubCenter();
 			map.remove();
 		};
 	});
 </script>
 
-<div bind:this={mapEl} class="w-full h-full"></div>
+<div bind:this={mapEl} class="h-full w-full" role="application" aria-label="Signal map"></div>

@@ -4,9 +4,12 @@
 		WATERFALL_ROWS,
 		spectrumSdrIds,
 		selectedSdrId,
-		selectedSpectrum
+		selectedSpectrum,
+		markedFreqHz
 	} from '$lib/stores/spectrum';
 	import { spectrumSelection, dragToSelection } from '$lib/stores/tfr';
+	import { signals } from '$lib/stores/signals';
+	import { freqHz } from '$lib/ui/format';
 	import type { SpectrumFrame } from '$lib/api/client';
 
 	// §18.3: plain <canvas> + requestAnimationFrame, no new dependencies.
@@ -15,6 +18,12 @@
 	let tickEl: HTMLCanvasElement;
 	let anim = 0;
 	let open = true;
+
+	// §16: reduced motion slows the redraw cadence to 1 fps — the data
+	// stays current, the waterfall stops streaming (a "paused" caption
+	// says so honestly).
+	const REDUCED_MOTION =
+		typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 	// §18.2 honesty: db values are §5.6 uncalibrated relative dB, so the
 	// axis reads "dB (rel.)" — default span −100…0 with an autoscale
@@ -241,18 +250,83 @@
 		dragX0 = dragX1 = null;
 	}
 
+	/**
+	 * §7 signal overlay (passive): active signals whose freqHz ±
+	 * bandwidthHz/2 intersects the frame span render as small ticks on
+	 * the line canvas, plus the Inspector's marked frequency (§6) as an
+	 * amber line. Reads stores directly — no per-event work beyond the
+	 * coalesced flush that marks the canvas dirty (§14.3).
+	 */
+	function drawSignalOverlay(f: SpectrumFrame | null): void {
+		const ctx = lineEl?.getContext('2d');
+		if (!ctx || !f || f.sampleRate <= 0) return;
+		const w = lineEl.width;
+		const h = lineEl.height;
+		const lo = f.freqHz - f.sampleRate / 2;
+		const span = f.sampleRate;
+		const xFor = (hz: number) => ((hz - lo) / span) * (w - 1);
+
+		// Inspector's marked frequency (spectrum span ↗ action).
+		const marked = $markedFreqHz;
+		if (marked !== null && marked >= lo && marked <= lo + span) {
+			const x = Math.round(xFor(marked)) + 0.5;
+			ctx.strokeStyle = '#f59e0b';
+			ctx.lineWidth = 1;
+			ctx.beginPath();
+			ctx.moveTo(x, 0);
+			ctx.lineTo(x, h);
+			ctx.stroke();
+		}
+
+		// Active-signal ticks (white) — derived once per redraw.
+		ctx.strokeStyle = '#e2e8f0';
+		ctx.fillStyle = '#cbd5e1';
+		ctx.font = '8px ui-monospace, monospace';
+		ctx.textAlign = 'center';
+		let drawn = 0;
+		for (const s of $signals) {
+			if (s.freqHz + s.bandwidthHz / 2 < lo || s.freqHz - s.bandwidthHz / 2 > lo + span) continue;
+			if (drawn >= 24) break; // label budget on narrow canvases
+			const x = Math.round(xFor(s.freqHz)) + 0.5;
+			if (x < 0 || x > w) continue;
+			ctx.beginPath();
+			ctx.moveTo(x, 0);
+			ctx.lineTo(x, 6);
+			ctx.stroke();
+			if (w / (f.sampleRate / 1e6) > 30 || drawn < 8) {
+				ctx.fillText(`${(s.freqHz / 1e6).toFixed(2)}`, x, 14);
+			}
+			drawn++;
+		}
+	}
+
 	onMount(() => {
 		const unsub = selectedSpectrum.subscribe(() => {
 			dirty = true;
 		});
+		// Overlay inputs also mark dirty (cheap booleans; the draw is
+		// bounded by the existing rAF + dirty gate).
+		const unsubSignals = signals.subscribe(() => {
+			dirty = true;
+		});
+		const unsubMarked = markedFreqHz.subscribe(() => {
+			dirty = true;
+		});
+		let lastDraw = 0;
 		const loop = () => {
 			if (dirty) {
-				dirty = false;
-				const rows = $selectedSpectrum?.rows ?? [];
-				const [lo, hi] = autoDb && rows.length > 0 ? autoRange(rows) : [DB_MIN, DB_MAX];
-				drawLine(latest, lo, hi);
-				drawWaterfall(rows, lo, hi);
-				drawTicks(latest);
+				const now = Date.now();
+				// §16: reduced motion → at most one redraw per second.
+				if (!REDUCED_MOTION || now - lastDraw >= 1000) {
+					dirty = false;
+					lastDraw = now;
+					const rows = $selectedSpectrum?.rows ?? [];
+					const [lo, hi] = autoDb && rows.length > 0 ? autoRange(rows) : [DB_MIN, DB_MAX];
+					drawLine(latest, lo, hi);
+					drawSignalOverlay(latest);
+					drawWaterfall(rows, lo, hi);
+					drawTicks(latest);
+				}
 			}
 			anim = requestAnimationFrame(loop);
 		};
@@ -260,6 +334,8 @@
 		return () => {
 			cancelAnimationFrame(anim);
 			unsub();
+			unsubSignals();
+			unsubMarked();
 		};
 	});
 </script>
@@ -301,6 +377,8 @@
 			width={bins}
 			height={96}
 			class="w-full rounded bg-slate-950"
+			role="img"
+			aria-label="Spectrum line, {spanLabel}, dB relative"
 		></canvas>
 		<div class="relative touch-none select-none">
 			<canvas
@@ -308,6 +386,8 @@
 				width={bins}
 				height={WATERFALL_ROWS}
 				class="mt-1 block w-full rounded bg-slate-950 cursor-crosshair"
+				role="img"
+				aria-label="Waterfall, {spanLabel}, drag to pick an analysis span"
 				on:pointerdown={dragDown}
 				on:pointermove={dragMove}
 				on:pointerup={dragUp}
@@ -330,7 +410,19 @@
 			{#if selLabel}
 				· <span class="text-sky-400">{selLabel}</span>
 			{/if}
+			{#if REDUCED_MOTION}
+				· <span class="text-amber-400">waterfall paused (reduced motion)</span>
+			{/if}
 		</div>
+		<span class="sr-only" aria-live="off">
+			{#if latest}
+				Spectrum {spanLabel}. Peak
+				{freqHz(latest.freqHz - latest.sampleRate / 2 + latest.db.indexOf(Math.max(...latest.db)) * latest.df)}
+				at {Math.max(...latest.db)} dB relative.
+			{:else}
+				No spectrum frames received yet.
+			{/if}
+		</span>
 		{#if !selection}
 			<div class="mt-0.5 text-[10px] text-slate-600">
 				drag across the waterfall to pick a span for time-frequency analysis

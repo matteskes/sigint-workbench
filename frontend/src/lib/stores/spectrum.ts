@@ -22,6 +22,12 @@ export const spectrum = writable<Record<string, SpectrumState>>({});
 /** The SDR whose frame the SpectrumView shows; null = follow the first. */
 export const selectedSdrId = writable<string | null>(null);
 
+/**
+ * A frequency marked by the Inspector's "spectrum span ↗" action (§6):
+ * SpectrumView draws a marker line at it; cleared by the workbench.
+ */
+export const markedFreqHz = writable<number | null>(null);
+
 export const spectrumSdrIds = derived(spectrum, ($s) => Object.keys($s).sort());
 
 /** Selected SDR's state, falling back to the lexicographically first SDR. */
