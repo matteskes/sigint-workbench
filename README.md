@@ -145,9 +145,10 @@ make setup
 #    fallback instead:
 #    curl -fsSL -o tiles/data/zurich_switzerland.mbtiles \
 #      https://github.com/maptiler/tileserver-gl/releases/download/v1.3.0/zurich_switzerland.mbtiles
-#    Custom regions serve under their file stem, so set
-#    VITE_TILE_URL=http://localhost:8082/data/<region>/{z}/{x}/{y}.pbf
-#    in frontend/.env for those.
+#    Custom regions: tileserver-gl serves the FIRST tiles/data/*.mbtiles
+#    (alphabetical) as source "v3" — exactly what the frontend's
+#    default VITE_TILE_URL targets — so keep one region's .mbtiles in
+#    tiles/data and run `docker compose restart tiles` after rendering.
 
 # 4a. macOS Development
 make dev
