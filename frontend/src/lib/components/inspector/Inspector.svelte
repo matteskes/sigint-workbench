@@ -16,6 +16,7 @@
 	import type { Signal } from '$lib/stores/signals';
 	import { signalLevels } from '$lib/stores/audio';
 	import { tracks, setTrack } from '$lib/stores/tracks';
+import { tdoaResults } from '$lib/stores/tdoa';
 	import { selectedSpectrum } from '$lib/stores/spectrum';
 	import { markedFreqHz } from '$lib/stores/spectrum';
 	import { requestMapCenter } from '$lib/stores/ui';
@@ -165,6 +166,14 @@
 	}
 
 	const level = $derived($signalLevels[signal.id]?.level ?? null);
+
+	// §9.6/§14.2: the latest TDOA attempt for this signal (last event
+	// wins) — renders the TDOA section below; MapView draws the locus.
+	const tdoa = $derived($tdoaResults[signal.id]);
+
+	function fmtM(m: number): string {
+		return m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${m.toFixed(0)} m`;
+	}
 </script>
 
 <div class="space-y-3 p-3">
@@ -248,6 +257,52 @@
 			{:else}
 				<div class="text-xs text-slate-500">
 					No position — signal not placable from current receivers (A1).
+				</div>
+			{/if}
+		</div>
+	</details>
+
+	<!-- ── TDOA (§9.6): the latest multilateration attempt ── -->
+	<details class="border-t border-slate-700 pt-3" open={!!tdoa}>
+		<summary class="cursor-pointer text-xs font-semibold uppercase tracking-wide text-slate-500">
+			TDOA{tdoa
+				? tdoa.accepted
+					? ' · fix'
+					: tdoa.locus
+						? ' · locus'
+						: ' · rejected'
+				: ''}
+		</summary>
+		<div class="mt-2">
+			{#if tdoa}
+				{#if tdoa.fix}
+					<div class="font-mono text-sm">
+						{tdoa.fix.lat.toFixed(5)}, {tdoa.fix.lng.toFixed(5)}
+					</div>
+					<div class="mt-1 grid grid-cols-2 gap-x-2 gap-y-1 text-[10px]">
+						<div><span class="text-slate-500">residual </span><span class="font-mono">{tdoa.fix.residualNs.toFixed(0)} ns</span></div>
+						<div><span class="text-slate-500">pairs </span><span class="font-mono">{tdoa.fix.pairsUsed}</span></div>
+						<div><span class="text-slate-500">baseline </span><span class="font-mono">{fmtM(tdoa.fix.maxBaselineM)}</span></div>
+						<div><span class="text-slate-500">covariance </span><span class="font-mono">{tdoa.fix.covPosDef ? 'pos-def' : 'singular'}</span></div>
+					</div>
+					{#if tdoa.persisted}
+						<div class="mt-1 text-[10px] text-green-400">
+							fix persisted{tdoa.reference ? ` (reference ${tdoa.reference})` : ''} — placement owned by TDOA (§9.6 flip-flop guard)
+						</div>
+					{/if}
+				{:else if tdoa.locus}
+					<div class="text-xs text-slate-400">
+						No unique fix — hyperbolic locus drawn on the map (§9.6).
+					</div>
+				{:else}
+					<div class="text-xs text-amber-400">rejected: {tdoa.reason ?? 'unknown reason'}</div>
+				{/if}
+				<div class="mt-1 text-[10px] text-slate-500" title={dateFull(tdoa.at)}>
+					receivers: {tdoa.receivers.join(', ')} · {relTime(tdoa.at)}
+				</div>
+			{:else}
+				<div class="text-xs text-slate-500">
+					No multilateration attempts — the engine needs tdoa.enabled and ≥2 receivers with positions (§9.6).
 				</div>
 			{/if}
 		</div>

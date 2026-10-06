@@ -11,6 +11,7 @@ import { sdrs, applySDRStatus } from './sdrs';
 import { applyAudioLevel, pruneSignalLevels, clearSignalLevel } from './audio';
 import { applyTrackUpdate, clearTrack } from './tracks';
 import { applySpectrumFrame } from './spectrum';
+import { applyTDOAEvent, clearTDOA } from './tdoa';
 
 export type ConnectionState = 'connecting' | 'live' | 'reconnecting' | 'offline';
 
@@ -71,7 +72,13 @@ function handleEvent(ev: WSEvent): void {
 				removeSignal(ev.payload.id);
 				clearSignalLevel(ev.payload.id);
 				clearTrack(ev.payload.id);
+				clearTDOA(ev.payload.id);
 			}
+			break;
+		case 'signal.tdoa':
+			// §9.6/§14.2: one multilateration attempt per event (fix,
+			// locus, or rejection). Last attempt wins (§14.3).
+			applyTDOAEvent(ev.payload);
 			break;
 		case 'sdr.status':
 			applySDRStatus(ev.payload);

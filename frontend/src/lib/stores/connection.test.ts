@@ -11,6 +11,7 @@ import {
 } from './connection';
 import { signals } from './signals';
 import { sdrs } from './sdrs';
+import { tdoaResults } from './tdoa';
 import { connectWebSocket, fetchSignals, fetchSDRs } from '$lib/api/client';
 import type { WSEvent } from '$lib/api/client';
 
@@ -100,6 +101,7 @@ beforeEach(() => {
 	lastSocket = null;
 	signals.set([]);
 	sdrs.set([]);
+	tdoaResults.set({});
 	connectionState.set('connecting');
 	connectionAttempt.set(0);
 	lastEventAt.set(0);
@@ -184,6 +186,29 @@ describe('connection store (§3.2)', () => {
 		lastSocket!.open();
 		lastSocket!.emit({ type: 'signal.removed', payload: { id: 'sig-1' } });
 		expect(get(signals).map((s) => s.id)).toEqual(['sig-2']);
+		stop();
+	});
+
+	it('ingests signal.tdoa and clears it on signal.removed (§9.6/§14.2)', () => {
+		const stop = startConnection();
+		lastSocket!.open();
+		lastSocket!.emit({
+			type: 'signal.tdoa',
+			payload: {
+				signalId: 'sig-tdoa',
+				freqHz: 145_500_000,
+				at: '2026-10-05T12:00:00Z',
+				accepted: false,
+				persisted: false,
+				receivers: ['rtlsdr-0', 'rtlsdr-1'],
+				locus: { lat1: 40.7, lng1: -74, lat2: 40.8, lng2: -73.9 }
+			}
+		});
+		expect(get(tdoaResults)['sig-tdoa'].locus).toBeDefined();
+		expect(get(lastEventAt)).toBeGreaterThan(0);
+		// signal.removed must take the TDOA state with it.
+		lastSocket!.emit({ type: 'signal.removed', payload: { id: 'sig-tdoa' } });
+		expect(get(tdoaResults)['sig-tdoa']).toBeUndefined();
 		stop();
 	});
 

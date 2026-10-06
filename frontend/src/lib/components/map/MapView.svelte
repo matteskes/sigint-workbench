@@ -12,6 +12,7 @@
 	import { mapStyle } from '$lib/map/config';
 	import { signals, selectedSignal, type Signal } from '$lib/stores/signals';
 	import { tracks } from '$lib/stores/tracks';
+import { tdoaResults } from '$lib/stores/tdoa';
 	import { sdrs, sdrRuntime } from '$lib/stores/sdrs';
 	import { layers, mapReceiverId, mapCenterRequest, type LayerToggles } from '$lib/stores/ui';
 	import { classHex } from '$lib/ui/classColor';
@@ -151,6 +152,25 @@
 				}
 			});
 
+			// ── selected signal's TDOA locus (§9.6): the hyperbolic arc
+			// between the two locus endpoints when a solve was inconclusive ──
+			map.addSource('tdoa-locus', {
+				type: 'geojson',
+				data: { type: 'FeatureCollection', features: [] }
+			});
+			map.addLayer({
+				id: 'tdoa-locus-line',
+				type: 'line',
+				source: 'tdoa-locus',
+				layout: { 'line-cap': 'round' },
+				paint: {
+					'line-color': '#a78bfa',
+					'line-width': 2,
+					'line-dasharray': [2, 2],
+					'line-opacity': 0.9
+				}
+			});
+
 			applyVisibility(get(layers));
 
 			// F1: map dot click selects (row click / map dot / ?signal= —
@@ -176,7 +196,7 @@
 			const groups: Record<string, string[]> = {
 				signals: ['signal-accuracy', 'signal-dots'],
 				labels: ['signal-labels'],
-				tracks: ['signal-track-line'],
+				tracks: ['signal-track-line', 'tdoa-locus-line'],
 				receivers: ['receiver-dots', 'receiver-sweep']
 			};
 			for (const [key, names] of Object.entries(groups) as [keyof LayerToggles, string[]][]) {
@@ -251,6 +271,38 @@
 			source?.setData(data as Parameters<maplibregl.GeoJSONSource['setData']>[0]);
 		});
 
+		// Selected signal's TDOA locus (§9.6): dashed violet segment
+		// between the two locus endpoints of the latest signal.tdoa
+		// attempt — shown while no unique fix exists (an accepted fix
+		// moves the signal dot instead). Rides the Tracks layer toggle:
+		// the same per-signal geometry overlay.
+		const locusData = derived([selectedSignal, tdoaResults], ([$sel, $t]) => {
+			const empty = { type: 'FeatureCollection' as const, features: [] as GeoJSON.Feature[] };
+			if (!$sel) return empty;
+			const loc = $t[$sel.id]?.locus;
+			if (!loc) return empty;
+			return {
+				type: 'FeatureCollection' as const,
+				features: [
+					{
+						type: 'Feature' as const,
+						geometry: {
+							type: 'LineString' as const,
+							coordinates: [
+								[loc.lng1, loc.lat1],
+								[loc.lng2, loc.lat2]
+							]
+						},
+						properties: {}
+					} as GeoJSON.Feature
+				]
+			};
+		});
+		const unsubLocus = locusData.subscribe((data) => {
+			const source = map.getSource('tdoa-locus') as maplibregl.GeoJSONSource | undefined;
+			source?.setData(data as Parameters<maplibregl.GeoJSONSource['setData']>[0]);
+		});
+
 		// Receivers: plotted only when the device row carries a position
 		// (0/0 rows are "unplaced" — never invented onto the map).
 		const receiverData = derived([sdrs, sdrRuntime], ([$sdrs, $rt]) => {
@@ -287,6 +339,7 @@
 			unsubSignals();
 			unsubLabels();
 			unsubTrack();
+			unsubLocus();
 			unsubReceivers();
 			unsubLayers();
 			unsubCenter();

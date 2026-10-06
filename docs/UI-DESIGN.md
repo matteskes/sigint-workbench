@@ -45,6 +45,7 @@ that is the rule the current UI already violates once (the orphaned
 | --- | --- | --- | --- |
 | Detection + classification (§5–6) | `signal.new/update/removed` on `/ws`; `GET /api/signals` (bbox, ≤500 rows, `last_seen DESC`) | `SignalList` overlay (windowed to 250), `SignalDetail` | No search/filter wired; no sorting; orphaned `SearchPanel.svelte` is imported nowhere |
 | Location: placement, A1 unlocated, tracking (§9.2–9.4) | map fields on `Signal`; `track.update` WS; `GET /api/signals/{id}/track` | Map dots + accuracy halos, track polyline, speed/heading grid | Unlocated signals are invisible (count nowhere); no receiver markers; no layer control |
+| TDOA multilateration (§9.6) | `signal.tdoa` WS per attempt (§14.2): fix, locus, or rejection | Inspector TDOA section; dashed locus segment on the map for the selected signal | Shipped with the A20 remediation; on-air validation still awaits a third receiver (§9.6 exit gate) |
 | Sweep scan park/resume (§7.4) | `POST /api/sdrs/{id}/scan`, `GET /api/sdrs/{id}/status` | Scan toggle inside `SDRControl` (left rail) | Only reachable from one narrow card; sweep state invisible on map/spectrum |
 | Manual tune / gain (§13.1) | `PUT /api/sdrs/{id}` forwards `freqHz` *and* `gainDb` to capture | Frequency input only (`retuneSdr`) | **No gain control at all** despite the endpoint accepting it |
 | Spectrum + waterfall (§18) | `spectrum.frame` WS (≤ `spectrum.rate_hz`), per-SDR sources | `SpectrumView` pinned to the bottom of a 256 px left rail | ~160 px tall; the system's richest live data gets the least room |
@@ -269,6 +270,8 @@ reordered by frequency of use:
 │   37.7749, −122.4194 ±120 m               │
 │   ▸ track: 34 km/h · 214° · Moving        │
 ├───────────────────────────────────────────┤
+│ ▸ TDOA     fix · 41 ns · 3 pairs · 8 km   │  ← latest attempt (§9.6)
+├───────────────────────────────────────────┤
 │ ▸ RECORDINGS (2)   09:14:03 · 8.2 s · IQ  │
 │                    [play] [analyze ↗]     │
 ├───────────────────────────────────────────┤
@@ -292,6 +295,16 @@ reordered by frequency of use:
   `lat/lon` are null the section reads "No position — signal not
   placable from current receivers (A1)" instead of hiding. Track block
   (speed/heading/moving) as today, fed by `fetchTrack` + `track.update`.
+- **TDOA (§9.6)** — the latest `signal.tdoa` attempt for the signal
+  (last event wins, §14.3; `tdoa` store, cleared on `signal.removed`).
+  An accepted fix shows the fix coordinates plus the quality surface
+  (residual ns, pairs used, max baseline, covariance flag) and, when
+  persisted, the reference receiver and the §9.6 flip-flop note. An
+  ungated solve shows the locus note — its dashed violet segment
+  renders on the map (rides the Tracks layer toggle). A rejection
+  shows the engine's reason verbatim. No attempts reads "No
+  multilateration attempts — the engine needs tdoa.enabled and ≥2
+  receivers with positions".
 - **Recordings** — per-signal list (existing `fetchRecordings(signalId)`),
   WAV → inline `AudioPlayer` playback via `GET /api/recordings/{id}/audio`;
   IQ → **`analyze ↗` routes to `/analysis?recording=<id>`** (replacing the
@@ -703,6 +716,7 @@ phases shipped on 2026-10-05** (single implementation pass).
 | First-run banner | `fetchSetupState` / `completeSetup` | §20.4–20.5 |
 | Settings wizard | `fetchSettings`, `saveSettings`, `SettingsValidationError` | §20.1–20.3 |
 | Connection pill | `connectWebSocket` lifecycle (moved to `connection` store) | §14, A3 |
+| Inspector TDOA section · map locus segment | `tdoa` store ← `signal.tdoa` WS (§14.2) | §9.6 |
 
 ## 20. Appendix B — deliberate non-features
 

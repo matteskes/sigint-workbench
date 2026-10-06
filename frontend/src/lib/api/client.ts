@@ -70,6 +70,7 @@ export type WSEventType =
 	| 'signal.new'
 	| 'signal.update'
 	| 'signal.removed'
+	| 'signal.tdoa'
 	| 'sdr.status'
 	| 'audio.level'
 	| 'track.update'
@@ -94,6 +95,42 @@ export interface SpectrumFrame {
 	bins: number;
 	df: number;
 	db: number[];
+}
+
+/**
+ * §14.2/§9.6 signal.tdoa payload — mirrors `tdoaEventPayload` in
+ * cmd/signal-processor/tdoa.go exactly. Every solve attempt arrives:
+ * an accepted fix (`fix` set), an ungated solve (`locus` set — the
+ * hyperbolic arc), or a rejection (`reason` set). Coordinates are
+ * WGS84 degrees; residualNs is the fix's pairwise residual in ns.
+ */
+export interface TDOAFix {
+	lat: number;
+	lng: number;
+	residualNs: number;
+	pairsUsed: number;
+	maxBaselineM: number;
+	covPosDef: boolean;
+}
+
+export interface TDOALocus {
+	lat1: number;
+	lng1: number;
+	lat2: number;
+	lng2: number;
+}
+
+export interface TDOAEvent {
+	signalId: string;
+	freqHz: number;
+	at: string;
+	accepted: boolean;
+	persisted: boolean;
+	reason?: string;
+	reference?: string;
+	receivers: string[];
+	fix?: TDOAFix;
+	locus?: TDOALocus;
 }
 
 /** Fetches active signals, optionally limited to a bounding box. */
