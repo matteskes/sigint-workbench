@@ -4,6 +4,14 @@ listen_port: 9010
 # Peak detection
 peak_detection:
   threshold_db: -60
+  # B4: a peak must clear the spectrum's own noise floor (median of
+  # the lower half of bins) by this many dB to be published. The
+  # absolute threshold_db gates uncalibrated dBFS and rides along
+  # with §5.6 calibration; the SNR gate is scale-free, so
+  # uncorrelated noise spikes die here while real carriers clear it
+  # by 20+ dB at the bugcheck's gains. ResolveFloat treats 0 as
+  # "unset" -> the shipped default 10, not "disabled".
+  min_snr_db: 10
   min_spacing_bins: 10
   max_peaks: 20
 

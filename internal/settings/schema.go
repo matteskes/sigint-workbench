@@ -148,6 +148,11 @@ func Schema() []Section {
 				{Key: "peak_detection.threshold_db", Label: "Peak threshold",
 					Type: "number", Unit: "dB", Group: "Peak detection",
 					Help: "Bins above this count as peaks (shipped -60)."},
+				{Key: "peak_detection.min_snr_db", Label: "Min SNR",
+					Type: "number", Unit: "dB", Group: "Peak detection",
+					Help: "Peaks must also clear the spectrum's own " +
+						"noise floor by this many dB (shipped 10) — " +
+						"scale-free noise gate (B4)."},
 				{Key: "peak_detection.min_spacing_bins", Label: "Min spacing",
 					Type: "number", Integer: true, Unit: "bins",
 					Group: "Peak detection", Min: f64(1),

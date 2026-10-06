@@ -184,6 +184,7 @@ func processingValues(data []byte) (map[string]any, error) {
 	}
 	return map[string]any{
 		"peak_detection.threshold_db":     cfg.PeakDetection.ThresholdDB,
+		"peak_detection.min_snr_db":       cfg.PeakDetection.MinSnrDB,
 		"peak_detection.min_spacing_bins": float64(cfg.PeakDetection.MinSpacingBins),
 		"peak_detection.max_peaks":        float64(cfg.PeakDetection.MaxPeaks),
 		"fft.size":                        float64(cfg.FFT.Size),

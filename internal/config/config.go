@@ -51,6 +51,7 @@ type SignalProcessorConfig struct {
 	ListenPort    int `yaml:"listen_port"`
 	PeakDetection struct {
 		ThresholdDB    float64 `yaml:"threshold_db"`
+		MinSnrDB       float64 `yaml:"min_snr_db"`
 		MinSpacingBins int     `yaml:"min_spacing_bins"`
 		MaxPeaks       int     `yaml:"max_peaks"`
 	} `yaml:"peak_detection"`

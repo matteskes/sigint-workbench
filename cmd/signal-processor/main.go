@@ -827,6 +827,7 @@ func main() {
 	configPath := flag.String("config", config.GetEnv("SDR_CONFIG", "config/sdr-capture.yaml"), "sdr-capture config (SDR locations)")
 	listenPortFlag := flag.Int("port", 0, "UDP listen port (overrides env/config)")
 	thresholdFlag := flag.Float64("threshold", 0, "peak threshold dB (overrides env/config)")
+	minSNRFlag := flag.Float64("min-snr", 0, "min SNR dB above the record's noise floor (overrides env/config; 0 = config/default)")
 	maxPeaksFlag := flag.Int("max-peaks", 0, "max peaks per frame (overrides env/config)")
 	modelPathFlag := flag.String("model", "", "ONNX classifier model path (overrides env/config; empty = rules only)")
 	flag.Parse()
@@ -846,6 +847,11 @@ func main() {
 
 	listenPort := config.ResolveInt(*listenPortFlag, envInt("LISTEN_PORT", 0), procCfg.ListenPort, 9010)
 	thresholdDB := config.ResolveFloat(*thresholdFlag, procCfg.PeakDetection.ThresholdDB, -60)
+	// B4: scale-free noise gate — peaks must clear the record's own
+	// floor (dsp.DetectNoiseFloor) by this margin to be published.
+	// threshold_db alone rides the uncalibrated dBFS scale and let
+	// noise publish as confident signals.
+	minSNRDB := config.ResolveFloat(*minSNRFlag, procCfg.PeakDetection.MinSnrDB, 10)
 	maxPeaks := config.ResolveInt(*maxPeaksFlag, procCfg.PeakDetection.MaxPeaks, 20)
 	modelPath := resolveClassifierModel(*modelPathFlag, os.Getenv("MODEL_PATH"), clsCfg.ModelPath, clsCfg.ONNX.Enabled)
 	minConfidence := clsCfg.ONNX.MinConfidence
@@ -901,6 +907,7 @@ func main() {
 	// DSP components
 	peakDetector := &dsp.PeakDetector{
 		ThresholdDB: thresholdDB,
+		MinSNRDB:    minSNRDB,
 		MinSpacing:  config.ResolveInt(procCfg.PeakDetection.MinSpacingBins, 10),
 		TopN:        maxPeaks,
 	}
@@ -996,8 +1003,8 @@ func main() {
 		log.Fatalf("listen: %v", err)
 	}
 	defer conn.Close()
-	log.Printf("listening on UDP :%d  threshold=%.0f dB  max_peaks=%d",
-		listenPort, thresholdDB, maxPeaks)
+	log.Printf("listening on UDP :%d  threshold=%.0f dB  min_snr=%.0f dB  max_peaks=%d",
+		listenPort, thresholdDB, minSNRDB, maxPeaks)
 	if fftSize != 0 {
 		log.Printf("fft: %d-pair buffers, %s window (§5.7)",
 			fftSize, procCfg.FFT.Window)
@@ -1170,9 +1177,6 @@ func processFrame(frame *sdr.IQFrame, pd *dsp.PeakDetector,
 		return nil
 	}
 
-	// Noise floor for SNR
-	noiseFloor := dsp.DetectNoiseFloor(result.PowerDB)
-
 	// Build events
 	// ONNX features must stay byte-compatible with the one-sided positive
 	// spectrum models/train.py was trained on, so the classifier sees the
@@ -1218,7 +1222,6 @@ func processFrame(frame *sdr.IQFrame, pd *dsp.PeakDetector,
 		return events[i].PowerDB > events[j].PowerDB
 	})
 
-	_ = noiseFloor // available for future SNR-based filtering
 	return events
 }
 

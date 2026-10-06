@@ -433,6 +433,41 @@ func TestProcessFrameClampsBelowZero(t *testing.T) {
 	}
 }
 
+// B4: the peak detector's SNR gate — a candidate must clear the
+// record's own noise floor (median of the lower half of bins) by
+// MinSNRDB, no matter where the absolute threshold sits. Before the
+// gate, threshold_db (-60) sat below the noise floor's absolute
+// dBFS level and every noise bump published as a signal.
+func TestPeakDetectorSnrGate(t *testing.T) {
+	spec := &dsp.FFTResult{
+		SampleRate:  256_000,
+		BinSpacing:  1000,
+		PowerDB:     make([]float64, 256),
+		Frequencies: make([]float64, 256),
+	}
+	for i := range spec.PowerDB {
+		spec.PowerDB[i] = -70 // flat noise floor
+		spec.Frequencies[i] = float64(i) * 1000
+	}
+	spec.PowerDB[100] = -55 // carrier: 15 dB over the floor
+	spec.PowerDB[140] = -65 // noise bump: only 5 dB over the floor,
+	// but comfortably above the absolute threshold below.
+
+	gated := &dsp.PeakDetector{ThresholdDB: -80, MinSNRDB: 10, MinSpacing: 20, TopN: 20}
+	peaks := gated.Detect(spec)
+	if len(peaks) != 1 || peaks[0].Index != 100 {
+		t.Fatalf("SNR gate: want only the bin-100 carrier, got %+v", peaks)
+	}
+
+	// MinSNRDB == 0 disables the gate: both peaks survive, matching
+	// pre-B4 behavior.
+	ungated := &dsp.PeakDetector{ThresholdDB: -80, MinSpacing: 20, TopN: 20}
+	peaks = ungated.Detect(spec)
+	if len(peaks) != 2 || peaks[0].Index != 100 || peaks[1].Index != 140 {
+		t.Fatalf("gate disabled: want bins 100 and 140, got %+v", peaks)
+	}
+}
+
 // §5.7: the assembled wire path — four 1024-pair frames concatenated
 // by dsp.FFTAssembler — must produce the same events as one
 // 4096-pair frame carrying the same samples (same peak, same power:

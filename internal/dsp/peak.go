@@ -16,8 +16,14 @@ type Peak struct {
 // PeakDetector finds peaks in a power spectrum above a threshold.
 type PeakDetector struct {
 	ThresholdDB float64 // Minimum power in dB
-	MinSpacing  int     // Minimum bins between peaks
-	TopN        int     // Max number of peaks to return
+	// MinSNRDB requires a peak to clear the spectrum's own noise
+	// floor (DetectNoiseFloor) by this many dB before it counts.
+	// Scale-free, unlike ThresholdDB: published power is
+	// uncalibrated dBFS and shifts with RF/IF gain (§5.6). 0
+	// disables the gate (B4).
+	MinSNRDB   float64
+	MinSpacing int // Minimum bins between peaks
+	TopN       int // Max number of peaks to return
 }
 
 // NewPeakDetector creates a peak detector with default settings.
@@ -32,7 +38,8 @@ func NewPeakDetector() *PeakDetector {
 // Detect finds the strongest spectral peaks above the threshold.
 //
 // It scans the full (one-sided or wrapped) spectrum, collects every local
-// maximum that clears ThresholdDB, then returns up to TopN of them, strongest
+// maximum that clears ThresholdDB (and, when MinSNRDB > 0, the spectrum's
+// own noise floor by MinSNRDB), then returns up to TopN of them, strongest
 // first, with at least MinSpacing bins between any two returned peaks.
 // Collecting candidates across the whole band before truncating means a
 // strong signal at a high bin offset can never be crowded out by
@@ -52,6 +59,16 @@ func (pd *PeakDetector) Detect(result *FFTResult) []Peak {
 		df = float64(result.SampleRate) / float64(n*2)
 	}
 
+	// B4: the SNR gate. threshold_db gates uncalibrated dBFS, which
+	// moves with gain and calibration; a peak that barely rises over
+	// the record's own floor is noise regardless of the absolute
+	// scale. Floor is computed once per record.
+	floor := 0.0
+	gate := pd.MinSNRDB > 0
+	if gate {
+		floor = DetectNoiseFloor(result.PowerDB)
+	}
+
 	// Pass 1: every local maximum above the threshold.
 	candidates := make([]Peak, 0, 32)
 	for i := 1; i < n-1; i++ {
@@ -61,6 +78,10 @@ func (pd *PeakDetector) Detect(result *FFTResult) []Peak {
 		}
 		// Above threshold?
 		if result.PowerDB[i] < pd.ThresholdDB {
+			continue
+		}
+		// Above the record's own noise floor?
+		if gate && result.PowerDB[i]-floor < pd.MinSNRDB {
 			continue
 		}
 		candidates = append(candidates, Peak{

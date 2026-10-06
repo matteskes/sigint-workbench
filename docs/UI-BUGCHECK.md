@@ -15,7 +15,7 @@ Status:
 | Fresh image build (incl. frontend, post-2026-10-06 edits) | `[done]` — all 6 images |
 | `make dev` bring-up, healthy single-owner bench | `[done]` (see §5 — took 3 launches) |
 | Route/asset/API/CORS/WS/tile sweep | `[done]` (§4) |
-| Bugs filed (B1–B5, §2; N1, §3) | B1–B3 `[fixed]`; B4–B5, N1 `[open]` |
+| Bugs filed (B1–B5, §2; N1, §3) | B1–B4 `[fixed]`; B5, N1 `[open]` |
 
 ## 1. Bench shape under test
 
@@ -87,6 +87,18 @@ The processor (SIGNAL_TTL=30, rules classifier) publishes noise peaks at
 Signals table and map render these as real, confidently-classified
 signals. Not frontend code — a detector-threshold/classifier issue —
 but it is what users see first on the dashboard.
+
+Fix: (1) gate on SNR, not absolute power — a peak must clear the
+record's own noise floor by a configurable margin, scale-free against
+§5.6 calibration; (2) correct the airband rule (AM voice, moderate
+confidence; non-voice bandwidths stay Unknown).
+
+Fixed 2026-10-06: `dsp.PeakDetector.MinSNRDB` (new `peak_detection.
+min_snr_db` knob, default 10 dB, exposed in §20 settings) drops
+sub-floor peaks using the previously discarded `noiseFloor`; the
+airband rule now yields AM/aviation at 0.6 (0/200 kHz bandwidths →
+Unknown/0.3). Regression tests in `rules_test.go` and
+`main_test.go` (`TestPeakDetectorSnrGate`).
 
 ### B5 — `make dev` restart fragility: zombie bench with false-green checks
 

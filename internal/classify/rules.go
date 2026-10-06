@@ -31,12 +31,18 @@ func (rc *RuleClassifier) Classify(freqHz uint64, bandwidthHz float64, spectrum 
 	confidence := 0.3 // low confidence for rule-based
 
 	switch {
-	// Aviation VHF (118-137 MHz)
+	// Aviation VHF airband (118-137 MHz): AM voice in 25 kHz (8.33
+	// in Europe) channels (B4 — was FM/WFM at 0.85, confidently
+	// mislabeling every airband-range noise peak). A voice-channel
+	// bandwidth confirms at moderate confidence; anything wider, or
+	// the single-bin spike estimateBandwidth reports as 0, falls
+	// through to Unknown at the default 0.3.
 	case freqHz >= 118_000_000 && freqHz <= 137_000_000:
-		modulation = "FM"
-		subType = "WFM"
-		source = "aviation"
-		confidence = 0.85
+		if bandwidthHz > 0 && bandwidthHz <= 40_000 {
+			modulation = "AM"
+			source = "aviation"
+			confidence = 0.6
+		}
 
 	// Marine VHF (156-174 MHz)
 	case freqHz >= 156_000_000 && freqHz <= 174_000_000:
