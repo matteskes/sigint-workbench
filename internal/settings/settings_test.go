@@ -322,9 +322,6 @@ func TestSchemaSnapshotCoversRepoConfigs(t *testing.T) {
 		t.Fatalf("tfr.max_nfft = %v, want 16384", got)
 	}
 	i := snap["ingest"]
-	if got := i["buffer_size"]; got != 256.0 {
-		t.Fatalf("buffer_size = %v, want 256", got)
-	}
 	if got := i["stats.interval_s"]; got != 5.0 {
 		t.Fatalf("stats.interval_s = %v, want 5", got)
 	}

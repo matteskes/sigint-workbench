@@ -182,24 +182,12 @@ func processingValues(data []byte) (map[string]any, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, err
 	}
-	step := cfg.Scan.StepHz
-	if step == 0 {
-		step = 100000
-	}
-	dwell := cfg.Scan.DwellMS
-	if dwell == 0 {
-		dwell = 50
-	}
 	return map[string]any{
 		"peak_detection.threshold_db":     cfg.PeakDetection.ThresholdDB,
 		"peak_detection.min_spacing_bins": float64(cfg.PeakDetection.MinSpacingBins),
 		"peak_detection.max_peaks":        float64(cfg.PeakDetection.MaxPeaks),
 		"fft.size":                        float64(cfg.FFT.Size),
 		"fft.window":                      cfg.FFT.Window,
-		"scan.step_hz":                    float64(step),
-		"scan.dwell_ms":                   float64(dwell),
-		"scan.min_freq_hz":                float64(cfg.Scan.MinFreqHz),
-		"scan.max_freq_hz":                float64(cfg.Scan.MaxFreqHz),
 		"tdoa.enabled":                    cfg.TDOA.Enabled,
 		"tdoa.window_ms":                  float64(config.ResolveInt(cfg.TDOA.WindowMS, 10)),
 		"tdoa.buffer_horizon_ms":          float64(config.ResolveInt(cfg.TDOA.BufferHorizonMS, 500)),
@@ -257,7 +245,6 @@ func ingestValues(data []byte) (map[string]any, error) {
 		return nil, err
 	}
 	return map[string]any{
-		"buffer_size":      float64(cfg.BufferSize),
 		"stats.interval_s": float64(cfg.Stats.IntervalS),
 	}, nil
 }

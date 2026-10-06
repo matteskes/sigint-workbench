@@ -121,14 +121,22 @@ func main() {
 	defer conn.Close()
 	log.Printf("listening on UDP :%d", listenPort)
 
+	// Stats goroutine — stats.interval_s from iq-ingest.yaml (§16.1),
+	// floored at 1 s (the §20 schema min); default 5 s when unset.
+	statsIntervalS := config.ResolveInt(fileCfg.Stats.IntervalS, 5)
+	if statsIntervalS < 1 {
+		log.Printf("stats.interval_s %d < 1; using 1", statsIntervalS)
+		statsIntervalS = 1
+	}
+	log.Printf("stats: reporting every %ds", statsIntervalS)
+
 	// Stats counters
 	var packetsRecv, packetsSent, bytesRecv, dropped atomic.Int64
 	seqs := sdr.NewSeqTracker() // §4.5/§9.6 per-sender gap accounting
 
-	// Stats goroutine
 	stopStats := make(chan struct{})
 	go func() {
-		ticker := time.NewTicker(5 * time.Second)
+		ticker := time.NewTicker(time.Duration(statsIntervalS) * time.Second)
 		defer ticker.Stop()
 		var lastPkt, lastSent int64
 		for {
@@ -139,8 +147,8 @@ func main() {
 				pkt := packetsRecv.Load()
 				sent := packetsSent.Load()
 				drop := dropped.Load()
-				rate := float64(pkt-lastPkt) / 5.0
-				sRate := float64(sent-lastSent) / 5.0
+				rate := float64(pkt-lastPkt) / float64(statsIntervalS)
+				sRate := float64(sent-lastSent) / float64(statsIntervalS)
 				lastPkt, lastSent = pkt, sent
 				if rate > 0 {
 					log.Printf("stats: %.0f pkt/s in, %.0f pkt/s out, %d dropped", rate, sRate, drop)

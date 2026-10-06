@@ -25,12 +25,9 @@ fft:
   # (train.py must mirror the window) AND a §6.2 recalibration.
   window: rectangular
 
-# Scan parameters
-scan:
-  step_hz: 100000     # 100 kHz frequency step
-  dwell_ms: 50        # 50 ms dwell per step
-  min_freq_hz: 24000000
-  max_freq_hz: 1700000000
+# The D3 scan loop is configured per device in sdr-capture.yaml (§7.1);
+# a `scan:` block that lived here was never read by the processor and
+# has been removed (STACK-AUDIT A8).
 
 # TDOA engine (§9.6) — disabled until §4.5 v2 frames flow
 # (sdr-capture stream_format: sdr2) and receivers carry lat/lon.

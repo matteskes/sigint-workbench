@@ -68,6 +68,20 @@ func publishLevels(ctx context.Context, rec *record.Recorder, hubURL string) {
 	}
 }
 
+// resolveAudioSampleRate applies the §16.5 default and enforces the
+// single supported rate: demod → AGC → Opus → WAV all run at 48 kHz
+// (§10.2/§10.4), so any other configured value produced subtly wrong
+// audio — it is now a hard startup error instead (A9).
+func resolveAudioSampleRate(hz uint32) (uint32, error) {
+	if hz == 0 {
+		return 48000, nil // §16.5 documented default
+	}
+	if hz != 48000 {
+		return 0, fmt.Errorf("audio.sample_rate %d: unsupported — the audio stack runs at 48000 Hz (§10.2/§10.4)", hz)
+	}
+	return hz, nil
+}
+
 func main() {
 	cfgPath := flag.String("config", config.GetEnv("RECORDER_CONFIG", "config/recorder.yaml"), "recorder YAML config")
 	listenPort := flag.Int("port", 0, "UDP IQ listen port (overrides env/config)")
@@ -85,7 +99,11 @@ func main() {
 		cfg.IQ.Enabled = true     // §16.5: raw IQ on by default
 		cfg.IQ.MaxDurationS = 300 // §16.5: 5 min session cap
 	}
-	port := config.ResolveInt(*listenPort, config.GetEnvInt("RECORDER_PORT", 0), cfg.ListenPort, 9011)
+	sampleRate, err := resolveAudioSampleRate(cfg.Audio.SampleRate)
+	if err != nil {
+		log.Fatalf("%v", err)
+	}
+	port := config.ResolveInt(*listenPort, config.GetEnvInt("RECORDER_UDP_PORT", 0), cfg.ListenPort, 9011)
 	wsPort := config.ResolveInt(*wsPortFlag, config.GetEnvInt("RECORDER_WS_PORT", 0), cfg.Stream.ListenPort, 9012)
 	dirPath := config.ResolveString(*dir, os.Getenv("RECORDINGS_DIR"), cfg.RecordingsDir, "./recordings")
 
@@ -111,7 +129,7 @@ func main() {
 	var streamer *record.Streamer
 	if audio.OpusAvailable {
 		streamer = record.NewStreamer(record.StreamConfig{
-			SampleRate: int(cfg.Audio.SampleRate),
+			SampleRate: int(sampleRate),
 			Channels:   cfg.Audio.Channels,
 			BitrateBps: cfg.Stream.BitrateBps,
 		})

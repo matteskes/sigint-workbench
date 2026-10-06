@@ -399,7 +399,7 @@ describe('setup screen (§20)', () => {
 						fields: []
 					}
 				],
-				values: { ingest: { buffer_size: 256 } }
+				values: { ingest: { 'stats.interval_s': 5 } }
 			})
 		);
 		vi.stubGlobal('fetch', fetchMock);
@@ -407,7 +407,7 @@ describe('setup screen (§20)', () => {
 		const idx = await fetchSettings();
 
 		expect(idx.sections).toHaveLength(1);
-		expect((idx.values.ingest as Record<string, unknown>).buffer_size).toBe(256);
+		expect((idx.values.ingest as Record<string, unknown>)['stats.interval_s']).toBe(5);
 		const url = new URL(fetchMock.mock.calls[0][0] as string);
 		expect(url.pathname).toBe('/api/settings');
 	});

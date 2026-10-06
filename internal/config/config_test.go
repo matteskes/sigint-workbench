@@ -102,7 +102,6 @@ func TestResolveString(t *testing.T) {
 func TestLoadIQIngestConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "iq-ingest.yaml")
 	content := `listen_port: 9000
-buffer_size: 256
 consumers:
   - name: signal-processor
     host: signal-processor
@@ -120,6 +119,9 @@ stats:
 	}
 	if cfg.ListenPort != 9000 {
 		t.Errorf("ListenPort = %d, want 9000", cfg.ListenPort)
+	}
+	if cfg.Stats.IntervalS != 5 {
+		t.Errorf("Stats.IntervalS = %d, want 5", cfg.Stats.IntervalS)
 	}
 	if len(cfg.Consumers) != 1 {
 		t.Fatalf("consumers = %d, want 1", len(cfg.Consumers))

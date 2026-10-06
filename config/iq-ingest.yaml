@@ -2,7 +2,6 @@
 # Used by: iq-ingest service
 
 listen_port: 9000
-buffer_size: 256
 
 # Fan-out targets (Docker service names)
 consumers:

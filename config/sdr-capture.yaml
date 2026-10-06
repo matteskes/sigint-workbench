@@ -71,6 +71,3 @@ scan:
     dwell_ms: 50 # dwell per frequency (default 50 ms)
     # min_hz: 24000000    # sweep start (default: driver minimum, RTL-SDR 24 MHz)
     # max_hz: 1766000000  # sweep end   (default: driver maximum, RTL-SDR 1766 MHz)
-
-    max_hz: 0
-    min_hz: 0

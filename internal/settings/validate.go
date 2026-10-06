@@ -165,11 +165,9 @@ func validateClassifier(cfg *config.ClassifierConfig) error {
 	return nil
 }
 
-// validateIngest applies the fan-out buffer bounds (§6.3).
+// validateIngest applies the stats reporting bounds (§16.1); the
+// buffer_size knob was removed with the fictional fan-out queue (A2).
 func validateIngest(cfg *config.IQIngestConfig) error {
-	if cfg.BufferSize != 0 && (cfg.BufferSize < 16 || cfg.BufferSize > 65536) {
-		return verr("buffer_size", "out of range 16-65536")
-	}
 	if cfg.Stats.IntervalS != 0 && cfg.Stats.IntervalS < 1 {
 		return verr("stats.interval_s", "must be at least 1")
 	}

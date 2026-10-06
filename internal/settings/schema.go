@@ -141,7 +141,7 @@ func Schema() []Section {
 			ID:    "processing",
 			Label: "Detection & Processing",
 			File:  "signal-processor.yaml",
-			Description: "Peak detection, FFT geometry, scan mirror, the §9.6 " +
+			Description: "Peak detection, FFT geometry, the §9.6 " +
 				"TDOA engine and the §18 spectrum tap.",
 			Restart: []string{"signal-processor"},
 			Fields: []Field{
@@ -169,17 +169,6 @@ func Schema() []Section {
 					Help:    "rectangular matches the unwindowed ONNX training.",
 					Warning: "Switching windows changes the power scale — retrain " +
 						"the model and recalibrate."},
-				{Key: "scan.step_hz", Label: "Sweep step", Type: "number", Integer: true,
-					Unit: "Hz", Group: "Scan mirror", Default: 100000, Min: f64(1000),
-					Help: "Keep in step with the capture scan loop."},
-				{Key: "scan.dwell_ms", Label: "Dwell", Type: "number", Integer: true,
-					Unit: "ms", Group: "Scan mirror", Default: 50, Min: f64(1)},
-				{Key: "scan.min_freq_hz", Label: "Scan range start", Type: "number",
-					Integer: true, Unit: "Hz", Group: "Scan mirror", Min: f64(0),
-					Help: "Shipped 87.5 MHz. 0 = driver default."},
-				{Key: "scan.max_freq_hz", Label: "Scan range end", Type: "number",
-					Integer: true, Unit: "Hz", Group: "Scan mirror", Min: f64(0),
-					Help: "Shipped 108 MHz. 0 = driver default."},
 				{Key: "tdoa.enabled", Label: "TDOA engine", Type: "bool",
 					Group: "TDOA (§9.6)", Default: false,
 					Help: "Requires §4.5 sdr2 frames and receiver lat/lon."},
@@ -285,7 +274,7 @@ func Schema() []Section {
 					Group: "Rules", Default: true,
 					Help: "Always-active fallback (§8.2)."},
 				{Key: "onnx.enabled", Label: "ONNX classifier", Type: "bool",
-					Group: "ONNX (§8.3)", Default: false,
+					Group: "ONNX (§8.3)", Default: true,
 					Help: "Needs the onnx-tagged build + model."},
 				{Key: "onnx.min_confidence", Label: "Min confidence", Type: "number",
 					Unit: "0-1", Group: "ONNX (§8.3)", Step: f64(0.05), Min: f64(0),
@@ -300,10 +289,6 @@ func Schema() []Section {
 				"targets are compose wiring and stay in iq-ingest.yaml by hand.",
 			Restart: []string{"iq-ingest"},
 			Fields: []Field{
-				{Key: "buffer_size", Label: "Fan-out buffer", Type: "number",
-					Integer: true, Unit: "frames", Group: "Fan-out", Min: f64(16), Max: f64(65536),
-					Help: "Per-consumer frame buffer (shipped 256); larger = more " +
-						"burst absorption, more memory."},
 				{Key: "stats.interval_s", Label: "Stats interval", Type: "number",
 					Integer: true, Unit: "s", Group: "Stats", Min: f64(1),
 					Help: "Shipped 5."},

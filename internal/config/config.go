@@ -40,7 +40,6 @@ func (c ConsumerConfig) Addr() string {
 // IQIngestConfig mirrors config/iq-ingest.yaml.
 type IQIngestConfig struct {
 	ListenPort int              `yaml:"listen_port"`
-	BufferSize int              `yaml:"buffer_size"`
 	Consumers  []ConsumerConfig `yaml:"consumers"`
 	Stats      struct {
 		IntervalS int `yaml:"interval_s"`
@@ -59,12 +58,6 @@ type SignalProcessorConfig struct {
 		Size   int    `yaml:"size"`
 		Window string `yaml:"window"`
 	} `yaml:"fft"`
-	Scan struct {
-		StepHz    uint64 `yaml:"step_hz"`
-		DwellMS   int    `yaml:"dwell_ms"`
-		MinFreqHz uint64 `yaml:"min_freq_hz"`
-		MaxFreqHz uint64 `yaml:"max_freq_hz"`
-	} `yaml:"scan"`
 	// TDOA engine (§9.6). Disabled by default; see the tdoa block in
 	// config/signal-processor.yaml for the per-key semantics.
 	TDOA TDOAConfig `yaml:"tdoa"`
@@ -125,13 +118,11 @@ type RecorderConfig struct {
 	ListenPort    int    `yaml:"listen_port"`
 	Audio         struct {
 		SampleRate uint32 `yaml:"sample_rate"`
-		Format     string `yaml:"format"`
 		Channels   int    `yaml:"channels"`
 	} `yaml:"audio"`
 	IQ struct {
-		Enabled      bool   `yaml:"enabled"`
-		Format       string `yaml:"format"`
-		MaxDurationS int    `yaml:"max_duration_s"`
+		Enabled      bool `yaml:"enabled"`
+		MaxDurationS int  `yaml:"max_duration_s"`
 	} `yaml:"iq"`
 	Retention struct {
 		MaxAgeDays int     `yaml:"max_age_days"`

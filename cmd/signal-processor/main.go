@@ -144,13 +144,13 @@ type publisher struct {
 
 	tracker *location.PairTracker // §8 two-SDR verification
 
-	mu        sync.Mutex
-	seen      map[string]time.Time // last activity per published signal ID
-	firstSeen map[string]time.Time
-	verified  map[string]bool       // signal IDs already verified (§8 latch)
-	lastSig   map[string]*db.Signal // last published payload per signal ID
-	tracks    map[string]*location.Track // §9.4 movement per signal ID
-	trackWrite map[string]time.Time     // last track persist/event per signal ID
+	mu         sync.Mutex
+	seen       map[string]time.Time // last activity per published signal ID
+	firstSeen  map[string]time.Time
+	verified   map[string]bool            // signal IDs already verified (§8 latch)
+	lastSig    map[string]*db.Signal      // last published payload per signal ID
+	tracks     map[string]*location.Track // §9.4 movement per signal ID
+	trackWrite map[string]time.Time       // last track persist/event per signal ID
 
 	// eng is the §9.6 TDOA engine, nil when tdoa.enabled is false.
 	// Set once at startup; publish() notifies it of detections and
@@ -737,10 +737,12 @@ type frameClassifier interface {
 }
 
 // onnxFrameClassifier runs the ONNX model on the peak's extracted
-// features; any failure (or missing features) falls back to rules.
+// features; any failure (or missing features) falls back to the rules
+// classifier — or to the Unknown placeholder when classifier.yaml has
+// rules.enabled=false (§8.2).
 type onnxFrameClassifier struct {
 	onnx          *classify.ONNXClassifier
-	rules         *classify.RuleClassifier
+	rules         frameClassifier
 	minConfidence float64 // §16.1: below this, the rules result wins
 }
 
@@ -772,6 +774,53 @@ func (c *onnxFrameClassifier) Classify(freqHz uint64, bandwidthHz float64, spect
 	return rules
 }
 
+// rulesFallback returns the classifier used when no ONNX result will
+// arrive: the rule table, or the Unknown placeholder when
+// classifier.yaml has rules.enabled=false (§8.2).
+func rulesFallback(rc *classify.RuleClassifier) frameClassifier {
+	if rc != nil {
+		return rc
+	}
+	return unknownClassifier{}
+}
+
+// unknownClassifier is the rules.enabled=false, no-ONNX
+// classification: band identification stays (it is geography, not a
+// classification rule), while modulation and source hold their §6.5
+// unknown values.
+type unknownClassifier struct{}
+
+func (unknownClassifier) Classify(freqHz uint64, bandwidthHz float64, _ *dsp.FFTResult) *classify.Result {
+	bandName := "Unknown"
+	if band := dsp.IdentifyBand(freqHz); band != nil {
+		bandName = band.Name
+	}
+	return &classify.Result{
+		Modulation: "Unknown",
+		BandName:   bandName,
+		Source:     "unknown",
+		Confidence: 0.3,
+		Method:     "rules",
+		Bandwidth:  bandwidthHz,
+		Frequency:  freqHz,
+	}
+}
+
+// resolveClassifierModel applies §16.1 precedence to the ONNX model
+// path: flag > env > classifier.yaml. onnx.enabled=false demotes the
+// YAML default; an explicit -model/MODEL_PATH still wins — the
+// operator asked for the model by name.
+func resolveClassifierModel(flagModel, envModel, yamlModel string, onnxEnabled bool) string {
+	if onnxEnabled {
+		return config.ResolveString(flagModel, envModel, yamlModel)
+	}
+	if explicit := config.ResolveString(flagModel, envModel, ""); explicit != "" {
+		log.Printf("classifier: onnx.enabled=false but -model/MODEL_PATH set; loading %s anyway", explicit)
+		return explicit
+	}
+	return ""
+}
+
 func main() {
 	procCfgPath := flag.String("processor-config", config.GetEnv("PROCESSOR_CONFIG", "config/signal-processor.yaml"), "signal-processor YAML config file")
 	clsCfgPath := flag.String("classifier-config", config.GetEnv("CLASSIFIER_CONFIG", "config/classifier.yaml"), "classifier YAML config file (min_confidence, model_path)")
@@ -798,7 +847,7 @@ func main() {
 	listenPort := config.ResolveInt(*listenPortFlag, envInt("LISTEN_PORT", 0), procCfg.ListenPort, 9010)
 	thresholdDB := config.ResolveFloat(*thresholdFlag, procCfg.PeakDetection.ThresholdDB, -60)
 	maxPeaks := config.ResolveInt(*maxPeaksFlag, procCfg.PeakDetection.MaxPeaks, 20)
-	modelPath := config.ResolveString(*modelPathFlag, os.Getenv("MODEL_PATH"), clsCfg.ModelPath)
+	modelPath := resolveClassifierModel(*modelPathFlag, os.Getenv("MODEL_PATH"), clsCfg.ModelPath, clsCfg.ONNX.Enabled)
 	minConfidence := clsCfg.ONNX.MinConfidence
 	if minConfidence <= 0 {
 		minConfidence = 0.5 // classifier.yaml documents 0.5 as the default
@@ -855,15 +904,24 @@ func main() {
 		MinSpacing:  config.ResolveInt(procCfg.PeakDetection.MinSpacingBins, 10),
 		TopN:        maxPeaks,
 	}
+	// classifier.yaml gates (§16.1): rules.enabled=false drops the rule
+	// table — peaks then classify Unknown unless the ONNX model refines
+	// them; onnx.enabled=false (or a failed model load) leaves the
+	// rules fallback in place.
 	ruleClassifier := classify.NewRuleClassifier()
-	var classifier frameClassifier = ruleClassifier
+	if !clsCfg.Rules.Enabled {
+		ruleClassifier = nil
+		log.Printf("classifier: rules.enabled=false — peaks classify Unknown without a matching ONNX result (§8.2)")
+	}
+	fallback := rulesFallback(ruleClassifier)
+	var classifier frameClassifier = fallback
 	if modelPath != "" {
 		onnxClassifier := classify.NewONNXClassifier(modelPath)
 		if err := onnxClassifier.Load(); err != nil {
 			log.Printf("ONNX classifier unavailable (%v); using rules", err)
 		} else {
 			defer onnxClassifier.Close()
-			classifier = &onnxFrameClassifier{onnx: onnxClassifier, rules: ruleClassifier, minConfidence: minConfidence}
+			classifier = &onnxFrameClassifier{onnx: onnxClassifier, rules: fallback, minConfidence: minConfidence}
 			log.Printf("loaded ONNX classifier %s (min_confidence=%.2f)", modelPath, minConfidence)
 		}
 	}
