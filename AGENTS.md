@@ -8,7 +8,7 @@ Real-time multi-SDR signal monitoring, classification, recording, and
 geospatial visualization.
 
 - `docs/SPEC.md` is the source of truth for behavior. Sections are
-  cited as `§N.N`; locked decisions as `D1`–`D8`, `H1`–`H2`, `A1`–`A6`.
+  cited as `§N.N`; locked decisions as `D1`–`D11`, `H1`–`H3`, `A1`–`A6`.
 - Every SPEC section carries a status tag: `[implemented]`,
   `[planned]`, `[gap]`. Change code and docs together.
 - Services live in `cmd/` (one main.go each): `sdr-capture`,

@@ -265,7 +265,7 @@ func Schema() []Section {
 			ID:    "classifier",
 			Label: "Classifier",
 			File:  "classifier.yaml",
-			Description: "Rules + ONNX classification (§8). The model file " +
+			Description: "Rules + ONNX classification (§6). The model file " +
 				"itself is git-lfs and volume-mounted — train and swap it on " +
 				"disk, not here.",
 			Restart: []string{"signal-processor"},

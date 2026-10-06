@@ -17,7 +17,7 @@ Every section carries a status tag:
 Unmarked subsections are descriptive context (no requirement).
 
 A **Design references** index in Appendix A maps the locked decisions
-(D1–D8, H1–H2, A1–A6) to the sections that carry their normative text.
+(D1–D11, H1–H3, A1–A6) to the sections that carry their normative text.
 
 ## 1. Purpose & Scope
 
@@ -138,11 +138,12 @@ db (PostGIS :5432, internal) <── signal-processor, api-gateway
 
 ## 3. Deployment & Ports
 
-**Status: `[implemented]` for current compose files; the A3
-published-port reduction is partially done — `db:5432` and
-`ws-hub:8081` went internal-only in Phase 2; `9000/udp` (ingest),
-`8080` (gateway) and `3000` (frontend) remain the exposed surface
-(§17.2).**
+**Status: `[implemented]` for the current compose files. The only
+interfaces published on all host interfaces are `8080` (gateway),
+`8082` (tiles), `3000` (frontend) and UDP `9000`/`9011`; `ws-hub:8081`
+and `db:5432` stay published on `127.0.0.1` only — loopback dev-bench
+exceptions documented below, not the "publish removed" state earlier
+revisions claimed (A5, §17.2).**
 
 ### 3.1 Deployment modes
 
@@ -161,19 +162,20 @@ published-port reduction is partially done — `db:5432` and
 | 8080 | TCP | api-gateway | **published — only client ingress** | `[implemented]` |
 | 8082 | TCP | tiles | published | `[implemented]` |
 | 3000 | TCP | frontend (nginx) | published | `[implemented]` |
-| 9000 | UDP | capture → ingest (S1) | published (host-side dev) | `[implemented]` |
-| 9001 | UDP | capture → ingest (S2) | published (host-side dev) | `[implemented]` |
+| 9000 | UDP | capture → ingest (one port serves all SDRs, §16.4) | published (host-side dev) | `[implemented]` |
 | 9010 | UDP | processor IQ input | internal only | `[implemented]` |
-| 9011 | UDP | recorder IQ input | internal only | `[implemented]` — `CONSUMERS` fan-out; published for host-side dev |
+| 9011 | UDP | recorder IQ input | published (UDP; `CONSUMERS` fan-out; used when the recorder joins a host dev bench) | `[implemented]` |
 | 9012 | TCP | recorder live audio WS (`/ws/audio`) | internal only | `[implemented]` (§10.4) — via the gateway `/ws/audio` relay |
 | 9013 | TCP | recorder TFR API (`/api/recordings/{id}/tfr`) | internal only | `[implemented]` (§19) — via the gateway TFR proxy |
-| 8081 | TCP | ws-hub (events) | internal only | `[implemented]` — via gateway `/ws` relay |
+| 8081 | TCP | ws-hub (events) | loopback only (`127.0.0.1:8081`, native macOS publisher bench) | `[implemented]` — browsers via the gateway `/ws` relay |
 | 9090 | TCP | capture control API | internal only | `[implemented]` — loopback bind in dev, unpublished in compose; gateway proxies tune/gain/status (§13.1) |
-| 5432 | TCP | db (PostGIS) | internal only | `[implemented]` — compose publish removed (`make db-migrate` / `exec psql` for host access) |
+| 5432 | TCP | db (PostGIS) | loopback only (`127.0.0.1:5432`, native macOS bench DB) | `[implemented]` — container-internal otherwise (`make db-migrate` / `exec psql` for host access) |
 
-The target surface exposed on the host is exactly: `8080`, `8082`,
-`3000`, and UDP `9000`/`9001` (needed only while capture runs on the
-host in dev mode).
+The surface exposed on all host interfaces is exactly: `8080`, `8082`,
+`3000` (TCP) and UDP `9000`/`9011`. Two loopback-only publishes exist
+for the native macOS bench (§3.1): `127.0.0.1:8081` (ws-hub, the
+native signal-processor's event feed) and `127.0.0.1:5432` (db, its
+host-side database) — both unreachable off-host (§17.2).
 
 ### 3.3 Environment
 
@@ -187,9 +189,10 @@ Frontend build/runtime reads `VITE_API_URL`,
 ## 4. IQ Wire Protocol
 
 **Status: `[implemented]` — normative byte layout below is the exact
-current behavior (`internal/sdr/protocol.go`). §4.5 defines the frame
-v2 layout as a **DRAFT** (Phase 4 slice 4, awaiting design review —
-not yet implemented).**
+current behavior (`internal/sdr/protocol.go`). §4.5's frame v2 layout
+is `[implemented]` too (A6): v2 encode/decode shipped, every consumer
+decodes it, and `stream_format: sdr2` is the TDOA-enabled wire format
+(§9.6).**
 
 ### 4.1 Framing
 
@@ -479,7 +482,7 @@ calibration is switched on.
 ### 5.7 Noise floor & frame-level extras
 
 - `DetectNoiseFloor`: median of the **lower 50 %** of bins
-  (selection sort; n is small).
+  (sorted median, O(n log n) — mirrors train.py's `np.sort`).
 - AGC (used for live audio level, §10.6): target peak **0.95**,
   attack **1 sample**, release **50 samples**, hard-clip at ±1.0.
 - **FFT geometry (wired):** `fft.size` (default 4096 pairs) is the
@@ -1358,8 +1361,8 @@ pinned frequency for the rest of the session.
 Per recording session the recorder writes:
 
 - **WAV** (`[implemented]`, always): 16-bit PCM mono, 48 kHz —
-  `EncodeWAV` (RIFF, `fmt` chunk PCM/1ch/16-bit, `data` chunk,
-  all little-endian).
+  `WAVWriter` (RIFF, `fmt` chunk PCM/1ch/16-bit, `data` chunk, all
+  little-endian; byte-identical to the test-only `EncodeWAV`, §10.2).
 - **Raw IQ** (`[implemented]`, slice 7, when `iq.enabled`, §16.5):
   `int16[2n]` interleaved I/Q, headerless, little-endian, at the
   capture sample rate — the per-signal **frequency-shifted baseband**
@@ -1966,8 +1969,8 @@ built-in default):
 | --------- | ------- |
 | sdr-capture | `config/sdr-capture.yaml` (via `-config`), flags `-sim/-freq/-gain/-listen` |
 | iq-ingest | `config/iq-ingest.yaml` (`-config`/`CONFIG`); env `LISTEN_PORT`, `CONSUMERS` and flags `-port/-consumers` override |
-| signal-processor | `config/signal-processor.yaml` + `config/classifier.yaml` (`-processor-config`/`-classifier-config`); flags `-port/-threshold/-max-peaks/-model` and env `SIGNAL_TTL`, `SDR_CONFIG`, `MODEL_PATH`, `WS_HUB_URL` override |
-| recorder | `config/recorder.yaml` (`-config`); flags `-port/-ws-port/-dir` and env `RECORDER_PORT`, `RECORDER_WS_PORT`, `RECORDINGS_DIR`, `WS_HUB_URL` (§10.6 `audio.level` publisher; unset = disabled) override |
+| signal-processor | `config/signal-processor.yaml` + `config/classifier.yaml` (`-processor-config`/`-classifier-config`); flags `-port/-threshold/-max-peaks/-model` and env `SIGNAL_TTL`, `SDR_CONFIG`, `MODEL_PATH`, `WS_HUB_URL`, `CAPTURE_API_HOST` (§5.6 polling) override |
+| recorder | `config/recorder.yaml` (`-config`); flags `-port/-ws-port/-dir` and env `RECORDER_UDP_PORT`, `RECORDER_WS_PORT`, `RECORDER_TFR_PORT`, `RECORDINGS_DIR`, `WS_HUB_URL` (§10.6 `audio.level` publisher; unset = disabled) override |
 | api-gateway | env `RECORDINGS_DIR`, `ALLOWED_ORIGINS` (CORS allowlist, §17.2), `WS_HUB_ADDR` (`/ws` relay, §2.2), `RECORDER_WS_ADDR` (`/ws/audio` relay, §10.4), `CAPTURE_CTRL_ADDR` (control proxy, §7.4), `CONFIG_DIR` (writable config dir backing the setup screen, §20) |
 
 **Target:** the YAML files in `config/` are the **single source of
@@ -1980,13 +1983,25 @@ Known YAML-vs-behavior conflicts:
 - `classifier.yaml` `onnx.min_confidence: 0.5` — **enforced**
   (`[implemented]`): an ONNX result below the threshold falls back to
   the rules classification (whose `method` stays `rules`).
-- `recorder.yaml` `audio.format` — resolved (Phase 1): `flac`
-  removed; only `wav` is documented (§10.5).
+- `classifier.yaml` `rules.enabled` / `onnx.enabled` — resolved (A2):
+  both are honored. `rules.enabled: false` classifies peaks Unknown
+  unless ONNX refines them; `onnx.enabled: false` makes the YAML
+  `model_path` inert unless `-model`/`MODEL_PATH` names one explicitly.
+- `recorder.yaml` `audio.format` / `iq.format` — resolved (A14): the
+  decorative `format` keys are removed — the recorder only ever writes
+  WAV (§10.5) and raw int16 IQ.
+- `iq-ingest.yaml` `buffer_size` — resolved (A2): removed; the
+  256-frame receiver buffer it claimed to size never existed.
+  `stats.interval_s` is wired (default 5 s, floored at 1 s).
 - `signal-processor.yaml` `fft.*` — resolved (§5.7): `size` assembles
   the FFT record from ≤ 1024-pair wire frames; `window` ships as
   `rectangular` for ONNX-model parity.
-- `signal-processor.yaml` `spectrum.*` — `[planned]` (§18.4):
-  `enabled`/`bins`/`rate_hz` for the §18 dashboard spectrum tap.
+- `signal-processor.yaml` `scan:` — resolved (A8): removed; the D3
+  scan loop is configured in `sdr-capture.yaml` (§7.1), the processor
+  never read this block.
+- `signal-processor.yaml` `spectrum.*` — resolved (Phase 4 slice 9,
+  §18.4): `enabled`/`bins`/`rate_hz` drive the §18 dashboard spectrum
+  tap.
 - `sdr-capture.yaml` `driver: simulator` — resolved (Phase 3,
   slice 0): the loader accepts `simulator`; the two-device dev
   fixture `config/sdr-capture.sim.yaml` shares one ingest port
@@ -2045,13 +2060,14 @@ sdrs[]:
 | `LISTEN_PORT` | 9000 | UDP receive port. **One port serves all SDRs** — frames carry `sdr_id`, so capture devices may point `stream_port` at the same ingest port (`config/sdr-capture.sim.yaml` does this); a per-device port list remains unnecessary in v1 |
 | `CONSUMERS` | `signal-processor:9010` | csv of fan-out targets; add `recorder:9011` for audio demod/recording (compose default: both) |
 
-Stats log interval: 5 s. Buffer: 256 frames.
+Stats log interval: `stats.interval_s` (default 5 s, floored at 1 s;
+§20). The old `buffer_size` knob is gone — the 256-frame receiver
+buffer it pretended to size never existed (A2).
 
 ### 16.5 `recorder.yaml`
 
 ```textrecordings_dir        string  /recordings
-audio.sample_rate     int     48000
-audio.format          string  wav          (wav only; FLAC unsupported, §10.5)
+audio.sample_rate     int     48000        (48 kHz only — startup-validated, §10.2)
 audio.channels        int     1
 iq.enabled            bool    true         (raw int16 interleaved, §10.5)
 iq.max_duration_s     int     300          (session cap, §11.1; <0 uncapped)
@@ -2073,21 +2089,22 @@ stream.bitrate_bps     int    24000        (Opus CBR, mono, 20 ms frames)
 | ----- | --------- | --------- |
 | `POSTGRES_USER/PASSWORD/DB` | db | credentials (container) |
 | `DB_URL` | processor, gateway, (recorder) | `postgres://sdr:sdr@db:5432/sdr?sslmode=disable` (compose default); host-side tooling uses `@localhost:5432` |
-| `SDR_CAPTURE_UDP_PORT_0/1` | sdr-capture (host bind) | 9000/9001 |
-| `IQ_INGEST_UDP_PORT` | iq-ingest | 9000 |
-| `SIGNAL_PROCESSOR_PORT` | signal-processor | 9010 |
-| `RECORDER_PORT` | recorder | 9011 (UDP IQ in) |
+| `IQ_INGEST_UDP_PORT` | iq-ingest | 9000 (one port serves all SDRs, §16.4) |
+| `RECORDER_UDP_PORT` | recorder | 9011 (UDP IQ in) |
 | `RECORDER_WS_PORT` | recorder | 9012 (`/ws/audio` WS, §10.4) |
+| `RECORDER_TFR_PORT` | recorder | 9013 (internal TFR API override, §19.3) |
 | `RECORDER_API_ADDR` | api-gateway | `recorder:9013` (TFR proxy target, §19.3) |
-| `API_GATEWAY_PORT` / `WS_HUB_PORT` | gateway / hub | 8080 / 8081 |
+| `CAPTURE_API_HOST` | signal-processor | capture control-API host for §5.6 gain polling (`sdr-capture` default; macOS dev: `host.docker.internal`) |
+| `API_GATEWAY_PORT` | api-gateway | 8080 |
 | `TILE_SERVER_PORT` | tiles | 8082 |
-| `VITE_API_URL` / `VITE_WS_URL` / `VITE_TILE_URL` | frontend build | gateway `:8080` (target), tiles `:8082` |
+| `VITE_API_URL` / `VITE_WS_URL` / `VITE_TILE_URL` | frontend build | gateway `:8080` (target, `/ws` relay), tiles `:8082` |
 | `LOG_LEVEL` | all | zerolog level |
 
-Legacy vars `CLASSIFIER_PORT` (9011) and
-`LOCATION_SERVICE_PORT` (9013) belong to the retired stubs and are
-removed from compose with the stubs (D2); 9013 is reused by the
-recorder TFR API (§19).
+Per-device capture stream targets are YAML, not env
+(`sdr-capture.yaml` `stream_host`/`stream_port`, §16.2). The retired
+stub vars `CLASSIFIER_PORT`/`LOCATION_SERVICE_PORT` and the
+never-consumed `SDR_CAPTURE_UDP_PORT_*`, `SIGNAL_PROCESSOR_PORT` and
+`WS_HUB_PORT` are gone from `.env.example` (A4).
 
 ## 17. Non-Functional Requirements, Security & Quality
 
@@ -2122,9 +2139,10 @@ or measured where tagged. No single implementation contract.**
 
 - **Trust domain:** single host / trusted LAN (v1). No
   authentication, no TLS — accepted risk, documented.
-- **Exposed surface (target, A3):** only `8080`, `8082`, `3000`
-  (TCP) and UDP `9000`/`9001`. DB, hub, capture control, and
-  recorder are network-internal (§3.2).
+- **Exposed surface (A3):** `8080`, `8082`, `3000` (TCP) and UDP
+  `9000`/`9011`. DB and hub are additionally published on
+  `127.0.0.1` only — loopback dev-bench exceptions (§3.2); capture
+  control and the recorder's TCP surfaces stay network-internal.
 - **`[implemented]` CORS:** the gateway allowlists origins via
   `ALLOWED_ORIGINS` (default: the frontend origins
   `http://localhost:3000` / `http://localhost:5173`; set-but-empty
@@ -2257,7 +2275,7 @@ stores and the API client; `svelte-check` for types.
 | **1 — Correctness** | D4 negative offsets; A1 unlocated signals; §6.5 class enum; dead `/ws` hub removal; FLAC-claim cleanup (code + README); CORS/origin tightening — all **done** | new tests per §17.3 green; docs match behavior |
 | **2 — Features** | §15.3 RTL-SDR defect fixes; §10.1 real SSB + pair-aware registry; §11.2 active/TTL lifecycle; `sdr.status` producer (§14.4.3); `GET /ws` gateway relay (§2.2, A3); frontend data wiring (§14.4.2); YAML config loading + `min_confidence` enforcement (§16.1); **slices 1–3:** D3 scan loop + §7.4 control status; §8 dual-SDR verification with verified latch; recorder (D1 in-band WAV + §11.3 retention); first live `TEST_DATABASE_URL` integration run (§17.3); **slice 4:** Opus live streaming recorder side (D1b, §10.3–§10.4: per-signal mux + `/ws/audio` server + `Dockerfile.recorder`); **slice 5:** `/ws/audio` gateway relay (§2.2, §10.4); control-API proxy — `PUT /api/sdrs/{id}` retune forwarding + `GET /api/sdrs/{id}/status` (§7.4, §13.1, §13.2.3) — **all delivered** | §17.3 obligations green; dashboard live end-to-end |
 | **3 — Hardware & fidelity** | RTL-SDR on-hardware validation (§15.3 defect fixes delivered in Phase 2); HackRF driver (H1/H2) — **delivered, compile-validated** (§15.4); power calibration contract (§5.6) — **delivered** (contract + mechanism + honesty flag; measuring each SDR's physical offset → docs/HARDWARE.md runbook, slice 3); **slice 0:** multi-SDR sim enablement — `driver: simulator` accepted via YAML + two-device shared-ingest-port rehearsal (§16.1, §16.4) — **delivered**; `min_confidence` enforcement (§16.1) — **delivered in Phase 2**; **slice 3:** RTL-SDR on-hardware validation runbook + calibration tooling — docs/HARDWARE.md, cmd/rtl-list, cmd/rtl-calibrate (§15.3, §5.6) — **delivered and executed 2026-10-04** (V1–V8 pass, offsets applied); **fft fidelity:** §5.7 `fft.size`/`fft.window` wired end-to-end — signal-processor assembles 4096-pair records, rtl-calibrate `-fft-size`, ONNX inference reachable on the native bench (`make ort-lib`, `-tags onnx`) — **delivered 2026-10-04** (offsets recalibrated at the 4096 geometry per §6.3; §8 session 2) | 2 real SDRs verified end-to-end; calibration documented — **met 2026-10-04** (RTL-SDR half; HackRF deferred, no hardware) |
-| **4 — Deferred** | **in progress** — **slice 0:** D2 stub removal (`cmd/classifier`, `cmd/location-service`, compose entries; `Dockerfile.classifier` builds signal-processor only) — **delivered**; **slice 1:** annotations — `GET/POST /api/signals/{id}/annotations` + SignalDetail notes UI — **delivered**; **slice 2:** `audio.level` coarse feed recorder → hub → frontend — **delivered** (scope settled: one event per actively demodulated §10.2 session); **slice 3:** tracking — populate `tracks` from consecutive placements (§9.4, §12.4) — **delivered** (1 Hz persist + `track.update`, final row on TTL sweep, `GET /api/signals/{id}/track`, SignalDetail speed/heading, MapView polyline); **slice 4:** TDOA design — normative §9.5 + §4 frame v2 sample-accurate timing (design review gate) — **delivered** (review passed 2026-10-04); **slice 5:** TDOA engine — simulator first (injected offsets), then 3-SDR on-air fix — **engine + simulator, §4.5 v2 codec + dual-format consumers + per-sender gap counters, migration 004 quality columns, and §9.6 processor wiring (`signal.tdoa`, fix persistence, flip-flop guard) delivered** (on-air validation remains — runbook: docs/HARDWARE.md §7); **slice 6:** multi-host + NTP/PTP — remote capture hosts, sync-quality reporting (§16); **slice 7: audio parity — §10.5 raw-IQ writer (`iq.enabled`), §11.1 max-duration enforcement (`iq.max_duration_s`), §10.4 live browser Opus playback (dashboard consumes `/ws/audio`) — delivered 2026-10-04**; **slice 8:** dashboard retune UI wired to the `PUT /api/sdrs/{id}` control-API proxy (§7.4, §13.1) — delivered 2026-10-04; **slice 9:** spectrum analyzer + waterfall (§18) — design locked (D9), implementation planned; **slice 10:** Heimdall DAQ front end (H3, §15.5) — `[planned]`: `driver: heimdall` TCP client (IQ :5000 + control :5001), per-channel logical SDRs with unit-wide tuning/scan, same-unit verification suppression | per-slice; slices 4–5: TDOA fix on a known on-air transmitter; slice 6: second capture host with NTP/PTP sync-quality reporting; slice 7: raw-IQ + duration-cap tests, live playback on the dashboard — **met 2026-10-04** (Go + vitest gates green; browser playback unit-tested against the §10.4 contract with stub WebCodecs — not verified in a real browser session); slice 8: retune client tests — met (vitest API-client suite, svelte-check clean); slice 9: §18 tap + display with §17.3 obligations green on the dashboard; slice 10: §17.3 H3 suite green against the in-process fake DAQ; bench validation on a KrakenSDR deferred to hardware availability (checklist → docs/HARDWARE.md) |
+| **4 — Deferred** | **in progress** — **slice 0:** D2 stub removal (`cmd/classifier`, `cmd/location-service`, compose entries; `Dockerfile.classifier` builds signal-processor only) — **delivered**; **slice 1:** annotations — `GET/POST /api/signals/{id}/annotations` + SignalDetail notes UI — **delivered**; **slice 2:** `audio.level` coarse feed recorder → hub → frontend — **delivered** (scope settled: one event per actively demodulated §10.2 session); **slice 3:** tracking — populate `tracks` from consecutive placements (§9.4, §12.4) — **delivered** (1 Hz persist + `track.update`, final row on TTL sweep, `GET /api/signals/{id}/track`, SignalDetail speed/heading, MapView polyline); **slice 4:** TDOA design — normative §9.5 + §4 frame v2 sample-accurate timing (design review gate) — **delivered** (review passed 2026-10-04); **slice 5:** TDOA engine — simulator first (injected offsets), then 3-SDR on-air fix — **engine + simulator, §4.5 v2 codec + dual-format consumers + per-sender gap counters, migration 004 quality columns, and §9.6 processor wiring (`signal.tdoa`, fix persistence, flip-flop guard) delivered** (on-air validation remains — runbook: docs/HARDWARE.md §7); **slice 6:** multi-host + NTP/PTP — remote capture hosts, sync-quality reporting (§16); **slice 7: audio parity — §10.5 raw-IQ writer (`iq.enabled`), §11.1 max-duration enforcement (`iq.max_duration_s`), §10.4 live browser Opus playback (dashboard consumes `/ws/audio`) — delivered 2026-10-04**; **slice 8:** dashboard retune UI wired to the `PUT /api/sdrs/{id}` control-API proxy (§7.4, §13.1) — delivered 2026-10-04; **slice 9:** spectrum analyzer + waterfall (§18) — delivered 2026-10-04 (tap + relay + dashboard canvas; §18 status above); **slice 10:** Heimdall DAQ front end (H3, §15.5) — `[planned]`: `driver: heimdall` TCP client (IQ :5000 + control :5001), per-channel logical SDRs with unit-wide tuning/scan, same-unit verification suppression | per-slice; slices 4–5: TDOA fix on a known on-air transmitter; slice 6: second capture host with NTP/PTP sync-quality reporting; slice 7: raw-IQ + duration-cap tests, live playback on the dashboard — **met 2026-10-04** (Go + vitest gates green; browser playback unit-tested against the §10.4 contract with stub WebCodecs — not verified in a real browser session); slice 8: retune client tests — met (vitest API-client suite, svelte-check clean); slice 9: §18 tap + display with §17.3 obligations green on the dashboard; slice 10: §17.3 H3 suite green against the in-process fake DAQ; bench validation on a KrakenSDR deferred to hardware availability (checklist → docs/HARDWARE.md) |
 
 ## 18. Spectrum Analyzer & Waterfall
 

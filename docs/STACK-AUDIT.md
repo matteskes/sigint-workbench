@@ -377,35 +377,22 @@ which would have caught the findings above):
 
 ## 7. Prioritized remediation backlog
 
-1. **A1 (+A12)** — give ws-hub per-client bounded queues, write
-   deadlines, and pings (port the recorder's sink pattern). Highest
-   value: today one stalled browser tab degrades the event stream
-   for every client, contradicting §14.3. Add the two-client
-   head-of-line test.
-2. **A2** — wire or remove the four inert §20 knobs; while in
-   there, reconcile the `onnx.enabled` default with the shipped
-   YAML. The setup screen must not offer no-op switches.
-3. **A3** — fix or delete the nginx `/ws/` upstream (one line,
-   closes the latent A3 bypass).
-4. **A4 + A5** — one docs/env reconciliation pass: §16.6, §3.2,
-   §17.2, `.env.example` vs actually-consumed variables and actual
-   published ports.
-5. **A6 + A7** — flip the stale SPEC status lines (§4 v2, §17.4
-   slice 9, §16.1 spectrum) to `[implemented]` wording.
-6. **A23** — confirm the `markdown` CI job returns green on the
-   next push and check whether earlier `main` runs have been
-   silently red since e5817522 (they should have been).
-7. **A8 + A14 (+A13, A17, A22)** — dead config/code sweep
-   (processor scan block, classifier features block, dead frontend
-   exports, §-ref typos, YAML comment cleanup).
-8. **A9** — validate `audio.sample_rate` (or derive the stream rate
-   from the demod) + pin with a test.
-9. **A10 + A11 + A18** — small deduplications (retention path,
-   recordings query, WAV writer naming).
-10. **A20** — decide signal.tdoa's fate: a TDOA panel consuming
-    locus/quality (UI-DESIGN has none today) or demote to log-only.
-11. **A15, A16, A19, A21** — hygiene batch (unused compute,
-    `.PHONY`, redundant compose override, log bounds).
+**Resolved 2026-10-05** (remediation series on top of this audit):
+per-client hub queues + keepalive (A1/A12), schema-knob wiring and
+decorative-key removal (A2/A8/A13/A14/A22), recorder 48 kHz gate
+(A9), single purge policy and recordings query (A10/A11), nginx /ws
+upstream + override removal + log bounds (A3/A19/A21), signal.tdoa
+UI consumption (A20), the docs/env reconciliation (A4/A5/A6/A7/
+A15/A16/A17/A18), and the markdownlint repairs shipped with this
+audit (A23's file fixes). Open follow-ups:
+
+1. **A23 (CI confirmation)** — confirm the `markdown` job returns
+   green on the next push of the remediation series, and check
+   whether earlier `main` runs have been silently red since
+   e5817522 (they should have been).
+2. **On-air TDOA validation** (docs/HARDWARE.md §7, §17.4 slice 5
+   exit gate) — unchanged by this remediation; still awaits a third
+   receiver.
 
 Everything else observed — wire format, DSP parity with the ONNX
 training path, verification math, recorder/TFR contracts, DB
