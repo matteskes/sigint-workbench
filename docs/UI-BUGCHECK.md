@@ -134,10 +134,11 @@ success only when the child's own PID holds its port) after each
 spawn — the any-listener readiness loop is gone. Smoke-tested all
 five paths live (free/held/escalation/never-frees/early-exit).
 
-### B6 — map style missing `glyphs`: label layer can't render (console error on every map load)
+### B6 — map style missing `glyphs`: label layer can't render
 
 Found during the browser-based §2 re-verification (Playwright MCP,
-WebKit) — the HTTP-probing sweep could not see console errors.
+WebKit) — every map load logged a console error, which the
+HTTP-probing sweep could not see.
 `frontend/src/lib/map/config.ts` declares a `labels` symbol layer
 (`layers[4]`, `text-field`), but the style has no `glyphs` property,
 which MapLibre requires for any text rendering. Every map load logs
