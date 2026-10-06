@@ -9,6 +9,15 @@
 # Prod mode (Linux):
 #   docker compose --profile prod up -d
 
+# A21: bound every container's json-file log — 10 MiB per rotation,
+# 3 rotations kept — instead of Docker's unbounded default. Applied
+# per service below via `logging: *default-logging`.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   # ─── SDR Capture (Linux prod only; on macOS run natively) ───
   sdr-capture:
@@ -30,6 +39,7 @@ services:
     # Stream targets come from the mounted YAML (stream_host/stream_port);
     # frames carry sdr_id, so several devices may share one ingest port.
     networks: [sdr-net]
+    logging: *default-logging
     restart: unless-stopped
 
   # ─── Core Pipeline ───
@@ -49,6 +59,7 @@ services:
       - CONSUMERS=signal-processor:9010,recorder:9011
       - LOG_LEVEL=${LOG_LEVEL:-info}
     networks: [sdr-net]
+    logging: *default-logging
     restart: unless-stopped
 
   signal-processor:
@@ -77,6 +88,7 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
     networks: [sdr-net]
     depends_on: [iq-ingest, ws-hub]
+    logging: *default-logging
     restart: unless-stopped
 
   recorder:
@@ -100,6 +112,7 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
     networks: [sdr-net]
     depends_on: [db]
+    logging: *default-logging
     restart: unless-stopped
 
   # ─── API & Real-Time ───
@@ -135,6 +148,7 @@ services:
       - ./config:/config:rw
     networks: [sdr-net]
     depends_on: [db, ws-hub, recorder]
+    logging: *default-logging
     restart: unless-stopped
 
   ws-hub:
@@ -157,6 +171,7 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
     networks: [sdr-net]
     depends_on: [db]
+    logging: *default-logging
     restart: unless-stopped
 
   # ─── Infrastructure ───
@@ -178,6 +193,7 @@ services:
     # No published ports (§3.2): only services on sdr-net reach the
     # database. Host-side access: docker compose exec db psql -U sdr -d sdr
     networks: [sdr-net]
+    logging: *default-logging
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U sdr -d sdr"]
@@ -193,6 +209,7 @@ services:
       - ./tiles/config.yaml:/config.yaml:ro
       - ./tiles/data:/data:ro
     networks: [sdr-net]
+    logging: *default-logging
     restart: unless-stopped
 
   frontend:
@@ -209,6 +226,7 @@ services:
       - "3000:80"
     networks: [sdr-net]
     depends_on: [api-gateway, tiles]
+    logging: *default-logging
     restart: unless-stopped
 
 volumes:

@@ -21,17 +21,20 @@ cd "$(dirname "$0")/.."
 # docker compose merges .env automatically; export it here so the
 # native processes below see the same settings (LOG_LEVEL etc.). The
 # native signal-processor pins CAPTURE_API_HOST to localhost (the .env
-# value targets the container topology) and reaches ws-hub via its
-# loopback publish (docker-compose.dev-macos.yml).
+# value targets the container topology) and reaches ws-hub via the base
+# compose loopback publish (127.0.0.1:8081).
 if [ -f .env ]; then
     set -a
     . ./.env
     set +a
 fi
 UDP_PORT="${IQ_INGEST_UDP_PORT:-9000}"
-CAP_LOG="${SIGINT_CAPTURE_LOG:-/tmp/sigint-workbench-sdr-capture.log}"
-INGEST_LOG="${SIGINT_INGEST_LOG:-/tmp/sigint-workbench-iq-ingest.log}"
-PROC_LOG="${SIGINT_PROCESSOR_LOG:-/tmp/sigint-workbench-signal-processor.log}"
+# A21: timestamped per-run log files — no unbounded appends to one
+# /tmp log across bench runs. Explicit overrides are honored as-is.
+RUN_STAMP="$(date +%Y%m%d-%H%M%S)"
+CAP_LOG="${SIGINT_CAPTURE_LOG:-/tmp/sigint-workbench-sdr-capture-${RUN_STAMP}.log}"
+INGEST_LOG="${SIGINT_INGEST_LOG:-/tmp/sigint-workbench-iq-ingest-${RUN_STAMP}.log}"
+PROC_LOG="${SIGINT_PROCESSOR_LOG:-/tmp/sigint-workbench-signal-processor-${RUN_STAMP}.log}"
 
 capture_pid=""
 ingest_pid=""
@@ -67,7 +70,7 @@ echo "=== Detected SDR hardware ==="
 ./bin/sdr-capture -devices || true
 
 echo "=== Starting Docker TCP services (first run builds images; takes a while) ==="
-docker compose -f docker-compose.yml -f docker-compose.dev-macos.yml up -d \
+docker compose up -d \
     db api-gateway ws-hub tiles
 # Idempotent schema migrations (db/migrations; no-op on a fresh init).
 cat db/migrations/*.sql 2>/dev/null | docker compose exec -T db psql -U sdr -d sdr >/dev/null 2>&1 || true
