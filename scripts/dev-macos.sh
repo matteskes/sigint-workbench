@@ -28,6 +28,13 @@ if [ -f .env ]; then
     . ./.env
     set +a
 fi
+# §7.4/§20: the capture control API lives natively on host loopback
+# :9090 on this bench, so the compose gateway must reach it via the
+# host gateway, not the in-network sdr-capture default (its §20 probe
+# and the §7.4 tune/gain proxy would both fail otherwise). A .env
+# value still wins.
+export CAPTURE_CTRL_ADDR="${CAPTURE_CTRL_ADDR:-host.docker.internal:9090}"
+
 UDP_PORT="${IQ_INGEST_UDP_PORT:-9000}"
 # A21: timestamped per-run log files — no unbounded appends to one
 # /tmp log across bench runs. Explicit overrides are honored as-is.

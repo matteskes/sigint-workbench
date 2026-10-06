@@ -372,6 +372,10 @@
 			</button>
 		</div>
 
+		<!-- role="img" + aria-label is the intended ARIA pattern for these
+		canvases (UI-DESIGN.md); Svelte's a11y heuristic counts <canvas> as
+		interactive, so the non-interactive role gets flagged. -->
+		<!-- svelte-ignore a11y_no_interactive_element_to_noninteractive_role -->
 		<canvas
 			bind:this={lineEl}
 			width={bins}
@@ -381,6 +385,7 @@
 			aria-label="Spectrum line, {spanLabel}, dB relative"
 		></canvas>
 		<div class="relative touch-none select-none">
+			<!-- svelte-ignore a11y_no_interactive_element_to_noninteractive_role -->
 			<canvas
 				bind:this={waterfallEl}
 				width={bins}

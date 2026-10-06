@@ -87,7 +87,15 @@ services:
       - MODEL_PATH=/models/classifier.onnx
       - LOG_LEVEL=${LOG_LEVEL:-info}
     networks: [sdr-net]
-    depends_on: [iq-ingest, ws-hub]
+    # db must be ready, not merely started: the processor assumes a
+    # connectable database when it begins upserting (§16.6).
+    depends_on:
+      iq-ingest:
+        condition: service_started
+      ws-hub:
+        condition: service_started
+      db:
+        condition: service_healthy
     logging: *default-logging
     restart: unless-stopped
 
@@ -111,7 +119,10 @@ services:
       - WS_HUB_URL=http://ws-hub:8081
       - LOG_LEVEL=${LOG_LEVEL:-info}
     networks: [sdr-net]
-    depends_on: [db]
+    # Gate on the db healthcheck — avoids racing postgres init at boot.
+    depends_on:
+      db:
+        condition: service_healthy
     logging: *default-logging
     restart: unless-stopped
 
@@ -147,7 +158,16 @@ services:
       # §20: writable config dir backing the setup screen (SPEC §20).
       - ./config:/config:rw
     networks: [sdr-net]
-    depends_on: [db, ws-hub, recorder]
+    # service_healthy on db: the gateway's db.New is one-shot at boot —
+    # start it before postgres accepts connections and it runs db-less
+    # forever (the §20 probe then reads "database not configured").
+    depends_on:
+      db:
+        condition: service_healthy
+      ws-hub:
+        condition: service_started
+      recorder:
+        condition: service_started
     logging: *default-logging
     restart: unless-stopped
 

@@ -66,6 +66,9 @@
 	});
 </script>
 
+<!-- role="img" + aria-label is the intended ARIA pattern for this canvas
+(UI-DESIGN.md); Svelte's a11y heuristic counts <canvas> as interactive. -->
+<!-- svelte-ignore a11y_no_interactive_element_to_noninteractive_role -->
 <canvas
 	bind:this={canvasEl}
 	class="block w-full rounded bg-slate-950 {result && result.rows > 0 ? '' : 'hidden'}"
