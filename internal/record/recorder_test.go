@@ -260,6 +260,40 @@ func TestSelectPurge(t *testing.T) {
 	}
 }
 
+// TestPurgeFilesEvictsOldestFirst (A10): the size-cap phase must evict
+// by age, not ReadDir name order. Name order (a, b) deliberately
+// differs from age order — b is the oldest.
+func TestPurgeFilesEvictsOldestFirst(t *testing.T) {
+	dir := t.TempDir()
+	mk := func(name string, age time.Duration, size int64) {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, make([]byte, size), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+		mtime := time.Now().Add(-age)
+		if err := os.Chtimes(p, mtime, mtime); err != nil {
+			t.Fatalf("chtimes %s: %v", name, err)
+		}
+	}
+	mk("a.iq", 1*time.Hour, 4096)
+	mk("b.iq", 5*time.Hour, 2048) // oldest, smaller
+
+	// Budget ≈ 5 KiB: total 6 KiB → the oldest file must go first.
+	r := NewRecorder(Config{Dir: dir, MaxSizeGB: 5 * 1024 / float64(1<<30)}, nil)
+	removed := map[string]bool{}
+	r.PurgeFiles(time.Now(), func(path string) { removed[path] = true })
+
+	if !removed[filepath.Join(dir, "b.iq")] {
+		t.Fatalf("oldest file b.iq should be purged first; removed = %v", removed)
+	}
+	if removed[filepath.Join(dir, "a.iq")] {
+		t.Fatal("newer file a.iq should survive")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "a.iq")); err != nil {
+		t.Fatalf("a.iq should still exist: %v", err)
+	}
+}
+
 // TestSessionRawIQ (§10.5): with the raw-IQ side file enabled, a fed
 // session finalizes into a wav row plus an iq row carrying the
 // capture sample rate, and the .iq file is the headerless int16-LE

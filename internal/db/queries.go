@@ -265,45 +265,6 @@ func (d *DB) GetRecording(ctx context.Context, id string) (*Recording, error) {
 	return &r, nil
 }
 
-// GetRecordings returns the most recent recordings, optionally filtered
-// by signal ID. limit defaults to 50 and is capped at 500.
-func (d *DB) GetRecordings(ctx context.Context, limit int, signalID string) ([]Recording, error) {
-	if limit <= 0 {
-		limit = 50
-	}
-	if limit > 500 {
-		limit = 500
-	}
-	query := `
-		SELECT id, signal_id, start_time, end_time, duration_s,
-			sample_rate, center_freq, bandwidth_hz, file_path, file_format, size_bytes
-		FROM recordings
-	`
-	args := []interface{}{}
-	if signalID != "" {
-		query += " WHERE signal_id = $1"
-		args = append(args, signalID)
-	}
-	query += fmt.Sprintf(" ORDER BY start_time DESC LIMIT $%d", len(args)+1)
-	args = append(args, limit)
-	rows, err := d.Pool.Query(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("db: get recordings: %w", err)
-	}
-	defer rows.Close()
-
-	var recs []Recording
-	for rows.Next() {
-		var r Recording
-		if err := rows.Scan(&r.ID, &r.SignalID, &r.StartTime, &r.EndTime, &r.DurationS,
-			&r.SampleRate, &r.CenterFreq, &r.BandwidthHz, &r.FilePath, &r.FileFormat, &r.SizeBytes); err != nil {
-			return nil, err
-		}
-		recs = append(recs, r)
-	}
-	return recs, rows.Err()
-}
-
 // GetSDR returns a single SDR device by ID.
 func (d *DB) GetSDR(ctx context.Context, id string) (*SDRDevice, error) {
 	// lat/lon are NULL-allowed (§12.1); reads COALESCE them to 0 —
@@ -485,10 +446,16 @@ func (d *DB) InsertRecording(ctx context.Context, r *Recording) error {
 }
 
 // ListRecordings returns recordings, newest first, optionally filtered
-// by signal (empty signalID = all), capped at limit (<=0 → 200).
+// by signal (empty signalID = all), capped at limit (<=0 → 200, >500 →
+// 500). The API layer applies its own §13.1 default (50) before
+// calling. This is the single recordings-list query (A11: the
+// near-duplicate GetRecordings was removed).
 func (d *DB) ListRecordings(ctx context.Context, signalID string, limit int) ([]Recording, error) {
 	if limit <= 0 {
 		limit = 200
+	}
+	if limit > 500 {
+		limit = 500
 	}
 	query := `
 		SELECT id, COALESCE(signal_id::TEXT, ''), start_time, end_time,

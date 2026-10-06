@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 
@@ -134,20 +135,17 @@ func (r *Recorder) CloseIdle(now time.Time) int {
 
 // PurgeFiles applies file retention (§11): deletes WAV/IQ files
 // (§10.5) older than MaxAgeDays, then — while the directory exceeds
-// MaxSizeGB — the oldest files. For every deleted file, remove(path)
-// is invoked so the caller can delete the matching DB row.
+// MaxSizeGB — the oldest files. The policy itself lives in SelectPurge
+// (this used to reimplement it inline and evict size-cap victims in
+// ReadDir name order — A10); files are sorted oldest-first (mtime)
+// before selection. For every deleted file, remove(path) is invoked so
+// the caller can delete the matching DB row.
 func (r *Recorder) PurgeFiles(now time.Time, remove func(path string)) {
 	entries, err := os.ReadDir(r.cfg.Dir)
 	if err != nil {
 		return
 	}
-	type meta struct {
-		path  string
-		mtime time.Time
-		size  int64
-	}
-	var wavs []meta
-	var total int64
+	var recs []RecordingMeta
 	for _, e := range entries {
 		ext := filepath.Ext(e.Name())
 		if e.IsDir() || (ext != ".wav" && ext != ".iq") {
@@ -157,37 +155,31 @@ func (r *Recorder) PurgeFiles(now time.Time, remove func(path string)) {
 		if err != nil {
 			continue
 		}
-		wavs = append(wavs, meta{filepath.Join(r.cfg.Dir, e.Name()), info.ModTime(), info.Size()})
-		total += info.Size()
+		recs = append(recs, RecordingMeta{
+			ID:        e.Name(),
+			FilePath:  filepath.Join(r.cfg.Dir, e.Name()),
+			StartTime: info.ModTime(), // mtime ≈ session finalize time
+			SizeBytes: info.Size(),
+		})
 	}
 
-	var removeSet []string
+	// SelectPurge is order-sensitive (it never reorders): oldest first
+	// so the size-cap phase evicts the oldest recordings.
+	sort.Slice(recs, func(i, j int) bool {
+		return recs[i].StartTime.Before(recs[j].StartTime)
+	})
+
+	var maxAge time.Duration
 	if r.cfg.MaxAgeDays > 0 {
-		maxAge := time.Duration(r.cfg.MaxAgeDays) * 24 * time.Hour
-		var kept []meta
-		for _, m := range wavs {
-			if now.Sub(m.mtime) > maxAge {
-				removeSet = append(removeSet, m.path)
-				total -= m.size
-				continue
-			}
-			kept = append(kept, m)
-		}
-		wavs = kept
+		maxAge = time.Duration(r.cfg.MaxAgeDays) * 24 * time.Hour
 	}
+	var maxSize int64
 	if r.cfg.MaxSizeGB > 0 {
-		budget := int64(r.cfg.MaxSizeGB * float64(1<<30))
-		for _, m := range wavs { // entries are ReadDir-ordered ≈ name order
-			if total <= budget {
-				break
-			}
-			removeSet = append(removeSet, m.path)
-			total -= m.size
-		}
+		maxSize = int64(r.cfg.MaxSizeGB * float64(1<<30))
 	}
-	for _, path := range removeSet {
-		if err := os.Remove(path); err == nil && remove != nil {
-			remove(path)
+	for _, m := range SelectPurge(recs, now, maxAge, maxSize) {
+		if err := os.Remove(m.FilePath); err == nil && remove != nil {
+			remove(m.FilePath)
 		}
 	}
 }

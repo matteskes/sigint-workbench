@@ -3,10 +3,7 @@ import type { StyleSpecification } from 'maplibre-gl';
 const TILE_URL =
 	import.meta.env.VITE_TILE_URL ?? 'http://localhost:8082/data/v3/{z}/{x}/{y}.pbf';
 
-const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8080';
-const WS_URL = import.meta.env.VITE_WS_URL ?? 'ws://localhost:8081';
-
-export { TILE_URL, API_URL, WS_URL };
+export { TILE_URL };
 
 // Dark basemap style for the MapLibre map
 export const mapStyle: StyleSpecification = {

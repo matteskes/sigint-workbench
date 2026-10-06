@@ -10,14 +10,13 @@ import (
 // SpectralFeatures extracts a feature vector from an FFT result
 // suitable for ML classification.
 type SpectralFeatures struct {
-	FreqHz        float64  // Center frequency
-	BandwidthHz   float64  // Estimated bandwidth
-	PeakPowerDB   float64  // Peak power
-	NoiseFloorDB  float64  // Noise floor
-	SNRdB         float64  // Signal-to-noise ratio
+	FreqHz        float64   // Center frequency
+	BandwidthHz   float64   // Estimated bandwidth
+	PeakPowerDB   float64   // Peak power
+	NoiseFloorDB  float64   // Noise floor
+	SNRdB         float64   // Signal-to-noise ratio
 	SpectralShape []float32 // Normalized spectrum (fixed length)
-	CrestFactor   float64  // Peak / RMS ratio
-	SpectralEntropy float64 // Shannon entropy of normalized spectrum
+	CrestFactor   float64   // Peak / RMS ratio
 }
 
 // FeatureVectorLength is the fixed length of the spectral shape feature.
@@ -43,20 +42,18 @@ func ExtractFeatures(result *dsp.FFTResult, centerFreqHz uint64) *SpectralFeatur
 
 	bandwidth := estimateBandwidthHz(result, peakIdx)
 	crest := crestFactor(result.PowerDB)
-	entropy := spectralEntropy(result.PowerDB)
 
 	// Normalize spectrum to fixed length
 	spectrum := normalizeSpectrum(result.PowerDB, noiseFloor, FeatureVectorLength)
 
 	return &SpectralFeatures{
-		FreqHz:          float64(centerFreqHz),
-		BandwidthHz:     bandwidth,
-		PeakPowerDB:     peakPower,
-		NoiseFloorDB:    noiseFloor,
-		SNRdB:           snr,
-		SpectralShape:   spectrum,
-		CrestFactor:     crest,
-		SpectralEntropy: entropy,
+		FreqHz:        float64(centerFreqHz),
+		BandwidthHz:   bandwidth,
+		PeakPowerDB:   peakPower,
+		NoiseFloorDB:  noiseFloor,
+		SNRdB:         snr,
+		SpectralShape: spectrum,
+		CrestFactor:   crest,
 	}
 }
 
@@ -99,33 +96,6 @@ func crestFactor(powerDB []float64) float64 {
 		return 0
 	}
 	return peak / rms
-}
-
-// spectralEntropy returns the Shannon entropy of the normalized linear
-// power spectrum, scaled to [0, 1] (1 = uniform, 0 = single bin).
-func spectralEntropy(powerDB []float64) float64 {
-	total := 0.0
-	lins := make([]float64, len(powerDB))
-	for i, p := range powerDB {
-		lins[i] = math.Pow(10, p/10)
-		total += lins[i]
-	}
-	if total <= 0 {
-		return 0
-	}
-	h := 0.0
-	for _, lin := range lins {
-		if lin <= 0 {
-			continue
-		}
-		p := lin / total
-		h -= p * math.Log2(p)
-	}
-	maxH := math.Log2(float64(len(powerDB)))
-	if maxH <= 0 {
-		return 0
-	}
-	return h / maxH
 }
 
 // ToVector flattens the features into a single float32 slice for ONNX input.

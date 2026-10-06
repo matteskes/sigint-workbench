@@ -1,4 +1,4 @@
-.PHONY: help dev build-capture build-capture-hw build-ingest build-processor build-hw-tools build-prod test frontend-test smoke-onnx ort-lib db-init clean
+.PHONY: help dev build-capture build-capture-hw build-capture-linux build-ingest build-processor build-hw-tools build-prod deploy stop test frontend-test smoke-onnx ort-lib db-init db-migrate db-shell tidy setup clean
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'

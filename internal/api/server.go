@@ -310,12 +310,15 @@ func (s *Server) handleGetRecordings(w http.ResponseWriter, r *http.Request) {
 	}
 	q := r.URL.Query()
 	limit, _ := strconv.Atoi(q.Get("limit"))
+	if limit <= 0 {
+		limit = 50 // §13.1 list default
+	}
 	signalID := q.Get("signalId")
 
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	recs, err := s.db.GetRecordings(ctx, limit, signalID)
+	recs, err := s.db.ListRecordings(ctx, signalID, limit)
 	if err != nil {
 		s.log.Error().Err(err).Msg("get recordings")
 		http.Error(w, err.Error(), http.StatusInternalServerError)

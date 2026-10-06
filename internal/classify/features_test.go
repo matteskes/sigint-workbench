@@ -61,11 +61,11 @@ func TestExtractFeaturesBandwidth(t *testing.T) {
 	}
 }
 
-func TestExtractFeaturesCrestAndEntropy(t *testing.T) {
-	// Single strong tone → low entropy, high crest.
+func TestExtractFeaturesCrest(t *testing.T) {
+	// Single strong tone → high crest.
 	spike := ExtractFeatures(synthResult(64, 20, 0), 1)
 
-	// Uniform spectrum → entropy ≈ 1, crest ≈ 1.
+	// Uniform spectrum → crest ≈ 1.
 	uniform := &dsp.FFTResult{
 		Frequencies: make([]float64, 64),
 		Magnitudes:  make([]float64, 64),
@@ -79,14 +79,8 @@ func TestExtractFeaturesCrestAndEntropy(t *testing.T) {
 	}
 	flat := ExtractFeatures(uniform, 1)
 
-	if flat.SpectralEntropy < 0.99 || flat.SpectralEntropy > 1.0001 {
-		t.Fatalf("flat entropy = %v, want ~1", flat.SpectralEntropy)
-	}
 	if math.Abs(flat.CrestFactor-1) > 0.01 {
 		t.Fatalf("flat crest = %v, want ~1", flat.CrestFactor)
-	}
-	if spike.SpectralEntropy >= flat.SpectralEntropy {
-		t.Fatalf("spike entropy %v should be < flat entropy %v", spike.SpectralEntropy, flat.SpectralEntropy)
 	}
 	if spike.CrestFactor <= flat.CrestFactor {
 		t.Fatalf("spike crest %v should be > flat crest %v", spike.CrestFactor, flat.CrestFactor)

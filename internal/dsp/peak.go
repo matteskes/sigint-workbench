@@ -2,7 +2,6 @@
 package dsp
 
 import (
-	"math"
 	"sort"
 )
 
@@ -16,9 +15,9 @@ type Peak struct {
 
 // PeakDetector finds peaks in a power spectrum above a threshold.
 type PeakDetector struct {
-	ThresholdDB float64  // Minimum power in dB
-	MinSpacing  int      // Minimum bins between peaks
-	TopN        int      // Max number of peaks to return
+	ThresholdDB float64 // Minimum power in dB
+	MinSpacing  int     // Minimum bins between peaks
+	TopN        int     // Max number of peaks to return
 }
 
 // NewPeakDetector creates a peak detector with default settings.
@@ -127,8 +126,9 @@ func absInt(x int) int {
 	return x
 }
 
-// DetectNoiseFloor estimates the noise floor from a power spectrum.
-// Uses the median of the lower 50% of bins.
+// DetectNoiseFloor estimates the noise floor from a power spectrum:
+// the median of the lower 50% of bins. Mirrors detect_noise_floor in
+// models/train.py (np.sort over the lower half).
 func DetectNoiseFloor(powerDB []float64) float64 {
 	if len(powerDB) == 0 {
 		return 0
@@ -136,16 +136,7 @@ func DetectNoiseFloor(powerDB []float64) float64 {
 	half := len(powerDB) / 2
 	sorted := make([]float64, half)
 	copy(sorted, powerDB[:half])
-	// Simple selection sort for median (half is small, ~2048)
-	for i := 0; i < len(sorted); i++ {
-		minIdx := i
-		for j := i + 1; j < len(sorted); j++ {
-			if sorted[j] < sorted[minIdx] {
-				minIdx = j
-			}
-		}
-		sorted[i], sorted[minIdx] = sorted[minIdx], sorted[i]
-	}
+	sort.Float64s(sorted) // O(n log n); was an O(n²) selection sort (A15)
 	return sorted[len(sorted)/2]
 }
 
@@ -159,5 +150,3 @@ type Power struct {
 	FreqHz  float64
 	PowerDB float64
 }
-
-var _ = math.Abs // keep math import
