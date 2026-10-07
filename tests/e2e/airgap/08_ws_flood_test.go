@@ -23,7 +23,7 @@ func TestA8_WSConstants(t *testing.T) {
 
 	checks := map[string]string{
 		"sendQueueSize": "sendQueueSize = 256",
-		"writeWait":     "writeWait  = 5 * time.Second",
+		"writeWait":     "writeWait = 5 * time.Second",
 		"pingPeriod":    "pingPeriod = 25 * time.Second",
 		"pongWait":      "pongWait   = 60 * time.Second",
 		"deliver":       "func deliver(c *client, pkt []byte)",
