@@ -13,11 +13,13 @@
 	import type { SpectrumFrame } from '$lib/api/client';
 
 	// §18.3: plain <canvas> + requestAnimationFrame, no new dependencies.
+	let wrapEl: HTMLDivElement;
 	let lineEl: HTMLCanvasElement;
 	let waterfallEl: HTMLCanvasElement;
 	let tickEl: HTMLCanvasElement;
 	let anim = 0;
 	let open = true;
+	let ro: ResizeObserver | null = null;
 
 	// §16: reduced motion slows the redraw cadence to 1 fps — the data
 	// stays current, the waterfall stops streaming (a "paused" caption
@@ -83,11 +85,35 @@
 		return [Math.floor(lo / 10) * 10, Math.ceil(hi / 10) * 10];
 	}
 
+	// Text-bearing canvases (line + ticks) render at display resolution:
+	// their bitmaps are sized to the CSS box × devicePixelRatio and the
+	// 2D context works in CSS-pixel coordinates. The old fixed bins-wide
+	// bitmaps were stretched ~1.7× by CSS, smearing every label into an
+	// unreadable mush (UI-BUGCHECK B9). The waterfall keeps its native
+	// bins × rows heat bitmap — stretching heat data is intended, and
+	// the §19.4 drag→bin math maps X through waterfallEl.width.
+	function fitCanvas(
+		el: HTMLCanvasElement
+	): { ctx: CanvasRenderingContext2D; w: number; h: number } | null {
+		const rect = el.getBoundingClientRect();
+		const dpr = window.devicePixelRatio || 1;
+		const bw = Math.max(1, Math.round(rect.width * dpr));
+		const bh = Math.max(1, Math.round(rect.height * dpr));
+		if (el.width !== bw || el.height !== bh) {
+			el.width = bw;
+			el.height = bh;
+		}
+		const ctx = el.getContext('2d');
+		if (!ctx) return null;
+		ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+		return { ctx, w: rect.width, h: rect.height };
+	}
+
 	function drawLine(f: SpectrumFrame | null, lo: number, hi: number): void {
-		const ctx = lineEl?.getContext('2d');
-		if (!ctx) return;
-		const w = lineEl.width;
-		const h = lineEl.height;
+		if (!lineEl) return;
+		const fit = fitCanvas(lineEl);
+		if (!fit) return;
+		const { ctx, w, h } = fit;
 		ctx.fillStyle = '#020617';
 		ctx.fillRect(0, 0, w, h);
 		const span = hi - lo || 1;
@@ -164,10 +190,10 @@
 	}
 
 	function drawTicks(f: SpectrumFrame | null): void {
-		const ctx = tickEl?.getContext('2d');
-		if (!ctx) return;
-		const w = tickEl.width;
-		const h = tickEl.height;
+		if (!tickEl) return;
+		const fit = fitCanvas(tickEl);
+		if (!fit) return;
+		const { ctx, w, h } = fit;
 		ctx.clearRect(0, 0, w, h);
 		if (!f || !(f.sampleRate > 0)) return;
 		// Frequency ticks derive from freqHz ± sampleRate/2 (§18.3).
@@ -261,11 +287,11 @@
 	 * amber line. Reads stores directly — no per-event work beyond the
 	 * coalesced flush that marks the canvas dirty (§14.3).
 	 */
-	function drawSignalOverlay(f: SpectrumFrame | null): void {
-		const ctx = lineEl?.getContext('2d');
-		if (!ctx || !f || f.sampleRate <= 0) return;
-		const w = lineEl.width;
-		const h = lineEl.height;
+	function drawSignalOverlay(f: SpectrumFrame | null, dbHi: number): void {
+		if (!lineEl) return;
+		const fit = fitCanvas(lineEl);
+		if (!fit || !f || f.sampleRate <= 0) return;
+		const { ctx, w, h } = fit;
 		const lo = f.freqHz - f.sampleRate / 2;
 		const span = f.sampleRate;
 		const xFor = (hz: number) => ((hz - lo) / span) * (w - 1);
@@ -289,13 +315,16 @@
 		// "+N" marker (§7: no overlapping text).
 		ctx.strokeStyle = '#e2e8f0';
 		ctx.fillStyle = '#cbd5e1';
-		ctx.font = '8px ui-monospace, monospace';
+		ctx.font = '9px ui-monospace, monospace';
 		ctx.textAlign = 'center';
-		const LANE_Y = [10, 19];
-		// Lane 0 shares the top strip with the grid-label row (x ≈ 2–16,
-		// same baseline), so it only accepts labels clear of that zone;
-		// lane 1 sits below it and is unconstrained.
-		const laneRight = [17, -Infinity];
+		const LANE_Y = [11, 21];
+		// Lane 0 shares the top strip with the first dB grid label (drawn
+		// at x=2 on the same baseline), so it only accepts labels clear of
+		// that zone — reserved with the label's measured width, not the
+		// old hardcoded 17px that 3-character labels ("-30") already
+		// overran, smearing both together (UI-BUGCHECK B9). Lane 1 sits
+		// below it and is unconstrained.
+		const laneRight = [2 + ctx.measureText(String(Math.round(dbHi))).width + 1, -Infinity];
 		const visible = $signals
 			.filter(
 				(s) => s.freqHz + s.bandwidthHz / 2 >= lo && s.freqHz - s.bandwidthHz / 2 <= lo + span
@@ -336,6 +365,14 @@
 		const unsub = selectedSpectrum.subscribe(() => {
 			dirty = true;
 		});
+		// Container resizes change the CSS box the text canvases fit to;
+		// mark dirty so the next frame re-fits the backing stores.
+		if (typeof ResizeObserver === 'function' && wrapEl) {
+			ro = new ResizeObserver(() => {
+				dirty = true;
+			});
+			ro.observe(wrapEl);
+		}
 		// Overlay inputs also mark dirty (cheap booleans; the draw is
 		// bounded by the existing rAF + dirty gate).
 		const unsubSignals = signals.subscribe(() => {
@@ -355,7 +392,7 @@
 					const rows = $selectedSpectrum?.rows ?? [];
 					const [lo, hi] = autoDb && rows.length > 0 ? autoRange(rows) : [DB_MIN, DB_MAX];
 					drawLine(latest, lo, hi);
-					drawSignalOverlay(latest);
+					drawSignalOverlay(latest, hi);
 					drawWaterfall(rows, lo, hi);
 					drawTicks(latest);
 				}
@@ -365,6 +402,7 @@
 		anim = requestAnimationFrame(loop);
 		return () => {
 			cancelAnimationFrame(anim);
+			ro?.disconnect();
 			unsub();
 			unsubSignals();
 			unsubMarked();
@@ -372,7 +410,7 @@
 	});
 </script>
 
-<div class="p-3">
+<div class="p-3" bind:this={wrapEl}>
 	<button
 		class="mb-2 flex w-full items-center justify-between text-xs font-semibold text-slate-400"
 		on:click={toggleOpen}
@@ -407,17 +445,16 @@
 		<!-- role="img" + aria-label is the intended ARIA pattern for these
 		canvases (UI-DESIGN.md); Svelte's a11y heuristic counts <canvas> as
 		interactive, so the non-interactive role gets flagged. Display
-		heights are pinned via CSS: the bitmaps keep their native
-		resolution (bins × rows — the §19.4 drag→bin math maps X through
-		rect.width only, so it is unaffected), but canvas is a replaced
-		element and w-full alone scales height by the same factor as the
-		width (~3.7× on this column), which rendered the waterfall
-		~1100 px tall. -->
+		sizes are pinned via CSS. The waterfall keeps its native bins ×
+		rows heat bitmap (the §19.4 drag→bin math maps X through
+		waterfallEl.width only, so it is unaffected); the line + tick
+		canvases carry text, so fitCanvas() sizes their bitmaps to the CSS
+		box × devicePixelRatio at draw time — fixed bins-wide bitmaps were
+		stretched ~1.7× by CSS and rendered every label as smeared,
+		overlapping text (UI-BUGCHECK B9). -->
 		<!-- svelte-ignore a11y_no_interactive_element_to_noninteractive_role -->
 		<canvas
 			bind:this={lineEl}
-			width={bins}
-			height={96}
 			class="h-32 w-full rounded bg-slate-950"
 			role="img"
 			aria-label="Spectrum line, {spanLabel}, dB relative"
@@ -446,7 +483,7 @@
 				></div>
 			{/if}
 		</div>
-		<canvas bind:this={tickEl} width={bins} height={14} class="h-3.5 w-full"></canvas>
+		<canvas bind:this={tickEl} class="h-3.5 w-full"></canvas>
 
 		<div class="mt-1 text-[10px] text-slate-500">
 			{spanLabel} · dB (rel.)

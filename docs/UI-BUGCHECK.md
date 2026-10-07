@@ -17,6 +17,7 @@ Status:
 | Route/asset/API/CORS/WS/tile sweep | `[done]` (§4) |
 | Bugs filed (B1–B6, §2; N1, §3) | B1–B6 `[fixed]`; N1 `[documented]` |
 | §2 re-verification in a real browser (Playwright MCP, WebKit) | `[done]` — found B6, B7, B8; fixed |
+| Spectrum canvas-text re-check in the live browser (devicePixelRatio 2) | `[done]` — found B9; fixed |
 
 ## 1. Bench shape under test
 
@@ -188,6 +189,33 @@ Fixed 2026-10-06: verified in-browser — MapLibre now fetches
 `/fonts/Noto Sans Regular/0-255.pbf` (200, its first-ever glyph
 request) and the vector basemap visibly renders (place/water
 geometry on screen).
+
+### B9 — spectrum text rendered into bins-wide bitmaps, smeared by CSS
+
+The line and tick `<canvas>` elements were created with fixed
+`width={bins}` (256 px) bitmaps while CSS displayed them at the full
+panel width (~440 px on this column), so the browser upscaled each
+~1.7×. Every glyph drawn into those bitmaps — the dB grid labels,
+frequency tick labels, and signal/marker labels — came out smeared
+and overlapping (the top-left grid label read as ".2 dB" mush). A
+second layer to it: the signal overlay reserved a hardcoded 17 px of
+lane 0 for the first dB grid label, which three-character labels
+("-30") already overran, so marker text could draw straight into the
+grid label.
+
+Fix: `fitCanvas()` sizes the text-bearing canvases (line + ticks) to
+the CSS box × devicePixelRatio at draw time, with the 2D context
+working in CSS pixels; a ResizeObserver on the panel marks the frame
+dirty on container resize so the backing stores re-fit. The waterfall
+keeps its native bins × rows heat bitmap — stretching heat data is
+intended, and the §19.4 drag→bin math maps X through
+`waterfallEl.width`. The overlay's lane-0 exclusion zone is now
+`2 + measureText(firstDbLabel).width + 1`, with the marker font at
+9 px and lane baselines at y=11/21 to sit clear of the grid labels.
+
+Fixed 2026-10-06: verified in the live browser at devicePixelRatio 2
+— device-scale crops of the plot corner and the dB-label gutter show
+crisp, non-overlapping text; the smear is gone.
 
 ## 3. Ops note
 
