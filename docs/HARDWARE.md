@@ -87,32 +87,51 @@ fall back to the simulator-only untagged build), so this section is
 both what `make dev` automates and the manual path:
 
 ```bash
-make build-capture-hw build-hw-tools
+make build-capture-hw build-hw-tools build-recorder
 ```
 
 On macOS, Docker Desktop's UDP port forwarder silently drops at the
 full dual-dongle rate (~3.5k pkt/s): frames never reach a
 containerized iq-ingest (found 2026-10-04 — capture logged zero send
 errors while the ingest container counted zero arrivals), so the UDP
-pair runs natively and only TCP services stay in Docker. On Linux
-(`--profile prod`) the all-Docker topology is unaffected.
+pair runs natively and only TCP services stay in Docker. The recorder
+joins the native chain for the same reason (found 2026-10-06, bug B18
+in docs/UI-BUGCHECK.md — a containerized recorder starves the same
+way, which silenced §10 recording and §10.4 live audio on the bench):
+the gateway reaches its live-audio WS and §19 TFR API via
+`host.docker.internal`, and the compose `recorder` container is
+stopped on this topology. On Linux (`--profile prod`) the all-Docker
+topology is unaffected.
 
 ```bash
 # TCP services in Docker (db publishes 127.0.0.1:5432 for the native
-# signal-processor; dev/bench only — §3.2 still governs production):
-docker compose up -d db api-gateway ws-hub tiles
+# signal-processor; dev/bench only — §3.2 still governs production).
+# The gateway's recorder relays point at the NATIVE recorder (§10.4):
+RECORDER_WS_ADDR=host.docker.internal:9012 \
+RECORDER_API_ADDR=host.docker.internal:9013 \
+  docker compose up -d db api-gateway ws-hub tiles
+docker compose stop recorder   # B18: the native recorder replaces it
 cat db/migrations/*.sql | docker compose exec -T db psql -U sdr -d sdr
 
-# native UDP pair (loopback carries the full rate):
+# native UDP chain (loopback carries the full rate):
 CONFIG=config/iq-ingest.yaml LISTEN_PORT=9000 \
-  CONSUMERS=localhost:9010 ./bin/iq-ingest &
+  CONSUMERS=localhost:9010,localhost:9011 ./bin/iq-ingest &
 LISTEN_PORT=9010 SIGNAL_TTL=30 \
   DB_URL='postgres://sdr:sdr@localhost:5432/sdr?sslmode=disable' \
   SDR_CONFIG=config/sdr-capture.yaml \
   PROCESSOR_CONFIG=config/signal-processor.yaml \
   CLASSIFIER_CONFIG=config/classifier.yaml ./bin/signal-processor &
 
-# capture last, with the hardware build:
+# recorder — native, with live Opus audio; run from recordings/ with
+# RECORDINGS_DIR=. so DB rows stay relative and the gateway resolves
+# them under its /recordings mount (§13.1 path confinement):
+(cd recordings && RECORDER_CONFIG=../config/recorder.yaml \
+  RECORDINGS_DIR=. RECORDER_BIND_HOST=127.0.0.1 \
+  DB_URL='postgres://sdr:sdr@localhost:5432/sdr?sslmode=disable' \
+  WS_HUB_URL=http://127.0.0.1:8081 ../bin/recorder &)
+
+# capture last, with the hardware build (build-recorder is the
+# opus-tagged recorder — live audio needs libopus):
 ./bin/sdr-capture -config config/sdr-capture.yaml
 ```
 

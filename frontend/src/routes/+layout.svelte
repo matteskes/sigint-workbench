@@ -4,7 +4,7 @@
 	// reconnect banners, and the §15 keyboard map.
 	import '../app.css';
 	import { onMount } from 'svelte';
-	import { goto, replaceState } from '$app/navigation';
+	import { afterNavigate, goto, replaceState } from '$app/navigation';
 	import { get } from 'svelte/store';
 	import AppBar from '$lib/components/shell/AppBar.svelte';
 	import FirstRunBanner from '$lib/components/shell/FirstRunBanner.svelte';
@@ -37,14 +37,26 @@
 		}
 	});
 
-	// ── §3.1 ?signal=<id> deep-link mirror (UI-BUGCHECK B14/B15) ─────
+	// ── §3.1 ?signal=<id> deep-link mirror (UI-BUGCHECK B14/B15/B19) ────
 	// Lives in the shell, not the Inspector: the Inspector unmounts the
 	// instant the selection clears, which destroyed its copy of this
 	// effect before the delete-the-param branch could run and left a
 	// stale ?signal= that resurrected the inspector on reload. Uses
 	// $app/navigation's replaceState — raw history.replaceState fights
 	// SvelteKit's router and logs a console warning (B15).
+	// B19: that replaceState throws "Cannot call replaceState(...) before
+	// router is initialized" when this effect first fires — on a HARD
+	// deep-link load it runs during hydration, before the router exists
+	// and before the signals route's onMount has consumed the param.
+	// afterNavigate flips routerReady only once the router is live and
+	// the page has mounted, so early runs no-op instead of throwing (or
+	// deleting a param the bootstrap still needs).
+	let routerReady = $state(false);
+	afterNavigate(() => {
+		routerReady = true;
+	});
 	$effect(() => {
+		if (!routerReady) return;
 		const id = $selectedSignal?.id ?? null;
 		const url = new URL(window.location.href);
 		if (url.searchParams.get('signal') === id) return;

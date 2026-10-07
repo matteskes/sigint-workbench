@@ -390,6 +390,114 @@ func TestWSAudioRelayForwardsRecorderStream(t *testing.T) {
 	}
 }
 
+// B17 regression (§10.4.4): the recorder's clean close — the 3 s
+// "no live stream" grace — must reach the relayed client with code and
+// reason intact. The old pump swallowed upstream close frames, so the
+// browser saw an abnormal 1006 and rendered the spec'd "ended" state
+// as "Live stream error: websocket error".
+func TestWSAudioRelayPropagatesUpstreamCloseCode(t *testing.T) {
+	recTS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		// The recorder's closeWS shape (internal/record/ws_server.go):
+		// one close frame, then a brief read for the peer's echo.
+		_ = conn.WriteControl(websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseNormalClosure, "no live stream"),
+			time.Now().Add(time.Second))
+		conn.SetReadDeadline(time.Now().Add(time.Second))
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}))
+	defer recTS.Close()
+
+	recURL, err := url.Parse(recTS.URL)
+	if err != nil {
+		t.Fatalf("parse recorder url: %v", err)
+	}
+	ts := newTestServerWithUpstreams("127.0.0.1:1", recURL.Host, "127.0.0.1:1")
+	defer ts.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws/audio?signal=sig-1"
+	client, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial audio relay: %v", err)
+	}
+	defer client.Close()
+	client.SetReadDeadline(time.Now().Add(5 * time.Second))
+
+	_, _, err = client.ReadMessage()
+	ce, ok := err.(*websocket.CloseError)
+	if !ok {
+		t.Fatalf("read = %v, want *websocket.CloseError (relay swallowed the close frame)", err)
+	}
+	if ce.Code != websocket.CloseNormalClosure || ce.Text != "no live stream" {
+		t.Fatalf("close = (%d, %q), want (1000, %q)", ce.Code, ce.Text, "no live stream")
+	}
+}
+
+// B17 symmetry: a client-side clean close is forwarded upstream with
+// its code and reason, so the recorder's sink releases promptly.
+func TestWSAudioRelayPropagatesClientCloseCode(t *testing.T) {
+	upClose := make(chan websocket.CloseError, 1)
+	recTS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				if ce, ok := err.(*websocket.CloseError); ok {
+					upClose <- *ce
+				}
+				return
+			}
+		}
+	}))
+	defer recTS.Close()
+
+	recURL, err := url.Parse(recTS.URL)
+	if err != nil {
+		t.Fatalf("parse recorder url: %v", err)
+	}
+	ts := newTestServerWithUpstreams("127.0.0.1:1", recURL.Host, "127.0.0.1:1")
+	defer ts.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws/audio?signal=sig-1"
+	client, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial audio relay: %v", err)
+	}
+	defer client.Close()
+	if err := client.WriteControl(websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.CloseGoingAway, "client hangup"),
+		time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("write close: %v", err)
+	}
+	client.SetReadDeadline(time.Now().Add(5 * time.Second))
+	for {
+		if _, _, err := client.ReadMessage(); err != nil {
+			break // relayed close or hangup — either ends the client side
+		}
+	}
+
+	select {
+	case ce := <-upClose:
+		if ce.Code != websocket.CloseGoingAway || ce.Text != "client hangup" {
+			t.Fatalf("upstream close = (%d, %q), want (1001, %q)", ce.Code, ce.Text, "client hangup")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("upstream never observed the client's close frame")
+	}
+}
+
 func TestWSAudioRelayRecorderUnreachable(t *testing.T) {
 	// Closed port: the relay must answer 502 JSON, not a handshake.
 	ts := newTestServerWithUpstreams("127.0.0.1:1", "127.0.0.1:1", "127.0.0.1:1")

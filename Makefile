@@ -1,4 +1,4 @@
-.PHONY: help dev build-capture build-capture-hw build-capture-linux build-ingest build-processor build-hw-tools build-prod deploy stop test frontend-test smoke-onnx ort-lib db-init db-migrate db-shell tidy setup clean
+.PHONY: help dev build-capture build-capture-hw build-capture-linux build-ingest build-processor build-recorder build-hw-tools build-prod deploy stop test frontend-test smoke-onnx ort-lib db-init db-migrate db-shell tidy setup clean
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -30,6 +30,9 @@ build-ingest: ## Build native iq-ingest (macOS UDP bench — HARDWARE.md §4)
 
 build-processor: ## Build native signal-processor (macOS UDP bench; rules classifier unless -tags onnx)
 	go build -o bin/signal-processor ./cmd/signal-processor
+
+build-recorder: ## Build native recorder with live Opus audio (-tags opus; needs libopus — macOS bench, HARDWARE.md §4)
+	go build -tags opus -o bin/recorder ./cmd/recorder
 
 # ─── Production (Linux) ───
 

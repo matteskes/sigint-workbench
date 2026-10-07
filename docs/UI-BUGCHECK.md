@@ -20,6 +20,7 @@ Status:
 | Spectrum canvas-text re-check in the live browser (devicePixelRatio 2) | `[done]` — found B9; fixed |
 | Shell popover + §15 keyboard sweep in the live browser (Playwright MCP) | `[done]` — found B10, B11; fixed |
 | Aggressive sweep — keyboard contract, WS kill/F5, health degradation, drag races, deep-link + table abuse, viewports, multi-client (§2 B12–B16, §6) | `[done]` — found B12–B16; fixed |
+| Live-audio campaign — transport probe, bench IQ chain, deep-link regression (§2 B17–B19, §7) | `[done]` — found B17–B19; fixed |
 
 ## 1. Bench shape under test
 
@@ -336,6 +337,88 @@ whitespace-nowrap`) instead of pushing the document wide.
 Fixed 2026-10-06: live-verified at 375×667 on `/`, `/spectrum`, and
 `/setup` — `scrollWidth` 375 == `clientWidth`, nav inside the viewport.
 
+### B17 — gateway WS relay turned the spec'd clean close into a 1006
+
+Clicking **Live** on any signal always ended in "Live stream error:
+websocket error". A raw in-page probe showed why: the socket opened,
+then died at ~3.1 s with `close code=1006, wasClean=false` — an
+abnormal TCP teardown — exactly when the recorder's §10.4 "no live
+stream" 3 s grace expires. The recorder itself sends a proper close
+frame (`closeWS(conn, 1000, "no live stream")`,
+`internal/record/ws_server.go`), but the gateway's `relayWS` pump read
+the upstream close as a plain `ReadMessage` error and just closed the
+client connection: the close frame never reached the browser. §10.4.4
+makes close 1000 the "stream is over" signal — the dashboard maps it
+to the honest "Stream ended" state — so the relay was destroying the
+one piece of metadata the UI needed (and did the same to `/ws` events).
+
+Fix: `relayWS` forwards close frames in both directions
+(`relayClose`): an upstream `*websocket.CloseError` is re-sent to the
+client with code and reason intact (1005 no-status forwards as an
+empty close frame); a client-initiated close is forwarded upstream so
+the recorder's sink releases. Plain IO failures still stay abnormal
+(1006) — which is then the truth. Regression tests:
+`TestWSAudioRelayPropagatesUpstreamCloseCode`,
+`TestWSAudioRelayPropagatesClientCloseCode`.
+
+Fixed 2026-10-07: a live probe through the rebuilt gateway now gets
+`close code=1000 reason="no live stream" wasClean=true`, and the UI
+renders "Stream ended (recorder closed it)" with no console noise.
+
+### B18 — the macOS bench starved the recorder (live audio could never exist)
+
+Every live-audio dial ended in the recorder's 3 s "no live stream"
+close because the recorder had never seen a single IQ frame:
+`scripts/dev-macos.sh` started the native iq-ingest with
+`CONSUMERS=localhost:9010` only, on the documented reasoning that the
+recorder's UDP consumer would have to cross Docker Desktop's broken
+UDP forwarder (HARDWARE.md §4). The compose `recorder` container sat
+running but unfed — 0 rows in `recordings`, an empty recordings dir,
+and a Live button that could only ever fail.
+
+Fix: the recorder joins the NATIVE UDP chain, where the forwarder
+cannot hurt it. New `make build-recorder` target (opus-tagged so live
+audio streams); `dev-macos.sh` stops the compose recorder, starts
+`bin/recorder` natively (supervised; TCP servers loopback-bound via
+the new `RECORDER_BIND_HOST`), and adds `localhost:9011` to the
+ingest's CONSUMERS. The gateway's `RECORDER_WS_ADDR`/`RECORDER_API_ADDR`
+became `${VAR:-recorder:9012}`-style so the bench points them at
+`host.docker.internal` (same pattern as `CAPTURE_CTRL_ADDR`), and the
+gateway no longer `depends_on` the recorder (it dials per connection
+and answers 502 when it is down). `RECORDINGS_DIR=.` with the
+recorder's cwd inside `./recordings` keeps DB `file_path` rows
+relative, so the gateway container resolves them under its
+`/recordings` mount (§13.1 path confinement).
+
+Fixed 2026-10-07: the recorder receives both SDRs (~4.7k pkt/s),
+demodulates the in-band FM set (8 concurrent §10.2 sessions), writes
+WAV+IQ files and `recordings` rows (a first on this bench), publishes
+§10.6 `audio.level` (~80 events/s), and clicking Live on an in-band
+signal plays: `audio.meta` hello → ~50 Opus packets/s → `● live` with
+the VU meter tracking real modulation (6–25 % swing on speech).
+
+### B19 — hard deep-link load threw a replaceState router error
+
+A B15 regression caught while re-testing deep links end to end:
+loading `/signals?signal=<id>` directly (hard load) fired the layout's
+mirror effect during hydration — before SvelteKit's router
+initializes and before the signals route's `onMount` consumes the
+param — and `$app/navigation`'s `replaceState` throws exactly there
+(the old raw `history.replaceState` silently "worked"). The throw was
+also the only thing keeping the param alive: with the selection still
+null, the effect's first legal act would have been to delete the very
+param the bootstrap was about to read.
+
+Fix: the mirror is gated on `afterNavigate` flipping a `routerReady`
+flag — it fires only once the router is live and the page has
+mounted, so pre-init runs no-op instead of throwing, and the delete
+branch can never race the bootstrap.
+
+Fixed 2026-10-07: hard loads of `?signal=<id>` open the inspector
+with zero `replaceState` errors (only the SPEC'd `/track` 404 console
+lines remain), Esc still cleans the URL (B14), and svelte-check /
+vitest stay green.
+
 ## 3. Ops note
 
 ### N1 — backgrounded `make dev` freezes under job control
@@ -366,7 +449,7 @@ sigint-dev.log 2>&1 &` recipe is in the `dev:` target comment
 | Scan toggle `POST /api/sdrs/rtlsdr-0/scan` on→off | sweep genuinely stepped (~2 MHz/s); parked state restored |
 | Tiles `GET :8082/data/v3/{z}/{x}/{y}.pbf` | 200 `application/x-protobuf`, real geometry in-state (Arizona); off-state tiles 204 |
 | `/api/signals/{id}/track`, `.../annotations` | sane empties for fresh/stationary signals |
-| Recordings `[]` | by design in this topology (recorder sees no IQ, HARDWARE.md §4) |
+| Recordings `[]` | true of the old topology only (recorder unfed — fixed as B18, §2); recordings + live audio now flow on this bench |
 
 ## 5. Bring-up incident record (feeds B5)
 
@@ -405,3 +488,26 @@ out of this pass; everything probed that held is recorded here.
 | Viewport stress | 2560×1440 and 1280×480 render without overflow; 480 px height keeps the shell usable (B16 covered the 375 px failure) |
 | Keyboard contract | typing guards hold — `/` focuses search, digits/letters land in the field with no route switch; `?` toggles the overlay; Esc does not blur a focused input (guard early-return, by design) |
 | `/api/signals/{id}/track` 404 | browser-inherent console line for the SPEC'd "no track" response (§9.4); the app handles it — no unhandled rejection, inspector renders — not a frontend defect |
+
+## 7. Live-audio campaign — method + checked-good (2026-10-07)
+
+A third adversarial pass, spawned by the user question "why can't I
+hear anything on a live Broadcast signal?". Method: raw in-page
+WebSocket probes against `/ws/audio` (open/close-code/message capture),
+per-hop infrastructure triage (curl upgrade → gateway logs →
+`docker exec` reachability → native process sockets via `lsof`),
+end-to-end UI drives (click Live, poll state + VU), and §10.6 event
+taps on the events relay. Findings B17–B19 (§2) came out of this pass;
+everything probed that held is recorded here.
+
+| Probe | Result |
+| --- | --- |
+| `/ws/audio` handshake via the relay | 101 with `Origin: http://localhost:5173` (also from curl, no Origin); foreign origins still 403 |
+| §10.4 framing | exactly one text `audio.meta` hello (`type`, `signalId`, `centerHz`, `modulation: FM`, `subType: WFM`, `sampleRate: 48000`, `channels: 1`, `bitrate: 24000`), then binary-only, ~50 packets/s (58.5 observed peak), 60 B packets |
+| Grace expiry (no session) | clean `close 1000 "no live stream"` at ~3.0 s, `wasClean=true` (B17); UI renders "Stream ended (recorder closed it)", button becomes ▶ Live (retry) with no console noise |
+| Session rotation (§11.1 300 s IQ cap) | stream closes cleanly mid-listen as "Stream ended"; a fresh click on the re-opened session goes `● live` again |
+| Live playback | hello → `● live` badge → ■ Stop live → VU meter tracks decoded audio (6–25 % swing on speech; 70 % peaks on a strong carrier) |
+| `audio.level` feed (§10.6) | ~80 events/s across 8 open sessions, levels AGC-normalized (0.95–1.0); payload is a JSON object `{level, signalId}` |
+| Recorder side (post-B18) | both SDRs received (~4.7k pkt/s), WAV+IQ pairs written per session, `recordings` rows with relative paths resolve through the gateway container |
+| Deep link → Live in one pass | hard load `?signal=<id>` opens the inspector; clicking Live plays without a single console error beyond the SPEC'd `/track` 404s |
+| Esc / URL mirror (B14/B19) | Esc clears the selection and the `?signal=` param in place; hard loads no longer throw `replaceState` errors |

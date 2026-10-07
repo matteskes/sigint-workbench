@@ -148,16 +148,24 @@ func main() {
 		Streamer:      streamer,
 	}, database)
 
+	// §3.2 bind posture: in Docker the recorder is unpublished
+	// (sdr-net only), so the default binds all interfaces. On the
+	// native bench (macOS, HARDWARE.md §4) these TCP servers face the
+	// LAN directly — RECORDER_BIND_HOST=127.0.0.1 keeps them
+	// loopback-only there. Docker never sets the variable.
+	bindHost := os.Getenv("RECORDER_BIND_HOST")
+
 	// §10.4: internal /ws/audio server on :9012 (unpublished; the
 	// api-gateway relays browser connections to it).
 	if streamer != nil {
+		wsAddr := fmt.Sprintf("%s:%d", bindHost, wsPort)
 		wsSrv := &http.Server{
-			Addr:              fmt.Sprintf(":%d", wsPort),
+			Addr:              wsAddr,
 			Handler:           record.WSAudioHandler(streamer),
 			ReadHeaderTimeout: 5 * time.Second,
 		}
 		go func() {
-			log.Printf("live audio: ws://recorder:%d/ws/audio?signal=<id> (§10.4)", wsPort)
+			log.Printf("live audio: ws://%s/ws/audio?signal=<id> (§10.4)", wsAddr)
 			if err := wsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				log.Printf("ws server: %v", err)
 			}
@@ -180,6 +188,7 @@ func main() {
 		MaxNFFT:  config.ResolveInt(cfg.TFR.MaxNFFT, tfr.DefaultMaxNFFT),
 	}
 	tfrPort := config.ResolveInt(config.GetEnvInt("RECORDER_TFR_PORT", 0), cfg.TFR.ListenPort, 9013)
+	tfrAddr := fmt.Sprintf("%s:%d", bindHost, tfrPort)
 	tfrLookup := func(ctx context.Context, id string) (*db.Recording, error) {
 		if database == nil {
 			return nil, db.ErrNotFound // files-only mode: nothing resolvable
@@ -187,12 +196,12 @@ func main() {
 		return database.GetRecording(ctx, id)
 	}
 	tfrSrv := &http.Server{
-		Addr:              fmt.Sprintf(":%d", tfrPort),
+		Addr:              tfrAddr,
 		Handler:           tfr.NewHandler(tfrLimits, tfrLookup).Routes(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	go func() {
-		log.Printf("tfr: recorder :%d POST /api/recordings/{id}/tfr (enabled=%t, §19)", tfrPort, tfrLimits.Enabled)
+		log.Printf("tfr: %s POST /api/recordings/{id}/tfr (enabled=%t, §19)", tfrAddr, tfrLimits.Enabled)
 		if err := tfrSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Printf("tfr server: %v", err)
 		}

@@ -762,7 +762,10 @@ func (s *Server) checkRelayOrigin(w http.ResponseWriter, r *http.Request) bool {
 // relayWS dials the upstream before upgrading the client — an
 // unreachable upstream answers the client's handshake with a plain
 // **502 JSON** response — then transparently pumps frames in both
-// directions until either side closes.
+// directions until either side closes. Close frames are relayed with
+// code and reason intact (B17, §10.4.4): the recorder's spec'd clean
+// 1000 must not degrade into a TCP-level abnormal 1006 at the single
+// client ingress, or the dashboard renders "ended" as an error.
 func (s *Server) relayWS(w http.ResponseWriter, r *http.Request, backend url.URL, name, addr string) {
 	up, resp, err := websocket.DefaultDialer.Dial(backend.String(), nil)
 	if err != nil {
@@ -789,6 +792,7 @@ func (s *Server) relayWS(w http.ResponseWriter, r *http.Request, backend url.URL
 		for {
 			mt, data, err := clientConn.ReadMessage()
 			if err != nil {
+				relayClose(up, err) // the client hung up — tell upstream
 				return
 			}
 			if err := up.WriteMessage(mt, data); err != nil {
@@ -801,6 +805,7 @@ func (s *Server) relayWS(w http.ResponseWriter, r *http.Request, backend url.URL
 		for {
 			mt, data, err := up.ReadMessage()
 			if err != nil {
+				relayClose(clientConn, err) // upstream hung up — tell the client
 				return
 			}
 			if err := clientConn.WriteMessage(mt, data); err != nil {
@@ -814,6 +819,30 @@ func (s *Server) relayWS(w http.ResponseWriter, r *http.Request, backend url.URL
 	}
 	clientConn.Close()
 	up.Close()
+}
+
+// relayCloseGrace bounds how long a relayed close frame may take to
+// write after one side hangs up.
+const relayCloseGrace = 2 * time.Second
+
+// relayClose forwards a read-pump termination to conn as a WebSocket
+// close frame when it carries one (B17, §10.4.4): the recorder's clean
+// closes — 1000 "no live stream" / "stream ended" — must reach the
+// browser with code and reason intact. Plain IO failures carry no
+// close frame and stay abnormal (1006) — which is then the truth.
+func relayClose(conn *websocket.Conn, err error) {
+	ce, ok := err.(*websocket.CloseError)
+	if !ok {
+		return
+	}
+	deadline := time.Now().Add(relayCloseGrace)
+	if ce.Code == websocket.CloseNoStatusReceived {
+		// 1005 never travels on the wire — forward an empty close.
+		_ = conn.WriteControl(websocket.CloseMessage, nil, deadline)
+		return
+	}
+	_ = conn.WriteControl(websocket.CloseMessage,
+		websocket.FormatCloseMessage(ce.Code, ce.Text), deadline)
 }
 
 func writeJSON(w http.ResponseWriter, v interface{}) {

@@ -1579,8 +1579,8 @@ General contract:
 | `GET /api/recordings/{id}/audio` | `[implemented]` | Streams the file (path-confined to `RECORDINGS_DIR`); `audio/wav` for wav; every other format (`iq`) serves as `application/octet-stream` (`flac` branch removed in Phase 1 — no FLAC support, §10.5) |
 | `GET /api/sdrs` | `[implemented]` | All SDR rows |
 | `PUT /api/sdrs/{id}` | `[implemented]` | Partial update (`model`, `serial`, `lat`, `lon`, `gainDb`, `freqHz`, `active`); `freqHz`/`gainDb` are also forwarded to the `sdr-capture` control API (§7.4) so they retune hardware — capture unreachable ⇒ `502`, unknown device at capture ⇒ `404`; never silently DB-only (§13.2.3) |
-| `GET /ws` | `[implemented]` | Transparent bidirectional relay to `ws-hub:8081/ws` (§2.2, Phase 2); the hub is dialed before the client upgrade — hub down ⇒ `502` JSON `{"error":"ws-hub unreachable"}`; foreign origins ⇒ `403` (`ALLOWED_ORIGINS`, §17.2) |
-| `GET /ws/audio` | `[implemented]` | Transparent relay to recorder `:9012/ws/audio?signal=<id>` (§10.4, Phase 2): one text `audio.meta` hello, then binary Opus packets pass untouched; recorder down ⇒ `502` JSON; foreign origins ⇒ `403` |
+| `GET /ws` | `[implemented]` | Transparent bidirectional relay to `ws-hub:8081/ws` (§2.2, Phase 2); the hub is dialed before the client upgrade — hub down ⇒ `502` JSON `{"error":"ws-hub unreachable"}`; foreign origins ⇒ `403` (`ALLOWED_ORIGINS`, §17.2); close frames relayed with code/reason preserved (B17) |
+| `GET /ws/audio` | `[implemented]` | Transparent relay to recorder `:9012/ws/audio?signal=<id>` (§10.4, Phase 2): one text `audio.meta` hello, then binary Opus packets pass untouched; recorder down ⇒ `502` JSON; foreign origins ⇒ `403`; the recorder's clean close reaches the browser with code/reason intact (§10.4.4, B17) |
 | `GET /api/sdrs/{id}/status` | `[implemented]` | Proxy of capture control `GET /api/v1/status` filtered to the device (§7.4); capture down ⇒ `502`, unknown id ⇒ `404` |
 | `POST /api/sdrs/{id}/scan` | `[implemented]` | Runtime park/resume of the device's sweep loop (§7.4): body `{"enabled": bool}` forwarded to capture's `POST /api/v1/scan`, device's live status relayed; no DB write (runtime state). Unknown id ⇒ `404`, device without a scan loop ⇒ `409`, capture down ⇒ `502`, DB down ⇒ `503` |
 | `GET/POST /api/signals/{id}/annotations` | `[implemented]` | List a signal's user notes (newest first) / add one — POST body `{"userNote"}` ⇒ `201` + created row; unknown signal ⇒ `404`; blank or missing note ⇒ `400` (§12.5) |
@@ -2093,7 +2093,9 @@ stream.bitrate_bps     int    24000        (Opus CBR, mono, 20 ms frames)
 | `RECORDER_UDP_PORT` | recorder | 9011 (UDP IQ in) |
 | `RECORDER_WS_PORT` | recorder | 9012 (`/ws/audio` WS, §10.4) |
 | `RECORDER_TFR_PORT` | recorder | 9013 (internal TFR API override, §19.3) |
-| `RECORDER_API_ADDR` | api-gateway | `recorder:9013` (TFR proxy target, §19.3) |
+| `RECORDER_BIND_HOST` | recorder | bind host for the :9012/:9013 TCP servers (default all interfaces for Docker; macOS bench sets `127.0.0.1`, HARDWARE.md §4) |
+| `RECORDER_WS_ADDR` | api-gateway | `/ws/audio` relay target (§10.4); compose default `recorder:9012`, macOS bench `host.docker.internal:9012` |
+| `RECORDER_API_ADDR` | api-gateway | `recorder:9013` (TFR proxy target, §19.3); macOS bench `host.docker.internal:9013` |
 | `CAPTURE_API_HOST` | signal-processor | capture control-API host for §5.6 gain polling (`sdr-capture` default; macOS dev: `host.docker.internal`) |
 | `API_GATEWAY_PORT` | api-gateway | 8080 |
 | `TILE_SERVER_PORT` | tiles | 8082 |
