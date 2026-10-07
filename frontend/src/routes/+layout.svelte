@@ -127,6 +127,10 @@
 	}
 </script>
 
+<!-- §15 keyboard map (below) is global — view switches, ? overlay,
+     j/k navigation, Esc close, Space audio. -->
+<svelte:window onkeydown={handleKeydown} />
+
 <div class="flex h-screen flex-col bg-slate-900 text-slate-100">
 	<AppBar />
 	<FirstRunBanner />

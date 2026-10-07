@@ -18,6 +18,7 @@ Status:
 | Bugs filed (B1–B6, §2; N1, §3) | B1–B6 `[fixed]`; N1 `[documented]` |
 | §2 re-verification in a real browser (Playwright MCP, WebKit) | `[done]` — found B6, B7, B8; fixed |
 | Spectrum canvas-text re-check in the live browser (devicePixelRatio 2) | `[done]` — found B9; fixed |
+| Shell popover + §15 keyboard sweep in the live browser (Playwright MCP) | `[done]` — found B10, B11; fixed |
 
 ## 1. Bench shape under test
 
@@ -238,6 +239,24 @@ Fixed 2026-10-06: verified in the live browser — each popover opens
 from its trigger, ignores clicks inside the panel (the layer
 checkboxes still toggle), closes on any outside press, and closes on
 Esc.
+
+### B11 — the §15 keyboard map was never attached (every shortcut dead)
+
+`+layout.svelte` defines the entire §15 keyboard map in
+`handleKeydown` — 1–6 view switches, `?` overlay, `/` search focus,
+j/k/↑/↓ navigation, Enter select, Esc close, Space audio — but nothing
+ever listened for it: the file had no `<svelte:window>`, and no other
+component attaches the handler. UI-DESIGN §15 documents all of these
+as working (and the `?` overlay itself advertises them); in reality
+every shortcut was dead code. This is also why Esc did nothing for
+B10's popovers.
+
+Fix: `<svelte:window onkeydown={handleKeydown} />` in the layout —
+the one line the file was always meant to have.
+
+Fixed 2026-10-06: verified in the live browser — `?` opens the
+shortcuts overlay and Esc closes it; `2` then `1` switch Spectrum →
+Operations.
 
 ## 3. Ops note
 
