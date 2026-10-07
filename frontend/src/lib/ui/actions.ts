@@ -30,7 +30,14 @@ export const popoverDismiss: Action<HTMLElement, DismissOptions> = (node, initia
 	}
 
 	function onKeyDown(e: KeyboardEvent): void {
-		if (opts.open && e.key === 'Escape') opts.onDismiss();
+		if (opts.open && e.key === 'Escape') {
+			opts.onDismiss();
+			// UI-BUGCHECK B13: one layer per press. This capture-phase
+			// listener swallows the keystroke so the shell's global Esc
+			// chain (§15: shortcuts overlay → receiver card → selection)
+			// doesn't close a second layer at the same time.
+			e.stopImmediatePropagation();
+		}
 	}
 
 	document.addEventListener('pointerdown', onPointerDown, true);

@@ -4,7 +4,7 @@
 	// reconnect banners, and the §15 keyboard map.
 	import '../app.css';
 	import { onMount } from 'svelte';
-	import { goto } from '$app/navigation';
+	import { goto, replaceState } from '$app/navigation';
 	import { get } from 'svelte/store';
 	import AppBar from '$lib/components/shell/AppBar.svelte';
 	import FirstRunBanner from '$lib/components/shell/FirstRunBanner.svelte';
@@ -37,6 +37,22 @@
 		}
 	});
 
+	// ── §3.1 ?signal=<id> deep-link mirror (UI-BUGCHECK B14/B15) ─────
+	// Lives in the shell, not the Inspector: the Inspector unmounts the
+	// instant the selection clears, which destroyed its copy of this
+	// effect before the delete-the-param branch could run and left a
+	// stale ?signal= that resurrected the inspector on reload. Uses
+	// $app/navigation's replaceState — raw history.replaceState fights
+	// SvelteKit's router and logs a console warning (B15).
+	$effect(() => {
+		const id = $selectedSignal?.id ?? null;
+		const url = new URL(window.location.href);
+		if (url.searchParams.get('signal') === id) return;
+		if (id) url.searchParams.set('signal', id);
+		else url.searchParams.delete('signal');
+		replaceState(url, {});
+	});
+
 	onMount(() => {
 		stopConnection = startConnection();
 		startHealthPolling();
@@ -57,6 +73,19 @@
 				t.tagName === 'TEXTAREA' ||
 				t.tagName === 'SELECT' ||
 				t.isContentEditable)
+		);
+	}
+
+	/** UI-BUGCHECK B12: keys that natively activate the focused element —
+	 * the global map must not swallow them (Space on a button, Enter on a
+	 * link), or those controls become keyboard-unreachable. */
+	function isActivator(t: EventTarget | null): boolean {
+		return (
+			t instanceof HTMLElement &&
+			(t.tagName === 'BUTTON' ||
+				t.tagName === 'A' ||
+				t.tagName === 'SUMMARY' ||
+				t.getAttribute('role') === 'button')
 		);
 	}
 
@@ -101,7 +130,9 @@
 				const i = get(highlightIndex);
 				const id = i >= 0 ? list[i] : undefined;
 				const sig = id ? get(signals).find((s) => s.id === id) : undefined;
-				if (sig) {
+				// B12: let Enter natively activate a focused button/link;
+				// only hijack it for row selection from a non-activator.
+				if (sig && !isActivator(e.target)) {
 					e.preventDefault();
 					selectedSignal.set(sig);
 					inspectorOpen.set(true);
@@ -119,9 +150,13 @@
 				break;
 			case ' ':
 				// Play/pause live audio (F4) — one stream at a time; the
-				// registered toggle no-ops when no player is mounted.
-				e.preventDefault();
-				toggleLiveAudio();
+				// registered toggle no-ops when no player is mounted. B12:
+				// skip when focus sits on an activatable element so Space
+				// keeps its native press semantics there.
+				if (!isActivator(e.target)) {
+					e.preventDefault();
+					toggleLiveAudio();
+				}
 				break;
 		}
 	}

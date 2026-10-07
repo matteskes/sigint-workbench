@@ -36,11 +36,14 @@
 	}
 </script>
 
-<header class="flex h-12 shrink-0 items-center gap-4 border-b border-slate-700 bg-slate-900 px-4">
-	<h1 class="text-lg font-bold tracking-tight">
+<!-- UI-BUGCHECK B16: wrap + an internally-scrolling nav so narrow
+     viewports don't push the whole document wide (every page
+     horizontally overflowed at 375 px). -->
+<header class="flex min-h-12 shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-b border-slate-700 bg-slate-900 px-4 py-1">
+	<h1 class="shrink-0 text-lg font-bold tracking-tight">
 		<span class="text-sky-400">SIGINT</span> Workbench
 	</h1>
-	<nav aria-label="Views" class="flex items-center gap-0.5 text-sm">
+	<nav aria-label="Views" class="flex min-w-0 max-w-full items-center gap-0.5 overflow-x-auto whitespace-nowrap text-sm">
 		{#each NAV as item (item.href)}
 			<a
 				href={item.href}

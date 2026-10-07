@@ -29,18 +29,9 @@ import { tdoaResults } from '$lib/stores/tdoa';
 
 	let { signal }: { signal: Signal } = $props();
 
-	// ── ?signal=<id> deep-link mirror (§3.1) ──
-	$effect(() => {
-		const id = signal.id;
-		try {
-			const url = new URL(window.location.href);
-			if (id) url.searchParams.set('signal', id);
-			else url.searchParams.delete('signal');
-			window.history.replaceState(null, '', url);
-		} catch {
-			// history unavailable (embeddings) — cosmetic only
-		}
-	});
+	// The ?signal=<id> deep-link mirror lives in +layout.svelte now
+	// (UI-BUGCHECK B14/B15): this component unmounts the moment the
+	// selection clears, which used to strand a stale ?signal= in the URL.
 
 	// ── Signal notes (§12.5 annotations), with the existing
 	// cancellation guard per selection ──

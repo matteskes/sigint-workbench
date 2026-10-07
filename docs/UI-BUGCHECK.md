@@ -19,6 +19,7 @@ Status:
 | §2 re-verification in a real browser (Playwright MCP, WebKit) | `[done]` — found B6, B7, B8; fixed |
 | Spectrum canvas-text re-check in the live browser (devicePixelRatio 2) | `[done]` — found B9; fixed |
 | Shell popover + §15 keyboard sweep in the live browser (Playwright MCP) | `[done]` — found B10, B11; fixed |
+| Aggressive sweep — keyboard contract, WS kill/F5, health degradation, drag races, deep-link + table abuse, viewports, multi-client (§2 B12–B16, §6) | `[done]` — found B12–B16; fixed |
 
 ## 1. Bench shape under test
 
@@ -258,6 +259,83 @@ Fixed 2026-10-06: verified in the live browser — `?` opens the
 shortcuts overlay and Esc closes it; `2` then `1` switch Spectrum →
 Operations.
 
+### B12 — global keymap swallowed Space/Enter activation (a11y regression from B11)
+
+Wiring B11 revived the §15 `handleKeydown`, but its `Space` case called
+`e.preventDefault()` unconditionally and its `Enter` case whenever a row
+was highlighted. A keyboard user who had Tabbed to any button or link
+could not activate it: Space on the focused ⚙ triggered
+`toggleLiveAudio()` (a no-op) instead of the click, and Enter on a
+focused view link selected the highlighted signal instead of
+navigating. WebKit masks the mouse path — Safari-family browsers never
+focus buttons on click — but Tab users hit it on every control.
+
+Fix: an `isActivator(target)` guard (`BUTTON`/`A`/`SUMMARY`/
+`[role=button]`) — those targets keep native activation; the map's
+Space/Enter branches only run from non-activatable focus (body, table,
+map).
+
+Fixed 2026-10-06: live-verified — keyboard-focused ⚙ + Space opens the
+menu; Enter on a focused Spectrum link navigates instead of hijacking;
+Space/Enter from body focus still drive audio toggle / row selection.
+
+### B13 — one Esc closed every stacked layer at once
+
+`popoverDismiss`'s document-level Escape listener and the layout's
+`svelte:window` Esc chain (§15: shortcuts overlay → receiver card →
+selection) fired on the same keystroke: with the ⚙ menu open under the
+shortcuts overlay, a single Esc closed both.
+
+Fix: the action's Escape listener (already capture-phase) calls
+`e.stopImmediatePropagation()` after dismissing, so the shell handles
+the next layer on the next press — topmost first, one layer per
+keystroke.
+
+Fixed 2026-10-06: live-verified — menu + overlay stacked: first Esc
+closes the menu only (overlay stays), second Esc closes the overlay.
+
+### B14 — stale `?signal=` after Esc (inspector resurrects on reload)
+
+The `?signal=<id>` deep-link mirror lived inside `Inspector.svelte`,
+but the inspector only mounts while a signal is selected
+(`{#if $selectedSignal && $inspectorOpen}`). Esc clears the selection →
+the component unmounts → the effect's delete-the-param branch never
+runs → the URL keeps `?signal=<id>`, so refreshing or sharing the link
+reopens an inspector the user had just closed.
+
+Fix: the mirror moves into `+layout.svelte` (which survives selection
+changes), with a no-op guard when the param already matches.
+
+Fixed 2026-10-06: live-verified — select a signal → URL mirrors; Esc →
+URL returns to `/`; reload stays clean.
+
+### B15 — raw `history.replaceState` (SvelteKit router console warning)
+
+The B14-era mirror called `window.history.replaceState` directly, so
+every selection logged SvelteKit's "Avoid using history.pushState(…)
+and history.replaceState(…)" warning — the router is not kept in sync
+by raw history writes.
+
+Fix: same relocation as B14 — the layout mirror uses `replaceState`
+from `$app/navigation`.
+
+Fixed 2026-10-06: console clean (0 errors, 0 warnings) on fresh load
+and through a selection round-trip.
+
+### B16 — app bar overflowed every page at narrow viewports
+
+The header was a fixed-height, non-wrapping flex row; its nav (~451 px)
+plus the right-side control cluster forced `document.scrollWidth` to
+891 px at a 375 px viewport — the whole app scrolled sideways on every
+route (the map/table were unusable without horizontal panning).
+
+Fix: the header wraps (`min-h-12`, `flex-wrap`, column/row gaps) and
+the nav scrolls internally (`min-w-0 max-w-full overflow-x-auto
+whitespace-nowrap`) instead of pushing the document wide.
+
+Fixed 2026-10-06: live-verified at 375×667 on `/`, `/spectrum`, and
+`/setup` — `scrollWidth` 375 == `clientWidth`, nav inside the viewport.
+
 ## 3. Ops note
 
 ### N1 — backgrounded `make dev` freezes under job control
@@ -304,3 +382,26 @@ sigint-dev.log 2>&1 &` recipe is in the `dev:` target comment
   Residual state: rtlsdr-0 parked at 150.62 MHz (sweep cursor position
   when the toggle test parked it) instead of the 146.52 boot default —
   documented §7.4 semantics; the next sweep resumes from there.
+
+## 6. Aggressive sweep — method + checked-good (2026-10-06)
+
+A second, adversarial pass over the live UI (Playwright MCP, WebKit,
+real on-air data): keyboard-contract attacks on the fresh B11 wiring,
+in-page WebSocket kills with 100 ms state polling, full-network
+degradation via `context.setOffline`, waterfall drag races (release
+outside the canvas, mid-drag route switch), deep-link and table abuse,
+viewport stress, and two-client fan-out. Findings B12–B16 (§2) came
+out of this pass; everything probed that held is recorded here.
+
+| Probe | Result |
+| --- | --- |
+| WS drop → reconnect → F5 banner | works: killed the store's socket in-page — pill `live` → `reconnecting (1)` at ~120 ms → `live` at ~1.1 s with a fresh socket, "connection restored — state reloaded" banner shown and self-dismissed at ~4 s; a rapid double-kill also recovers |
+| Health degradation | `context.setOffline(true)` → popover renders the exact §3.2 amber path: "status probe failed — showing last known state · checked 0s ago · every 30s"; recovers on restore |
+| setOffline caveat | offline emulation only blocks *new* requests — an established WebSocket survives it, so the pill never moves under `setOffline`; the WS path must be tested by killing the socket (done above) |
+| Waterfall drag races | happy-path drag commits (`sel 95.618–96.341 MHz`), degenerate click clears, and the canvas's `on:pointerleave={dragUp}` self-commits/clears when the pointer leaves mid-drag — no stuck drag state, no phantom span overlay; a mid-drag route switch unmounts cleanly |
+| Deep-link abuse | `?signal=<garbage>` (injection-style string) and `?signal=` soft-fail: page renders, inspector stays closed; a valid live id opens the inspector and mirrors into the URL |
+| Table abuse | search with regex metacharacters (`.*[`) and a 300-char unicode string filter gracefully to the "no signals match" empty state (substring semantics, no crash); Freq sort toggles direction (96.234 → 97.294 → 94.909 MHz); the "without position" chip toggles (row set unchanged here because nearly all live rows are unlocated on this bench) |
+| Multi-client fan-out | two tabs simultaneously: both connection pills `live`, both receive the stream (A1's N-client hub) |
+| Viewport stress | 2560×1440 and 1280×480 render without overflow; 480 px height keeps the shell usable (B16 covered the 375 px failure) |
+| Keyboard contract | typing guards hold — `/` focuses search, digits/letters land in the field with no route switch; `?` toggles the overlay; Esc does not blur a focused input (guard early-return, by design) |
+| `/api/signals/{id}/track` 404 | browser-inherent console line for the SPEC'd "no track" response (§9.4); the app handles it — no unhandled rejection, inspector renders — not a frontend defect |
