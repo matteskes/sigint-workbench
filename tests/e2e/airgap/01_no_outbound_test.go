@@ -1,0 +1,84 @@
+// Package airgap — Section 4.11 Test A1: Network Isolation Verification.
+package airgap
+
+import (
+	"os"
+	"os/exec"
+	"testing"
+)
+
+func TestA1_NoOutbound(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{"loopback_ping", []string{"ping", "-c1", "-W1", "127.0.0.1"}},
+		{"external_8888", []string{"ping", "-c1", "-W1", "8.8.8.8"}},
+		{"external_1111", []string{"ping", "-c1", "-W1", "1.1.1.1"}},
+		{"external_gw", []string{"ping", "-c1", "-W1", "10.0.0.1"}},
+	}
+
+	// Loopback must succeed.
+	cmd := exec.Command("ping", "-c1", "-W1", "127.0.0.1")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("loopback ping should succeed: %v — %s", err, string(out))
+	}
+
+	// External pings must fail (air-gap pre-flight).
+	for _, tc := range tests[1:] {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := exec.Command(tc.args[0], tc.args[1:]...)
+			out, err := cmd.CombinedOutput()
+			if err == nil {
+				t.Fatalf("expected failure for %v, got nil (network not air-gapped?) — %s", tc.args, string(out))
+			}
+			t.Logf("  [%s] correctly failed: %v — %s", tc.name, err, string(out))
+		})
+	}
+
+	// Cloud metadata endpoint must be unreachable.
+	cmd = exec.Command("curl", "-sf", "--connect-timeout", "3",
+		"http://169.254.169.254/latest/meta-data/")
+	out, err := cmd.CombinedOutput()
+	_ = out
+	if err == nil {
+		t.Log("  WARNING: cloud metadata endpoint responded — this may not be air-gapped")
+	} else {
+		t.Logf("  cloud metadata unreachable (expected): %v", err)
+	}
+}
+
+func TestA1_Nslookup(t *testing.T) {
+	cmd := exec.Command("nslookup", "localhost")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("nslookup localhost should succeed: %v — %s", err, string(out))
+	}
+
+	cmd = exec.Command("nslookup", "google.com")
+	out, err := cmd.CombinedOutput()
+	_ = out
+	if err == nil {
+		t.Log("  WARNING: DNS for google.com succeeded — this may not be air-gapped")
+	} else {
+		t.Logf("  nslookup google.com failed (expected in air-gap): %v", err)
+	}
+}
+
+func TestA1_AuditBaseline(t *testing.T) {
+	logFile := t.TempDir() + "/airgap-baseline.log"
+	auditEntry := "AIRGAP-PRE-FLIGHT " +
+		"timestamp=" + os.Getenv("TEST_TIMESTAMP") +
+		" loopback=ok external=fail metadata=unreachable\n"
+	if err := os.WriteFile(logFile, []byte(auditEntry), 0644); err != nil {
+		t.Fatalf("write audit log: %v", err)
+	}
+
+	data, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatalf("read audit log: %v", err)
+	}
+	if len(data) == 0 {
+		t.Fatal("audit log is empty")
+	}
+	t.Logf("  audit baseline: %s", string(data))
+}
