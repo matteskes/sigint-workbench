@@ -84,6 +84,30 @@
 		}
 	}
 
+	// Fine tune (§7.4): hand nudges in 1 kHz steps for signal lock —
+	// the finest center-frequency step the RTL2832U tuner PLL honestly
+	// resolves. Each nudge is a full retune PUT (and therefore parks a
+	// sweeping device, exactly like a typed tune).
+	const FINE_STEP_HZ = 1000;
+	const FREQ_MIN_HZ = 24e6; // matches the frequency input's min
+	const FREQ_MAX_HZ = 6000e6; // matches the frequency input's max
+
+	async function nudge(sdr: { id: string; freqHz: number }, deltaHz: number): Promise<void> {
+		const next = sdr.freqHz + deltaHz;
+		if (next < FREQ_MIN_HZ || next > FREQ_MAX_HZ) return; // driver range
+		errors = { ...errors, [sdr.id]: '' };
+		busy = { ...busy, [sdr.id]: true };
+		try {
+			applySDRStatus(await retuneSdr(sdr.id, next));
+			// §7.4: a manual tune parks the sweep — refresh the badge.
+			void refreshStatus(sdr.id);
+		} catch (e) {
+			errors = { ...errors, [sdr.id]: describeStatus(e) };
+		} finally {
+			busy = { ...busy, [sdr.id]: false };
+		}
+	}
+
 	async function toggleScan(id: string): Promise<void> {
 		const cur = $sdrRuntime[id];
 		if (!cur) return;
@@ -158,6 +182,31 @@
 						aria-label="Gain (dB) for {sdr.id}"
 					/>
 				</label>
+			</div>
+			<div class="flex items-center gap-1">
+				<button
+					type="button"
+					class="flex-1 rounded bg-slate-900 px-2 py-1 text-xs text-slate-300
+						hover:bg-slate-700 hover:text-white focus:outline-none
+						focus-visible:ring-1 focus-visible:ring-sky-500 disabled:opacity-50"
+					disabled={busy[sdr.id]}
+					onclick={() => nudge(sdr, -FINE_STEP_HZ)}
+					aria-label="Nudge frequency −1 kHz for {sdr.id}"
+				>
+					−1 kHz
+				</button>
+				<span class="shrink-0 text-[10px] uppercase tracking-wide text-slate-600">fine</span>
+				<button
+					type="button"
+					class="flex-1 rounded bg-slate-900 px-2 py-1 text-xs text-slate-300
+						hover:bg-slate-700 hover:text-white focus:outline-none
+						focus-visible:ring-1 focus-visible:ring-sky-500 disabled:opacity-50"
+					disabled={busy[sdr.id]}
+					onclick={() => nudge(sdr, FINE_STEP_HZ)}
+					aria-label="Nudge frequency +1 kHz for {sdr.id}"
+				>
+					+1 kHz
+				</button>
 			</div>
 			{#if $sdrRuntime[sdr.id]?.scanning}
 				<div class="flex items-center justify-between">

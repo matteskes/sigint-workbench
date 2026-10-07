@@ -363,7 +363,10 @@ shape it.
   counted into a `+N` marker instead of overlapping. Derived once per
   coalesced flush (no per-event work, §14.3).
 - **Receiver controls (left rail)** — per device: freq/gain readout,
-  frequency input (`retuneSdr`), **gain input (new)** — the endpoint has
+  frequency input (`retuneSdr`), **fine-tune nudges (±1 kHz)** flanking
+  a `fine` label — one click = one `retuneSdr` PUT at
+  `freqHz ± 1000`, the honest finest step of the RTL2832U tuner PLL,
+  for hand-locking a signal; **gain input (new)** — the endpoint has
   always accepted `gainDb` (§13.1 `PUT /api/sdrs/{id}`); add
   `setGain(id, db)` to `client.ts` alongside `retuneSdr`. Sweep state +
   park/resume button (`setScan`), with the §7.4 semantics stated in
@@ -513,11 +516,17 @@ annotations fetch with the existing cancellation guard.
 **F2 — tune a receiver.** Frequency/gain edit → `retuneSdr`/`setGain`
 (`PUT /api/sdrs/{id}`) → success: card + map marker update from the
 returned `SDRStatus`; `sdr.status` WS events keep the rest coherent.
-Manual tune on a sweeping device parks the sweep (§7.4): the UI shows
-`■ parked` (amber) everywhere the device appears (rail, map marker ring,
-spectrum source row), with the resume button at each location. Failures
-render the fail-loud phrase (`502` capture unreachable, `404` unknown at
-capture) inline in the card, and never clear the input.
+**Fine tune:** `−1 kHz` / `+1 kHz` buttons under the inputs nudge the
+receiver one kilohertz per click (a full §7.4 retune each — and
+therefore park a sweeping device, like any manual tune), so a signal
+can be hand-locked inside its passband without typing; nudges reuse
+the card's busy/error display and clamp to the input's 24 MHz–6 GHz
+range. Manual tune on a sweeping device parks the sweep (§7.4): the
+UI shows `■ parked` (amber) everywhere the device appears (rail, map
+marker ring, spectrum source row), with the resume button at each
+location. Failures render the fail-loud phrase (`502` capture
+unreachable, `404` unknown at capture) inline in the card, and never
+clear the input.
 
 **F3 — waterfall → analysis.** Drag on the waterfall → `dragToSelection`
 → selection overlay + bar → `analyze ↗` → `/analysis?recording=…` (if a
