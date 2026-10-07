@@ -149,7 +149,9 @@
 </script>
 
 <div class="flex min-w-0 flex-1 flex-col">
-	<div class="mx-auto w-full max-w-5xl min-h-0 flex-1 px-6 py-6">
+	<!-- §11: the wizard body is the scroll container; the step column and the
+	SystemCheck footer stay visible while long section forms scroll. -->
+	<div class="mx-auto w-full max-w-5xl min-h-0 flex-1 overflow-y-auto px-6 py-6">
 		<h1 class="text-xl font-bold">Setup</h1>
 		<p class="mt-1 text-sm text-slate-400">
 			Configure the workbench without hand-editing YAML (SPEC §20).
@@ -160,8 +162,9 @@
 			<p class="mt-6 text-sm text-slate-500">Loading configuration…</p>
 		{:else}
 			<div class="mt-5 flex items-start gap-6">
-				<!-- §11: persistent step column with save-state badges -->
-				<nav class="w-56 shrink-0" aria-label="Setup sections">
+				<!-- §11: persistent step column with save-state badges; sticky so it
+				stays visible while the section form scrolls. -->
+				<nav class="sticky top-6 w-56 shrink-0" aria-label="Setup sections">
 					<ol class="space-y-1">
 						{#each index.sections as section, i (section.id)}
 							<li>
