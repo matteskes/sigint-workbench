@@ -6,6 +6,7 @@
 	// color-only (§16).
 	import { onMount } from 'svelte';
 	import { health, HEALTH_POLL_MS, type ComponentStatus } from '$lib/stores/health';
+	import { popoverDismiss } from '$lib/ui/actions';
 	import { relTime } from '$lib/ui/format';
 
 	const ORDER = ['db', 'ws-hub', 'recorder', 'capture'];
@@ -30,7 +31,9 @@
 	}
 </script>
 
-<div class="relative">
+<!-- §15: outside-click/Escape dismissal — the wrapper spans the
+     trigger and the panel, so neither self-dismisses. -->
+<div class="relative" use:popoverDismiss={{ open, onDismiss: () => (open = false) }}>
 	<button
 		class="flex items-center gap-2 rounded px-1.5 py-1 hover:bg-slate-800"
 		aria-label="Service health"

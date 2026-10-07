@@ -6,6 +6,7 @@
 	import HealthChips from './HealthChips.svelte';
 	import { shortcutsOpen } from '$lib/stores/ui';
 	import { completeSetup } from '$lib/api/client';
+	import { popoverDismiss } from '$lib/ui/actions';
 
 	const NAV = [
 		{ href: '/', label: 'Operations' },
@@ -57,7 +58,7 @@
 	<div class="ml-auto flex items-center gap-3">
 		<ConnectionPill />
 		<HealthChips />
-		<div class="relative">
+		<div class="relative" use:popoverDismiss={{ open: menuOpen, onDismiss: () => (menuOpen = false) }}>
 			<button
 				class="rounded px-2 py-1 text-slate-400 hover:bg-slate-800 hover:text-slate-200"
 				aria-label="Settings menu"

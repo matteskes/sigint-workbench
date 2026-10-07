@@ -217,6 +217,28 @@ Fixed 2026-10-06: verified in the live browser at devicePixelRatio 2
 — device-scale crops of the plot corner and the dB-label gutter show
 crisp, non-overlapping text; the smear is gone.
 
+### B10 — shell and map popovers never dismiss on outside click
+
+The health chips popover (`HealthChips.svelte`), the ⚙ settings menu
+(`AppBar.svelte`), and the map layer-toggles popover
+(`routes/+page.svelte`) all toggle `open` from their trigger button and
+render `{#if open}` — and that was the only path back to closed.
+Clicking anywhere else left the panel floating over the view (z-40, on
+top of the map and the signal table); only a second click on the very
+same trigger would put it away.
+
+Fix: a shared `popoverDismiss` Svelte action (`$lib/ui/actions.ts`) —
+a document-level `pointerdown` listener in the capture phase plus an
+`Escape` keyhandler (§15: "Esc — close popover"), both guarded by
+`open`, attached to each popover's positioning wrapper so the
+trigger's own toggle and the panel's controls (checkboxes, links)
+never count as "outside". Applied to all three popovers.
+
+Fixed 2026-10-06: verified in the live browser — each popover opens
+from its trigger, ignores clicks inside the panel (the layer
+checkboxes still toggle), closes on any outside press, and closes on
+Esc.
+
 ## 3. Ops note
 
 ### N1 — backgrounded `make dev` freezes under job control

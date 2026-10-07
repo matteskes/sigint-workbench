@@ -11,6 +11,7 @@
 	import SDRControl from '$lib/components/control/SDRControl.svelte';
 	import { selectedSignal } from '$lib/stores/signals';
 	import { layers, mapReceiverId, inspectorOpen } from '$lib/stores/ui';
+	import { popoverDismiss } from '$lib/ui/actions';
 	import { fetchSignal } from '$lib/api/client';
 
 	// ?signal=<id> deep link (§3.1): hydrate the selection on landing.
@@ -34,8 +35,12 @@
 		<section class="relative min-w-0 flex-1">
 			<MapView />
 
-			<!-- Layer toggles (bottom-left popover, §5) -->
-			<div class="absolute bottom-3 left-3 z-10">
+			<!-- Layer toggles (bottom-left popover, §5); §15 dismissal —
+			     the wrapper spans trigger + panel -->
+			<div
+				class="absolute bottom-3 left-3 z-10"
+				use:popoverDismiss={{ open: layersOpen, onDismiss: () => (layersOpen = false) }}
+			>
 				<button
 					class="rounded border border-slate-700 bg-slate-900/90 px-2 py-1 text-xs text-slate-300 hover:bg-slate-800"
 					aria-expanded={layersOpen}
