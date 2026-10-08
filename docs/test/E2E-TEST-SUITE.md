@@ -605,26 +605,27 @@ Tests map to SPEC sections as follows:
 | 2.2 — Keyboard Contract | §15 (keyboard shortcuts) | `[implemented]` |
 | 2.3 — Deep-Link URL | §3.1 (?signal=<id> mirror) | `[implemented]` |
 | 2.4 — Viewport Layout | UI-DESIGN (responsive design) | `[implemented]` |
-| 3.1 — Close Code Forwarding | §10.4 (live audio relay) |
-| 3.2 — 502 Handling | §13 (error mapping) |
-| 3.3 — Multi-Client Fan-Out | §14.3 (N-client hub) |
-| 4.1 — Full Pipeline | §4–§6 (IQ → DSP → classification) |
-| 4.2 — Recording Lifecycle | §10, §11 (recording + retention) |
-| 5.1 — Settings Effect | §20 (setup screen) |
-| 5.2 — Settings Round-Trip | §16.6 (settings schema) |
-| 5.3 — Config Cleanup | D2, A3, A4, A8, A13 |
-| 6.1 — Tile Bounds | §16 (map config) |
-| 7.1 — Classification Accuracy | §6.5 (class source enum) |
-| 8.1 — CW+WFM+Below-Center | §5.3 (below-center), D4 (classification) |
-| 8.2 — Aggressive Sweep | UI-BUGCHECK B12–B16 |
-| 9.1 — REST Contract | §13 (API specification) |
-| 9.2 — CORS Contract | §17.2 (origin policy) |
-| R1 — Service Restart Resilience | §3.2 (API overview, service lifecycle), D10 (restart SLAs) |
-| R2 — Error Format Validation | §13 (error contract, D10) |
-| R3 — Multi-SDR Concurrency | §7.1 (scan loop, D5 max SDRs), A1 (concurrent queueing) |
-| R4 — Network Instability | §14.2 (connection management), B19 (WS lifecycle) |
-| R5 — PostGIS Schema Compliance | §16 (data model), db/init.sql + 5 migrations |
-| R6 — SNR Boundary Detection | §6.5 (class confidence), B4 (confidence guardrails) |
+| 3.1 — Close Code Forwarding | §10.4 (live audio relay), B17, §10.4.4 | `[implemented]` |
+| 3.2 — 502 Handling | §13 (error mapping), §2.2 (unreachable upstream) | `[implemented]` |
+| 3.3 — Multi-Client Fan-Out | §14.3 (N-client hub), §14.4.3 | `[implemented]` |
+| 4.1 — Full Pipeline | §4–§6 (IQ → DSP → classification) | |
+| 4.2 — Recording Lifecycle | §10, §11 (recording + retention) | |
+| 5.1 — Settings Effect | §20 (setup screen) | |
+| 5.2 — Settings Round-Trip | §16.6 (settings schema) | |
+| 5.3 — Config Cleanup | D2, A3, A4, A8, A13 | |
+| 6.1 — Tile Bounds | §16 (map config) | |
+| 7.1 — Classification Accuracy | §6.5 (class source enum) | |
+| 8.1 — CW+WFM+Below-Center | §5.3 (below-center), D4 (classification) | |
+| 8.2 — Aggressive Sweep | UI-BUGCHECK B12–B16 | |
+| 9.1 — REST Contract | §13 (API specification) | |
+| 9.2 — CORS Contract | §17.2 (origin policy) | |
+| R1 — Service Restart Resilience | §3.2 (API overview, service lifecycle), D10 (restart SLAs) | |
+| R2 — Error Format Validation | §13 (error contract, D10) | |
+| R3 — Multi-SDR Concurrency | §7.1 (scan loop, D5 max SDRs), A1 (concurrent queueing) | |
+| R4 — Network Instability | §14.2 (connection management), B19 (WS lifecycle) | |
+| R5 — PostGIS Schema Compliance | §16 (data model), db/init.sql + 5 migrations | |
+| R6 — SNR Boundary Detection | §6.5 (class confidence), B4 (confidence guardrails) | |
+| R7 — Device Unplug Lifecycle | §4.4 (read backoff), simulator `SetHardwareState()` API | `[deferred to Phase 2]` |
 
 ---
 

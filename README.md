@@ -251,6 +251,10 @@ is at [E2E-TEST-SUITE.md](docs/test/E2E-TEST-SUITE.md, Section 4.2).
 | 2.2 — Keyboard Contract | B12, B13 | `/` focuses search, `?` toggles shortcuts, Space on buttons/Enter on links are not swallowed, Escape closes one layer per press | [`keyboard_contract.test.ts`](frontend/tests/e2e/keyboard_contract.test.ts) |
 | 2.3 — Deep-Link URL | B14, B15, B19 | `?signal=<id>` added on selection, removed on clear, garbage IDs don't crash, `replaceState` never throws | [`deep_link.test.ts`](frontend/tests/e2e/deep_link.test.ts) |
 | 2.4 — Viewport Layout | B16 | No horizontal document overflow at 375 px (iPhone SE), 480×800, 1280×480, 2560×1440 — nav wraps internally | [`viewport_layout.test.ts`](frontend/tests/e2e/viewport_layout.test.ts) |
+| 3.1 — Close Code Forwarding | B17, B18 | Gateway relay forwards recorder clean 1000 close frame (not 1006) to browser, forwards close reason text | [`close_code_forwarding.test.ts`](frontend/tests/e2e/close_code_forwarding.test.ts) |
+| 3.2 — 502 Handling | — | Gateway returns 502 JSON `{"error":"recorder unreachable"}` when upstream is unreachable; browser handles gracefully | [`gateway_502_handling.test.ts`](frontend/tests/e2e/gateway_502_handling.test.ts) |
+| 3.3 — Multi-Client Fan-Out | — | 3 browser pages connect to gateway `/ws`; hub broadcasts to all; closing one client leaves others untouched | [`gateway_multi_client.test.ts`](frontend/tests/e2e/gateway_multi_client.test.ts) |
+| | | | [`gateway_helpers.ts`](frontend/tests/e2e/gateway_helpers.ts) (shared utilities) |
 
 ```bash
 # Start the Vite dev server first:
