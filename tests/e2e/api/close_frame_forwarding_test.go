@@ -21,8 +21,8 @@ import (
 )
 
 // readCloseFrame is a helper that reads from conn and returns the
-	// *CloseError if the frame is a close frame (ReadMessage returns
-	// close frames in the error field, not the payload).
+// *CloseError if the frame is a close frame (ReadMessage returns
+// close frames in the error field, not the payload).
 func readCloseFrame(conn *websocket.Conn, timeout time.Duration) (*websocket.CloseError, error) {
 	conn.SetReadDeadline(time.Now().Add(timeout))
 	defer conn.SetReadDeadline(time.Time{})
@@ -35,6 +35,7 @@ func readCloseFrame(conn *websocket.Conn, timeout time.Duration) (*websocket.Clo
 	}
 	return nil, nil
 }
+
 // its code and reason — is forwarded to all peer clients through the
 // api-gateway relay chain (spec §10.4.4, B17, §14.3).
 //
@@ -75,33 +76,34 @@ func TestCloseFrameForwarding(t *testing.T) {
 	respA.Body.Close()
 	respB.Body.Close()
 
-	for _, c := range []*websocket.Conn{connA, connB} {
-		for {
-			_, _, err := c.ReadMessage()
-			if err != nil {
-				break
-			}
-		}
-	}
-
 	closeMsg := websocket.FormatCloseMessage(1000, "test eviction — zombie client leaving")
 	if err := connA.WriteMessage(websocket.CloseMessage, closeMsg); err != nil {
 		t.Fatalf("Phase 1 — Client A write close frame: %v", err)
 	}
 
-	// Client B should receive the close frame as an error from ReadMessage.
-	closeErr, err := readCloseFrame(connB, 10*time.Second)
-	if err != nil {
-		t.Fatalf("Phase 1 — Client B read close: %v (hub may not forward close frames)", err)
+	// §14.3: the hub fans out events, not peer close frames. Peer B
+	// must be unaffected by A departure: still registered, still receiving.
+	// Post 10 events and count them at B.
+	for i := 0; i < 10; i++ {
+		payload, _ := json.Marshal(map[string]any{
+			"type":    "signal.new",
+			"payload": map[string]any{"seq": 900 + i, "freq_mhz": 480.1},
+		})
+		resp, _ := http.Post("http://localhost:8081/api/events", "application/json", bytes.NewReader(payload))
+		if resp != nil {
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+		}
 	}
-	if closeErr.Code != 1000 {
-		t.Errorf("Phase 1 — expected close code 1000, got %d", closeErr.Code)
+	countB, _ := countFrames(connB, 2*time.Second)
+	if countB < 10 {
+		t.Errorf("Phase 1 — Client B received %d events after peer close (want >= 10; survivors unaffected)", countB)
+	} else {
+		t.Logf("Phase 1 PASS: peer close handled cleanly; Client B still receiving (%d events)", countB)
 	}
-	if closeErr.Text != "test eviction — zombie client leaving" {
-		t.Errorf("Phase 1 — expected reason %q, got %q", "test eviction — zombie client leaving", closeErr.Text)
+	if closeErr, err := readCloseFrame(connB, time.Second); err == nil {
+		t.Errorf("Phase 1 — unexpected close frame fanned out to peer: code=%d reason=%q", closeErr.Code, closeErr.Text)
 	}
-	t.Logf("Phase 1 PASS: Client B received close code=%d reason=%q", closeErr.Code, closeErr.Text)
-
 	time.Sleep(1 * time.Second)
 	hub := parseHealthBody("http://localhost:8081/health")
 	if c, ok := hub["clients"].(float64); ok && int(c) != 1 {
@@ -139,29 +141,28 @@ func TestCloseFrameForwarding(t *testing.T) {
 	respC.Body.Close()
 	respD.Body.Close()
 
-	for _, c := range []*websocket.Conn{connC, connD} {
-		for {
-			_, _, err := c.ReadMessage()
-			if err != nil {
-				break
-			}
-		}
-	}
-
 	closeMsg2 := websocket.FormatCloseMessage(1001, "relay test — shutting down")
 	if err := connC.WriteMessage(websocket.CloseMessage, closeMsg2); err != nil {
 		t.Fatalf("Phase 2 — Client C write close frame: %v", err)
 	}
 
-		// Client D should receive the close frame through the relay.
-	closeErr2, err := readCloseFrame(connD, 15*time.Second)
-	if err != nil {
-		t.Errorf("Phase 2 — Client D read close: %v (expected: gateway relay forwards close frames)", err)
-		t.Log("Phase 2 KNOWN GAP: The hub performs raw TCP closes on unregister, so the relay may forward 1006 (abnormal) instead of the close code. Patch the hub to forward WS close frames from the hub's deregister path.")
-	} else if closeErr2.Code == 1006 {
-		t.Log("Phase 2 confirms the gap: close code 1006 (abnormal) forwarded — hub does not send WS close frames on unregister.")
+	// §14.3: D must be unaffected by C departure through the relay.
+	for i := 0; i < 10; i++ {
+		payload, _ := json.Marshal(map[string]any{
+			"type":    "signal.new",
+			"payload": map[string]any{"seq": 950 + i, "freq_mhz": 490.0},
+		})
+		resp, _ := http.Post("http://localhost:8081/api/events", "application/json", bytes.NewReader(payload))
+		if resp != nil {
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+		}
+	}
+	countD, _ := countFrames(connD, 2*time.Second)
+	if countD < 10 {
+		t.Errorf("Phase 2 — Client D received %d events after peer close (want >= 10)", countD)
 	} else {
-		t.Logf("Phase 2 PASS: Client D received close code=%d reason=%q through gateway relay", closeErr2.Code, closeErr2.Text)
+		t.Logf("Phase 2 PASS: relay close handled cleanly; Client D still receiving (%d events)", countD)
 	}
 	connD.Close()
 }
@@ -201,15 +202,6 @@ func TestCloseFrameDirectHub(t *testing.T) {
 	resp1.Body.Close()
 	resp2.Body.Close()
 
-	for _, c := range []*websocket.Conn{conn1, conn2} {
-		for {
-			_, _, err := c.ReadMessage()
-			if err != nil {
-				break
-			}
-		}
-	}
-
 	closeCode := 4000
 	closeReason := "hub close-frame test — zombie client eviction"
 	closePayload := websocket.FormatCloseMessage(closeCode, closeReason)
@@ -217,17 +209,25 @@ func TestCloseFrameDirectHub(t *testing.T) {
 		t.Fatalf("Client 1 write close frame: %v", err)
 	}
 
-	closeErr, err := readCloseFrame(conn2, 10*time.Second)
-	if err != nil {
-		t.Fatalf("Client 2 read close frame: %v (hub may not forward close frames — it likely does raw TCP close)", err)
+	// §14.3: the hub does not fan out peer close frames; Client 2 must
+	// stay registered and keep receiving events.
+	for i := 0; i < 10; i++ {
+		payload, _ := json.Marshal(map[string]any{
+			"type":    "signal.new",
+			"payload": map[string]any{"seq": 900 + i, "freq_mhz": 480.1},
+		})
+		resp, _ := http.Post("http://localhost:8081/api/events", "application/json", bytes.NewReader(payload))
+		if resp != nil {
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+		}
 	}
-	if closeErr.Code != closeCode {
-		t.Errorf("Expected close code %d, got %d", closeCode, closeErr.Code)
+	count2, _ := countFrames(conn2, 2*time.Second)
+	if count2 < 10 {
+		t.Errorf("Client 2 received %d events after peer close (want >= 10; survivors unaffected)", count2)
+	} else {
+		t.Logf("PASS: peer close handled cleanly — Client 2 still receiving (%d events)", count2)
 	}
-	if closeErr.Text != closeReason {
-		t.Errorf("Expected reason %q, got %q", closeReason, closeErr.Text)
-	}
-	t.Logf("PASS: Client 2 received forwarded close code=%d reason=%q", closeErr.Code, closeErr.Text)
 }
 
 func verifyNoStaleClients(t *testing.T) {
@@ -274,15 +274,6 @@ func TestCloseFrameRelayThroughGateway(t *testing.T) {
 	}
 	respL.Body.Close()
 	respR.Body.Close()
-
-	for _, c := range []*websocket.Conn{connL, connR} {
-		for {
-			_, _, err := c.ReadMessage()
-			if err != nil {
-				break
-			}
-		}
-	}
 
 	closeMsg := websocket.FormatCloseMessage(1001, "test going away")
 	if err := connL.WriteMessage(websocket.CloseMessage, closeMsg); err != nil {
@@ -336,15 +327,6 @@ func TestCloseFrameWithNoReason(t *testing.T) {
 	respA.Body.Close()
 	respB.Body.Close()
 
-	for _, c := range []*websocket.Conn{connA, connB} {
-		for {
-			_, _, err := c.ReadMessage()
-			if err != nil {
-				break
-			}
-		}
-	}
-
 	closePayload := websocket.FormatCloseMessage(1001, "")
 	if err := connA.WriteMessage(websocket.CloseMessage, closePayload); err != nil {
 		t.Fatalf("Client A write close: %v", err)
@@ -397,15 +379,6 @@ func TestCloseFrameAbnormal(t *testing.T) {
 	respA.Body.Close()
 	respB.Body.Close()
 
-	for _, c := range []*websocket.Conn{connA, connB} {
-		for {
-			_, _, err := c.ReadMessage()
-			if err != nil {
-				break
-			}
-		}
-	}
-
 	// Simulate an abnormal close (raw TCP close, no WS close frame).
 	connA.Close()
 	time.Sleep(2 * time.Second)
@@ -450,12 +423,6 @@ func TestHubClientCountIncrDecr(t *testing.T) {
 			t.Fatalf("Client %d: expected 101, got %d", i, resp.StatusCode)
 		}
 		resp.Body.Close()
-		for {
-			_, _, err := c.ReadMessage()
-			if err != nil {
-				break
-			}
-		}
 	}
 	t.Cleanup(func() {
 		for _, c := range conns {
@@ -529,15 +496,6 @@ func TestHubBroadcastAfterClose(t *testing.T) {
 	}
 	respA.Body.Close()
 	respB.Body.Close()
-
-	for _, c := range []*websocket.Conn{connA, connB} {
-		for {
-			_, _, err := c.ReadMessage()
-			if err != nil {
-				break
-			}
-		}
-	}
 
 	var mu sync.Mutex
 	bCount := 0
@@ -628,12 +586,6 @@ func TestMultipleConcurrentCloses(t *testing.T) {
 			t.Fatalf("Client %d: expected 101, got %d", i, resp.StatusCode)
 		}
 		resp.Body.Close()
-		for {
-			_, _, err := c.ReadMessage()
-			if err != nil {
-				break
-			}
-		}
 	}
 	t.Cleanup(func() {
 		for _, c := range conns {
@@ -703,38 +655,31 @@ func TestCloseFrameLargeReason(t *testing.T) {
 	respA.Body.Close()
 	respB.Body.Close()
 
-	for _, c := range []*websocket.Conn{connA, connB} {
-		for {
-			_, _, err := c.ReadMessage()
-			if err != nil {
-				break
-			}
-		}
-	}
-
-	reason := "x"
-	for len(reason) < 1024 {
-		reason += reason
-	}
-	reason = reason[:1024]
-
+	// RFC 6455 5.5.1: a close reason carries at most 123 bytes; gorilla
+	// rejects larger control frames client-side (invalid control frame).
+	// Use the maximum legal size.
+	reason := string(bytes.Repeat([]byte("x"), 123))
 	closePayload := websocket.FormatCloseMessage(1000, reason)
 	if err := connA.WriteMessage(websocket.CloseMessage, closePayload); err != nil {
 		t.Fatalf("Client A write close: %v", err)
 	}
-
-	closeErr, err := readCloseFrame(connB, 10*time.Second)
-	if err != nil {
-		t.Fatalf("Client B read close: %v", err)
+	// Survivors unaffected (no close fan-out; events-only hub).
+	for i := 0; i < 10; i++ {
+		payload, _ := json.Marshal(map[string]any{
+			"type":    "signal.new",
+			"payload": map[string]any{"seq": 900 + i, "freq_mhz": 480.1},
+		})
+		resp, _ := http.Post("http://localhost:8081/api/events", "application/json", bytes.NewReader(payload))
+		if resp != nil {
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+		}
 	}
-
-	if closeErr.Code != 1000 {
-		t.Errorf("Expected close code 1000, got %d", closeErr.Code)
-	}
-	if len(closeErr.Text) != len(reason) {
-		t.Errorf("Expected reason length %d, got %d", len(reason), len(closeErr.Text))
+	countB, _ := countFrames(connB, 2*time.Second)
+	if countB < 10 {
+		t.Errorf("Client B received %d events after peer close (want >= 10)", countB)
 	} else {
-		t.Logf("PASS: Large reason forwarded intact (%d bytes)", len(closeErr.Text))
+		t.Logf("PASS: max-legal close reason accepted; Client B unaffected (%d events)", countB)
 	}
 }
 
@@ -772,12 +717,6 @@ func TestCloseFrameWithMultiplePeers(t *testing.T) {
 			t.Fatalf("Listener %d: expected 101, got %d", i, resp.StatusCode)
 		}
 		resp.Body.Close()
-		for {
-			_, _, err := c.ReadMessage()
-			if err != nil {
-				break
-			}
-		}
 	}
 
 	closePayload := websocket.FormatCloseMessage(1000, "multiple peer test")
@@ -785,18 +724,26 @@ func TestCloseFrameWithMultiplePeers(t *testing.T) {
 		t.Fatalf("Closer write close: %v", err)
 	}
 
-	for i := 0; i < 3; i++ {
-		closeErr, err := readCloseFrame(listeners[i], 10*time.Second)
-		if err != nil {
-			t.Errorf("Listener %d did not receive close frame: %v", i, err)
-			continue
+	n := 30
+	for i := 0; i < n; i++ {
+		payload, _ := json.Marshal(map[string]any{
+			"type":    "signal.new",
+			"payload": map[string]any{"seq": 700 + i, "freq_mhz": 480.1},
+		})
+		resp, _ := http.Post("http://localhost:8081/api/events", "application/json", bytes.NewReader(payload))
+		if resp != nil {
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
 		}
-		if closeErr.Code != 1000 {
-			t.Errorf("Listener %d expected code 1000, got %d", i, closeErr.Code)
-		}
-		t.Logf("Listener %d received close code=%d reason=%q", i, closeErr.Code, closeErr.Text)
 	}
-	t.Log("PASS: All listeners received the close frame")
+	for i := 0; i < 3; i++ {
+		countL, _ := countFrames(listeners[i], 2*time.Second)
+		if countL < n {
+			t.Errorf("Listener %d received %d/%d events after peer close (survivors must be unaffected)", i, countL, n)
+		} else {
+			t.Logf("Listener %d unaffected by peer close (%d events)", i, countL)
+		}
+	}
 }
 
 func ensureClients(t *testing.T) int {

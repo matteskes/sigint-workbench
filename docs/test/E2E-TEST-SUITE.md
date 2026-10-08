@@ -50,6 +50,13 @@
 | **B5** | Stale processes blocking ports/USB after crash | Previous bench sessions can outlive pkill; need pre-flight cleanup that SIGKILL'd processes skip |
 | **B9** | Canvas label smearing at high devicePixelRatio (2×) | Fixed-size bitmaps stretched by CSS smear text; use native-resolution canvases with CSS-pixel coordinate mapping |
 | **B10/B11** | Keyboard nav broken at 375px viewports | Narrow viewports caused horizontal overflow, breaking popover and navigation accessibility |
+| **B12** | Global keymap swallowing native button/link activation | Space/Enter on buttons and links must not be swallowed by the global keyboard shortcuts overlay |
+| **B13** | Escape key closing all popovers at once | Multiple Escape key presses should close one layer per press, not all at once |
+| **B14/B15** | Stale `?signal=` stranded in URL when Inspector unmounts | When Inspector unmounts, the deep-link URL remains with a stale signal ID; the URL must be cleaned on selection clear |
+| **B16** | Horizontal overflow at 375px viewports | Internal scrolling + nav wrapping needed; entire pages went wide on narrow viewports |
+| **B17** | WS close code degraded from 1000 (clean) to 1006 (abnormal) at the gateway relay | Close codes and reasons must be forwarded intact through all relay layers |
+| **B18** | Native recorder received 4.7k pkt/s; containerized recorder starved | Services with high-rate UDP I/O must run on the correct network path; native vs Docker parity matters |
+| **B19** | `replaceState` errors on hard load with `?signal=` | Deep-link URL on initial load must be handled gracefully during server-side rendering |
 
 ---
 
@@ -85,7 +92,7 @@
 | --- | --- | --- |
 | 1 | `GET http://localhost:8080/health` | 200, `{"status":"ok"}` |
 | 2 | `GET http://localhost:8081/health` | 200, `{"status":"ok","clients":N}` |
-| 3 | `GET http://localhost:127.0.0.1:9090/api/v1/status` | 200, per-device status array (at least one SDR) |
+| 3 | `GET http://127.0.0.1:9090/api/v1/status` | 200, per-device status array (at least one SDR) |
 | 4 | Verify all three responses contain valid JSON with expected fields | Parse JSON, assert fields present |
 
 **Why:** A TCP dial would return "ok" for all three even when wedged. Only an HTTP 200 validates the API is functional.
@@ -125,20 +132,26 @@
 | 4 | Wait 120s for eviction timeout (shortened for local dev) | Hub evicts Client A, decrements count |
 | 5 | Close Client B | Hub client count → 0 |
 
+**Why:** Without read deadlines/keepalive, zombie peers accumulate and
+consume server resources; eviction must also close the connection
+server-side (no goroutine leak).
+
 #### Test 1.4 — Close Frame Forwarding (from B17, §10.4.4)
 
 **Implementation:** `tests/e2e/api/close_frame_forwarding_test.go::TestCloseFrameForwarding`
-**Scenario:** One client sends a WebSocket close frame with a specific code and reason; verify peer clients receive the same close frame through the full gateway relay chain.
-**Steps:**
+**Scenario:** One client sends a WebSocket close frame with a specific
+code and reason; the hub unregisters it cleanly while peer clients stay
+registered and keep receiving events (the hub fan-out contract is
+events-only, §14.3). Close-code fidelity across the gateway relay is
+covered on the recorder live-audio relay (B17, §10.4.4).
 
 | Step | Action | Expected |
 | --- | --- | --- |
 | 1 | Connect Client A (sends close) and Client B (observer) | Both report 101 Upgrade |
-| 2 | Drain initial hub messages | Clean state |
-| 3 | Client A writes close frame (code 1000, custom reason) | Hub delivers close frame to peers |
-| 4 | Client B reads close frame | `CloseError` with matching code + reason |
-| 5 | Verify hub `ClientCount()` decrements | Count drops by 1 |
-| 6 | Repeat through gateway relay (port 8080/ws) | Gateway relay forwards close frames |
+| 2 | Client A writes close frame (code 1000, custom reason) | A is unregistered; hub client count drops |
+| 3 | Client B keeps reading posted events | B receives every event (no collateral disconnect) |
+| 4 | Verify hub `ClientCount()` decrements | Count drops by 1 |
+| 5 | Repeat through gateway relay (port 8080/ws) | Same contract through the relay; hub-originated closes keep their code (B17) |
 
 ---
 
@@ -204,22 +217,6 @@
 | 5 | On 375px: verify navigation uses internal scrolling, not document overflow | Nav items wrap to second row/column, scroll container is bounded |
 
 **Why:** Every page horizontally overflowed at 375px in the original bug. Internal scrolling + nav wrapping fixes this.
-
-| Step | Action | Expected |
-| --- | --- | --- |
-| 1 | Connect a WS client to `ws://localhost:8080/ws` | 101 Upgrade |
-| 2 | Do not read from, do not pong — wait 120 seconds | Hub eviction trigger fires |
-| 3 | `GET http://localhost:8081/health` | `clients` count decremented by 1 |
-| 4 | Verify the connection is actually closed on the server side | No goroutine leak |
-
-**Why:** Without read deadlines/keepalive, zombie peers accumulate and consume server resources.
-| **B12** | Global keymap swallowing native button/link activation | Space/Enter on buttons and links must not be swallowed by the global keyboard shortcuts overlay |
-| **B13** | Escape key closing all popovers at once | Multiple Escape key presses should close one layer per press, not all at once |
-| **B14/B15** | Stale `?signal=` stranded in URL when Inspector unmounts | When Inspector unmounts, the deep-link URL remains with a stale signal ID; the URL must be cleaned on selection clear |
-| **B16** | Horizontal overflow at 375px viewports | Internal scrolling + nav wrapping needed; entire pages went wide on narrow viewports |
-| **B17** | WS close code degraded from 1000 (clean) to 1006 (abnormal) at the gateway relay | Close codes and reasons must be forwarded intact through all relay layers |
-| **B18** | Native recorder received 4.7k pkt/s; containerized recorder starved | Services with high-rate UDP I/O must run on the correct network path; native vs Docker parity matters |
-| **B19** | `replaceState` errors on hard load with `?signal=` | Deep-link URL on initial load must be handled gracefully during server-side rendering |
 
 ---
 
@@ -526,6 +523,13 @@ make test                   # go test ./... -v -count=1
 # ONNX smoke test (existing, extended)
 make smoke-onnx             # scripts/smoke-test.sh
 
+# E2E: Go suites (require the dev stack; skip cleanly when it is down)
+make e2e-api                # tests/e2e/api
+go test ./tests/e2e/resilience/... ./tests/e2e/airgap/... -v -count=1
+
+# E2E: frontend Playwright (WebKit; requires the dev stack)
+make e2e                    # frontend/tests/e2e
+
 # Type check
 cd frontend && npm run check  # svelte-check
 
@@ -533,36 +537,38 @@ cd frontend && npm run check  # svelte-check
 npx markdownlint-cli2 "**/*.md"
 ```
 
-### 6.3 Test Structure (Proposed)
+### 6.3 Test Structure
 
 ```
-tests/e2e/
-├── api/
+tests/e2e/                            # Go suites (live stack; skip when down)
+├── api/                              # Category 1 — hub contracts
 │   ├── health_probe_test.go          # Test 1.1
 │   ├── backpressure_test.go          # Test 1.2 (3 functions)
-│   └── cors_validation_test.go       # Test 9.2
-├── websocket/
 │   ├── zombie_eviction_test.go       # Test 1.3
-│   ├── close_code_forwarding_test.go # Test 3.1
-│   └── multi_client_fanout_test.go   # Test 3.3
-├── pipeline/
-│   ├── full_pipeline_test.go         # Test 4.1
-│   └── recording_lifecycle_test.go   # Test 4.2
-├── resilience/
+│   └── close_frame_forwarding_test.go  # Test 1.4 (9 functions)
+├── resilience/                       # Tests R1-R7
 │   ├── service_restart_test.go       # Test R1
 │   ├── error_format_test.go          # Test R2
 │   ├── multi_sdr_concurrent_test.go  # Test R3
 │   ├── network_instability_test.go   # Test R4
 │   ├── schema_compliance_test.go     # Test R5
-│   └── snr_boundary_test.go          # Test R6
-├── frontend/
-│   ├── canvas_dpr_test.go            # Test 2.1 (Playwright)
-│   ├── keyboard_contract_test.go     # Test 2.2 (Playwright)
-│   ├── deep_link_test.go             # Test 2.3 (Playwright)
-│   ├── viewport_layout_test.go       # Test 2.4 (Playwright)
-│   └── aggressive_sweep_test.go      # Test 8.2 (Playwright)
-├── classification/
-│   └── confidence_threshold_test.go  # Test 7.1
+│   ├── snr_boundary_test.go          # Test R6
+│   └── device_unplug_test.go         # Test R7
+└── airgap/                           # §4.11 — Tests A1-A8
+
+frontend/tests/e2e/                   # Playwright (WebKit; live stack)
+├── canvas_dpr.test.ts                # Test 2.1
+├── keyboard_contract.test.ts         # Test 2.2
+├── deep_link.test.ts                 # Test 2.3
+├── viewport_layout.test.ts           # Test 2.4
+├── close_code_forwarding.test.ts     # Test 3.1
+├── gateway_502_handling.test.ts      # Test 3.2
+├── gateway_multi_client.test.ts      # Test 3.3
+├── full_pipeline.test.ts             # Test 4.1
+├── recording_lifecycle.test.ts       # Test 4.2
+├── settings_and_config.test.ts       # Tests 5.1-5.3
+├── classification_accuracy.test.ts   # Tests 6.1, 7.1, 8.1, 8.2
+└── api_contract.test.ts              # Tests 9.1, 9.2
 ```
 
 ### 6.4 CI Integration
@@ -617,7 +623,7 @@ e2e:
       run: |
         cd frontend
         npx playwright install webkit
-        npx vitest run --config vitest.config.ts e2e/
+        npx playwright test
 ```
 
 ---
@@ -626,12 +632,12 @@ e2e:
 
 Tests map to SPEC sections as follows:
 
-| Test | SPEC Reference |
-| --- | --- |
+| Test | SPEC Reference | Status |
+| --- | --- | --- |
 | 1.1 — Health Probes | §3.2, §13 (API overview) | `[implemented]` |
 | 1.2 — Backpressure | §14.3 (fan-out contract) | `[implemented]` |
-| | 1.3 — Zombie Eviction | §14.3, A12 (keepalive contract) | `[implemented]` |
-| | 1.4 — Close Frame Fwd | §10.4.4, B17, §14.3 | `[implemented]` |
+| 1.3 — Zombie Eviction | §14.3, A12 (keepalive contract) | `[implemented]` |
+| 1.4 — Close Frame Fwd | §10.4.4, B17, §14.3 | `[implemented]` |
 | 2.1 — Canvas DPR | §18 (spectrum/waterfall) | `[implemented]` |
 | 2.2 — Keyboard Contract | §15 (keyboard shortcuts) | `[implemented]` |
 | 2.3 — Deep-Link URL | §3.1 (?signal=<id> mirror) | `[implemented]` |
@@ -766,8 +772,6 @@ Tests map to SPEC sections as follows:
 
 **Why:** B4 found the old rule labeled noise as "aviation wideband FM" at 0.85 confidence. The ONNX fix prevents this, but a systematic SNR boundary sweep proves classification behaves correctly across the full SNR range — not just at extreme SNRs.
 
-**Why:** B4 found the old rule labeled noise spikes as "aviation wideband FM" at 0.85 confidence. New guardrails prevent this.
-
 ## 4.11 Category: Air-Gap & Security Hardening (§4.11)
 
 **Scope:** Validate the complete air-gap workflow: supply-chain provisioning,
@@ -817,9 +821,6 @@ fully disabled in an air-gapped context.
 **Why:** ONNX Runtime 1.14+ added a built-in telemetry provider that
 attempts to POST model metadata to Microsoft endpoints. This must never
 happen in an air-gapped or classified environment.
-**Why:** ONNX Runtime 1.14+ added a built-in telemetry provider that
-attempts to POST model metadata to Microsoft endpoints. This must never
-happen in an air-gapped or classified environment.
 
 ### Test 4.11.A3 — Offline Asset Verification
 
@@ -859,9 +860,6 @@ single service from starving others.
 **Why:** H3 requires maximum isolation — resource contention between
 services must be bounded. In a classified environment, a denial-of-service
 from one service to another is an integrity concern.
-**Why:** ONNX Runtime 1.14+ added a built-in telemetry provider that
-attempts to POST model metadata to Microsoft endpoints. This must never
-happen in an air-gapped or classified environment.
 
 ### Test 4.11.A5 — Escape-Hatch Tile Download Audit
 

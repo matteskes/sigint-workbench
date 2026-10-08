@@ -59,14 +59,6 @@ func TestZombieClientEviction(t *testing.T) {
 	respB.Body.Close()
 
 	// Drain any initial messages from both.
-	for _, c := range []*websocket.Conn{connA, connB} {
-		for {
-			_, _, err := c.ReadMessage()
-			if err != nil {
-				break
-			}
-		}
-	}
 
 	// Step 2: Check the initial hub client count (should be 2).
 	initialHub := parseHealthBody("http://localhost:8081/health")

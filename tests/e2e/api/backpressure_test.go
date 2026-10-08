@@ -53,14 +53,6 @@ func TestHubBackpressure(t *testing.T) {
 	respB.Body.Close()
 
 	// Drain any initial messages.
-	for _, c := range []*websocket.Conn{connA, connB} {
-		for {
-			_, _, err := c.ReadMessage()
-			if err != nil {
-				break
-			}
-		}
-	}
 
 	// Step 2: Send 50 events in batch 0, verify Client B receives them.
 	for i := 0; i < 50; i++ {
@@ -224,14 +216,6 @@ func TestHubNonblockBroadcast(t *testing.T) {
 	})
 
 	// Drain all messages from all clients before the burst.
-	for _, c := range conns {
-		for {
-			_, _, err := c.ReadMessage()
-			if err != nil {
-				break
-			}
-		}
-	}
 
 	// Send 200 events in quick succession.
 	start := time.Now()
@@ -312,14 +296,6 @@ func TestHubSlowClientQueueShedding(t *testing.T) {
 	}
 
 	// Drain any initial messages.
-	for _, c := range []*websocket.Conn{connSlow, connFast} {
-		for {
-			_, _, err := c.ReadMessage()
-			if err != nil {
-				break
-			}
-		}
-	}
 
 	// Stop reading from Client Slow.
 	stopReadSlow := make(chan struct{})

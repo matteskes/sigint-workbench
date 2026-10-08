@@ -146,9 +146,9 @@ func TestGateProbe(t *testing.T) {
 			t.Errorf("component %q is not an object", comp)
 			continue
 		}
-		status, _ := infoMap["status"].(string)
-		if status != "ok" {
-			t.Errorf("component %q status = %q (want ok)", comp, status)
+		okFlag, _ := infoMap["ok"].(bool)
+		if !okFlag {
+			t.Errorf("component %q ok = %v (want true)", comp, infoMap["ok"])
 		}
 	}
 }

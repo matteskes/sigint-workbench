@@ -29,15 +29,18 @@ func TestNetworkInstability(t *testing.T) {
 	// Step 1-2: Connect client, verify 101, verify events flow.
 	c1, r1, err := dialer.Dial("ws://localhost:8081/ws", nil)
 	if err != nil {
-		if r1 != nil { io.Copy(io.Discard, r1.Body); r1.Body.Close() }
+		if r1 != nil {
+			io.Copy(io.Discard, r1.Body)
+			r1.Body.Close()
+		}
 		t.Fatalf("WS dial: %v", err)
 	}
 	if r1.StatusCode != 101 {
-		io.Copy(io.Discard, r1.Body); r1.Body.Close()
+		io.Copy(io.Discard, r1.Body)
+		r1.Body.Close()
 		t.Fatalf("expected 101, got %d", r1.StatusCode)
 	}
 	r1.Body.Close()
-	drainConn(c1)
 
 	// Pump a few events.
 	pumpEvents(5, 0)
@@ -51,15 +54,18 @@ func TestNetworkInstability(t *testing.T) {
 	time.Sleep(1 * time.Second) // Give hub time to notice the disconnect.
 	c2, r2, err := dialer.Dial("ws://localhost:8081/ws", nil)
 	if err != nil {
-		if r2 != nil { io.Copy(io.Discard, r2.Body); r2.Body.Close() }
+		if r2 != nil {
+			io.Copy(io.Discard, r2.Body)
+			r2.Body.Close()
+		}
 		t.Fatalf("Reconnect after drop: %v", err)
 	}
 	if r2.StatusCode != 101 {
-		io.Copy(io.Discard, r2.Body); r2.Body.Close()
+		io.Copy(io.Discard, r2.Body)
+		r2.Body.Close()
 		t.Fatalf("expected 101 on reconnect, got %d", r2.StatusCode)
 	}
 	r2.Body.Close()
-	drainConn(c2)
 
 	// Step 5: Pump events through the reconnected client.
 	pumpEvents(10, 100)
@@ -97,15 +103,18 @@ func TestNetworkInstability(t *testing.T) {
 	time.Sleep(2 * time.Second)
 	c3, r3, err := dialer.Dial("ws://localhost:8081/ws", nil)
 	if err != nil {
-		if r3 != nil { io.Copy(io.Discard, r3.Body); r3.Body.Close() }
+		if r3 != nil {
+			io.Copy(io.Discard, r3.Body)
+			r3.Body.Close()
+		}
 		t.Fatalf("Post-storm reconnect: %v", err)
 	}
 	if r3.StatusCode != 101 {
-		io.Copy(io.Discard, r3.Body); r3.Body.Close()
+		io.Copy(io.Discard, r3.Body)
+		r3.Body.Close()
 		t.Fatalf("expected 101 post-storm, got %d", r3.StatusCode)
 	}
 	r3.Body.Close()
-	drainConn(c3)
 
 	pumpEvents(10, 200)
 	afterStorm := readFrames(c3, 5*time.Second)

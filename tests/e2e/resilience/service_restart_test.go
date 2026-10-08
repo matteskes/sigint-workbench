@@ -14,8 +14,10 @@ import (
 )
 
 func drainConn(ws *websocket.Conn) {
+	ws.SetReadDeadline(time.Now().Add(2 * time.Second))
 	for {
 		if _, _, err := ws.ReadMessage(); err != nil {
+			ws.SetReadDeadline(time.Time{})
 			return
 		}
 	}
@@ -58,16 +60,19 @@ func TestServiceRestartSingle(t *testing.T) {
 	dialer := websocket.Dialer{HandshakeTimeout: 5 * time.Second}
 	client, resp, err := dialer.Dial("ws://localhost:8081/ws", nil)
 	if err != nil {
-		if resp != nil { io.Copy(io.Discard, resp.Body); resp.Body.Close() }
+		if resp != nil {
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+		}
 		t.Fatalf("WS dial: %v", err)
 	}
 	t.Cleanup(func() { client.Close() })
 	if resp.StatusCode != 101 {
-		io.Copy(io.Discard, resp.Body); resp.Body.Close()
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
 		t.Fatalf("expected 101, got %d", resp.StatusCode)
 	}
 	resp.Body.Close()
-	drainConn(client)
 
 	pumpEvents(10, 0)
 	received := readFrames(client, 5*time.Second)
@@ -87,16 +92,19 @@ func TestServiceRestartSingle(t *testing.T) {
 
 	newClient, newResp, err := dialer.Dial("ws://localhost:8081/ws", nil)
 	if err != nil {
-		if newResp != nil { io.Copy(io.Discard, newResp.Body); newResp.Body.Close() }
+		if newResp != nil {
+			io.Copy(io.Discard, newResp.Body)
+			newResp.Body.Close()
+		}
 		t.Fatalf("WS reconnect: %v", err)
 	}
 	t.Cleanup(func() { newClient.Close() })
 	if newResp.StatusCode != 101 {
-		io.Copy(io.Discard, newResp.Body); newResp.Body.Close()
+		io.Copy(io.Discard, newResp.Body)
+		newResp.Body.Close()
 		t.Fatalf("expected 101 on reconnect, got %d", newResp.StatusCode)
 	}
 	newResp.Body.Close()
-	drainConn(newClient)
 
 	pumpEvents(10, 100)
 	n := readFrames(newClient, 5*time.Second)
@@ -120,7 +128,9 @@ func TestServiceRestartAll(t *testing.T) {
 
 	deadline := time.Now().Add(120 * time.Second)
 	for time.Now().Before(deadline) {
-		if serviceReady() { break }
+		if serviceReady() {
+			break
+		}
 		time.Sleep(2 * time.Second)
 	}
 	if !serviceReady() {
@@ -130,15 +140,18 @@ func TestServiceRestartAll(t *testing.T) {
 	dialer := websocket.Dialer{HandshakeTimeout: 5 * time.Second}
 	client, resp, err := dialer.Dial("ws://localhost:8081/ws", nil)
 	if err != nil {
-		if resp != nil { io.Copy(io.Discard, resp.Body); resp.Body.Close() }
+		if resp != nil {
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+		}
 		t.Fatalf("WS dial after full restart: %v", err)
 	}
 	if resp.StatusCode != 101 {
-		io.Copy(io.Discard, resp.Body); resp.Body.Close()
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
 		t.Fatalf("expected 101, got %d", resp.StatusCode)
 	}
 	resp.Body.Close()
-	drainConn(client)
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -177,15 +190,21 @@ func TestServiceRestartPartialGateway(t *testing.T) {
 					allOK = true
 					for _, info := range components {
 						infoMap, ok2 := info.(map[string]any)
-						if !ok2 { allOK = false; break }
+						if !ok2 {
+							allOK = false
+							break
+						}
 						if status, ok3 := infoMap["status"].(string); !ok3 || status != "ok" {
-							allOK = false; break
+							allOK = false
+							break
 						}
 					}
 				}
 			}
 		}
-		if allOK { break }
+		if allOK {
+			break
+		}
 		time.Sleep(2 * time.Second)
 	}
 
