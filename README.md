@@ -222,7 +222,9 @@ sigint-workbench/
 | `make deploy` | Start production stack (Linux) |
 | `make stop` | Stop all Docker services |
 | `make test` | Run Go tests |
-| `make frontend-test` | Run frontend tests (vitest) |
+| `make frontend-test` | Run frontend unit tests (vitest) |
+| `make e2e` | Run Playwright E2E tests (requires `npm run dev`) |
+| `make e2e-ui` | Run Playwright E2E tests with UI reporter |
 | `make smoke-onnx` | E2E: real binary detects CW + WFM over UDP |
 | `make db-init` | Initialize PostGIS schema |
 | `make db-shell` | Open psql shell |
@@ -236,6 +238,31 @@ filters), the SDR package (UDP IQ protocol, simulator, capture-config
 loading), classification, location/verification, audio demodulation,
 recording, API handlers, and DB models. Run it with `make test`; the
 frontend suite runs via `make frontend-test`.
+
+### Frontend E2E Tests (Playwright)
+
+P1 / P2 priority tests cover the UI behaviors identified in
+[UI-BUGCHECK](docs/UI-BUGCHECK.md) (B9–B16, B19). Full specification
+is at [E2E-TEST-SUITE.md](docs/test/E2E-TEST-SUITE.md, Section 4.2).
+
+| Test | Bug | What it validates |
+| --- | --- | --- |
+| 2.1 — Canvas DPR | B9 | Spectrum canvas uses native-resolution bitmaps (`canvas.width / clientWidth` ≈ devicePixelRatio), axis labels are crisp, not smeared |
+| 2.2 — Keyboard Contract | B12, B13 | `/` focuses search, `?` toggles shortcuts, Space on buttons/Enter on links are not swallowed, Escape closes one layer per press |
+| 2.3 — Deep-Link URL | B14, B15, B19 | `?signal=<id>` added on selection, removed on clear, garbage IDs don't crash, `replaceState` never throws |
+| 2.4 — Viewport Layout | B16 | No horizontal document overflow at 375 px (iPhone SE), 480×800, 1280×480, 2560×1440 — nav wraps internally |
+
+```bash
+# Start the Vite dev server first:
+cd frontend && npm run dev
+
+# Run all P1/P2 e2e tests:
+make e2e              # headless (WebKit)
+make e2e-ui           # interactive UI reporter
+
+# Single test file:
+cd frontend && npx playwright test tests/e2e/canvas_dpr.test.ts
+```
 
 ### Adding a New Demodulator
 

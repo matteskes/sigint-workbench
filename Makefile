@@ -1,7 +1,7 @@
-.PHONY: help dev build-capture build-capture-hw build-capture-linux build-ingest build-processor build-recorder build-hw-tools build-prod deploy stop test frontend-test smoke-onnx ort-lib db-init db-migrate db-shell tidy setup clean
+.PHONY: help dev build-capture build-capture-hw build-capture-linux build-ingest build-processor build-recorder build-hw-tools build-prod deploy stop test frontend-test e2e e2e-ui e2e-api smoke-onnx ort-lib db-init db-migrate db-shell tidy setup clean
 
 help: ## Show available targets
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
 # ─── Development (macOS) ───
 
@@ -62,8 +62,17 @@ db-shell: ## Open psql shell
 test: ## Run all Go tests
 	go test ./... -v -count=1
 
-frontend-test: ## Run frontend tests
+frontend-test: ## Run frontend unit tests
 	cd frontend && npm test
+
+e2e: ## Run Playwright E2E tests (requires `make dev` or `npm run dev`)
+	cd frontend && npx playwright test
+
+e2e-ui: ## Run Playwright E2E tests with UI reporter (requires `npm run dev`)
+	cd frontend && npx playwright test --ui
+
+e2e-api: ## Run Go-based API E2E tests (requires `make deploy` or `docker compose up -d`)
+	cd tests/e2e && go test ./api/... -v -count=1
 
 smoke-onnx: ## E2E: real binary detects CW+WFM over UDP (auto-downloads ORT; needs git-lfs model)
 	./scripts/smoke-test.sh

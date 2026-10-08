@@ -88,18 +88,24 @@
 
 **Why:** A TCP dial would return "ok" for all three even when wedged. Only an HTTP 200 validates the API is functional.
 
-#### Test 1.2 — Hub Backpressure Simulation (from A1)
+#### Test 1.2 — Hub Backpressure Simulation (from A1) `[implemented]`
+**Test file:** `tests/e2e/api/backpressure_test.go`
 **Scenario:** Two WebSocket clients connect to `/ws`; one stops reading.
 
 | Step | Action | Expected |
 |---|---|---|
-| 1 | Connect Client A and Client B to `ws://localhost:8080/ws` | Both receive 101 |
-| 2 | Pipeline 50 events via `POST /ws-hub:8081/api/events` | Both receive all 50 |
+| 1 | Connect Client A and Client B to `ws://localhost:8081/ws` | Both receive 101 |
+| 2 | Pipeline 50 events via `POST /api/events` | Both receive all 50 |
 | 3 | Stop Client A's read loop (but keep connection open) | Hub does NOT block |
 | 4 | Pipeline another 50 events | Client B receives all 50 within 500ms |
-| 5 | Resume Client A's read loop | Client A receives buffered events (up to queue limit) |
+| 5 | Wait for Client A eviction (writeWait=5s) | Hub.ClientCount drops to 1 |
 
 **Why:** Without per-client queues, Client A's stopped read blocks the hub's broadcast goroutine, starving Client B.
+
+**Test functions:**
+- `TestHubBackpressure` — full backpressure lifecycle (Steps 1-5)
+- `TestHubNonblockBroadcast` — stress test with 5 concurrent clients, 200-event burst
+- `TestHubSlowClientQueueShedding` — validates queue shedding preserves fast client delivery
 
 #### Test 1.3 — Zombie Client Eviction (from A12)
 **Scenario:** A WS client connects, sends no messages, receives no pongs.
@@ -481,9 +487,9 @@ npx markdownlint-cli2 "**/*.md"
 tests/e2e/
 ├── api/
 │   ├── health_probe_test.go          # Test 1.1
+│   ├── backpressure_test.go          # Test 1.2 (3 functions)
 │   └── cors_validation_test.go       # Test 9.2
 ├── websocket/
-│   ├── backpressure_test.go          # Test 1.2
 │   ├── zombie_eviction_test.go       # Test 1.3
 │   ├── close_code_forwarding_test.go # Test 3.1
 │   └── multi_client_fanout_test.go   # Test 3.3
@@ -570,8 +576,8 @@ Tests map to SPEC sections as follows:
 
 | Test | SPEC Reference |
 |---|---|
-| 1.1 — Health Probes | §3.2, §13 (API overview) |
-| 1.2 — Backpressure | §14.3 (fan-out contract) |
+| 1.1 — Health Probes | §3.2, §13 (API overview) | `[implemented]` |
+| 1.2 — Backpressure | §14.3 (fan-out contract) | `[implemented]` |
 | 1.3 — Zombie Eviction | §14.3, A12 (keepalive contract) |
 | 2.1 — Canvas DPR | §18 (spectrum/waterfall) |
 | 2.2 — Keyboard Contract | §15 (keyboard shortcuts) |
