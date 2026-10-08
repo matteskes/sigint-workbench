@@ -245,12 +245,12 @@ P1 / P2 priority tests cover the UI behaviors identified in
 [UI-BUGCHECK](docs/UI-BUGCHECK.md) (B9–B16, B19). Full specification
 is at [E2E-TEST-SUITE.md](docs/test/E2E-TEST-SUITE.md, Section 4.2).
 
-| Test | Bug | What it validates |
-| --- | --- | --- |
-| 2.1 — Canvas DPR | B9 | Spectrum canvas uses native-resolution bitmaps (`canvas.width / clientWidth` ≈ devicePixelRatio), axis labels are crisp, not smeared |
-| 2.2 — Keyboard Contract | B12, B13 | `/` focuses search, `?` toggles shortcuts, Space on buttons/Enter on links are not swallowed, Escape closes one layer per press |
-| 2.3 — Deep-Link URL | B14, B15, B19 | `?signal=<id>` added on selection, removed on clear, garbage IDs don't crash, `replaceState` never throws |
-| 2.4 — Viewport Layout | B16 | No horizontal document overflow at 375 px (iPhone SE), 480×800, 1280×480, 2560×1440 — nav wraps internally |
+| Test | Bug | What it validates | File |
+| --- | --- | --- | --- |
+| 2.1 — Canvas DPR | B9 | Spectrum canvas uses native-resolution bitmaps (`canvas.width / clientWidth` ≈ devicePixelRatio), axis labels are crisp, not smeared | [`canvas_dpr.test.ts`](frontend/tests/e2e/canvas_dpr.test.ts) |
+| 2.2 — Keyboard Contract | B12, B13 | `/` focuses search, `?` toggles shortcuts, Space on buttons/Enter on links are not swallowed, Escape closes one layer per press | [`keyboard_contract.test.ts`](frontend/tests/e2e/keyboard_contract.test.ts) |
+| 2.3 — Deep-Link URL | B14, B15, B19 | `?signal=<id>` added on selection, removed on clear, garbage IDs don't crash, `replaceState` never throws | [`deep_link.test.ts`](frontend/tests/e2e/deep_link.test.ts) |
+| 2.4 — Viewport Layout | B16 | No horizontal document overflow at 375 px (iPhone SE), 480×800, 1280×480, 2560×1440 — nav wraps internally | [`viewport_layout.test.ts`](frontend/tests/e2e/viewport_layout.test.ts) |
 
 ```bash
 # Start the Vite dev server first:

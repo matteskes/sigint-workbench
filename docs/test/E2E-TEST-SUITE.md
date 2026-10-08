@@ -601,10 +601,10 @@ Tests map to SPEC sections as follows:
 | 1.2 — Backpressure | §14.3 (fan-out contract) | `[implemented]` |
 | | 1.3 — Zombie Eviction | §14.3, A12 (keepalive contract) | `[implemented]` |
 | | 1.4 — Close Frame Fwd | §10.4.4, B17, §14.3 | `[implemented]` |
-| 2.1 — Canvas DPR | §18 (spectrum/waterfall) |
-| 2.2 — Keyboard Contract | §15 (keyboard shortcuts) |
-| 2.3 — Deep-Link URL | §3.1 (?signal=<id> mirror) |
-| 2.4 — Viewport Layout | UI-DESIGN (responsive design) |
+| 2.1 — Canvas DPR | §18 (spectrum/waterfall) | `[implemented]` |
+| 2.2 — Keyboard Contract | §15 (keyboard shortcuts) | `[implemented]` |
+| 2.3 — Deep-Link URL | §3.1 (?signal=<id> mirror) | `[implemented]` |
+| 2.4 — Viewport Layout | UI-DESIGN (responsive design) | `[implemented]` |
 | 3.1 — Close Code Forwarding | §10.4 (live audio relay) |
 | 3.2 — 502 Handling | §13 (error mapping) |
 | 3.3 — Multi-Client Fan-Out | §14.3 (N-client hub) |
