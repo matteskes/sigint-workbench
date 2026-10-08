@@ -44,6 +44,10 @@ type Simulator struct {
 	signals []SimSignal
 	phases  []float64 // per-signal phase accumulator (radians)
 	t       float64   // time accumulator (seconds)
+	// Device state (R7: Device Unplug Lifecycle)
+	hardwareState DeviceState
+	// reconnecting tracks the last setConnectedTime for backoff calculation
+	setConnectedTime time.Time
 }
 
 // NewSimulator creates a simulator centred on centerFreq Hz with the
@@ -79,6 +83,8 @@ func (s *Simulator) Open() error {
 	s.mu.Lock()
 	s.running = true
 	s.t = 0
+	s.hardwareState = Connected
+	s.setConnectedTime = time.Now()
 	if len(s.phases) < len(s.signals) {
 		s.phases = make([]float64, len(s.signals))
 	}
@@ -89,6 +95,7 @@ func (s *Simulator) Open() error {
 func (s *Simulator) Close() error {
 	s.mu.Lock()
 	s.running = false
+	s.hardwareState = Disconnected
 	s.mu.Unlock()
 	return nil
 }
@@ -143,11 +150,20 @@ func (s *Simulator) SetNoiseLevel(level float64) {
 // ReadIQ fills buf with synthetic interleaved I/Q int16 samples.
 // buf length must be even (I, Q pairs). Returns the number of int16
 // values written (== len(buf) on success).
+//
+// When the device is in the Disconnected state, ReadIQ returns an error.
+// When the device has just been reconnected (SetHardwareState(Connected)),
+// ReadIQ applies the §4.4 read-backoff delay before producing samples,
+// mimicking hardware ramp-up time.
 func (s *Simulator) ReadIQ(buf []int16) (int, error) {
 	s.mu.Lock()
 	if !s.running {
 		s.mu.Unlock()
 		return 0, fmt.Errorf("simulator: not open")
+	}
+	if s.hardwareState == Disconnected {
+		s.mu.Unlock()
+		return 0, fmt.Errorf("simulator: device disconnected")
 	}
 	sr := float64(s.sampleRate)
 	n := len(buf) / 2
@@ -156,6 +172,16 @@ func (s *Simulator) ReadIQ(buf []int16) (int, error) {
 		return 0, nil
 	}
 
+	// §4.4 read-backoff: after reconnecting, sleep for the backoff
+	// interval to mimic hardware ramp-up time.
+	now := time.Now()
+	elapsed := now.Sub(s.setConnectedTime)
+	if elapsed < readBackoffInterval {
+		remaining := readBackoffInterval - elapsed
+		s.mu.Unlock()
+		time.Sleep(remaining)
+		s.mu.Lock()
+	}
 	// Snapshot signal config and phase state (avoid holding lock in loop)
 	sigCount := len(s.signals)
 	offsets := make([]float64, sigCount)
@@ -231,3 +257,57 @@ func simClamp(v float64) float64 {
 	}
 	return v
 }
+
+// ── Device state (R7: Device Unplug Lifecycle) ────────────────────────────
+
+// DeviceState represents the current physical connection state of an SDR device.
+type DeviceState int
+
+const (
+	// Connected means the device is physically connected and ready to stream.
+	Connected DeviceState = iota
+	// Disconnected means the device has been unplugged or is otherwise
+	// unavailable. ReadIQ MUST return an error while in this state.
+	Disconnected
+)
+
+// String returns a human-readable device state name.
+func (s DeviceState) String() string {
+	switch s {
+	case Connected:
+		return "connected"
+	case Disconnected:
+		return "disconnected"
+	default:
+		return fmt.Sprintf("unknown(%d)", s)
+	}
+}
+
+// SetHardwareState sets the device's physical connection state.
+// It is a simulator-only method used by the R7 (Device Unplug Lifecycle)
+// e2e test to simulate unplugging and replugging a device (§4.4, §4.10.7).
+//
+// When the state transitions from Disconnected to Connected, the simulator
+// implements the §4.4 read-backoff contract: subsequent ReadIQ calls will
+// sleep for readBackoffInterval (default 200 ms) before producing samples,
+// mimicking the hardware ramp-up time after a device reconnect.
+func (s *Simulator) SetHardwareState(state DeviceState) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.hardwareState = state
+	if state == Connected {
+		s.setConnectedTime = time.Now()
+	}
+	return nil
+}
+
+// HardwareState returns the current physical connection state of the device.
+func (s *Simulator) HardwareState() DeviceState {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.hardwareState
+}
+
+// readBackoffInterval is the §4.4 read-backoff delay after reconnecting.
+// Exposed as a package-level variable so tests can override it.
+var readBackoffInterval = 200 * time.Millisecond

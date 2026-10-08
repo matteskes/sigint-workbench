@@ -625,7 +625,7 @@ Tests map to SPEC sections as follows:
 | R4 — Network Instability | §14.2 (connection management), B19 (WS lifecycle) | `[implemented]` |
 | R5 — PostGIS Schema Compliance | §16 (data model), db/init.sql + 5 migrations | `[implemented]` |
 | R6 — SNR Boundary Detection | §6.5 (class confidence), B4 (confidence guardrails) | `[implemented]` |
-| R7 — Device Unplug Lifecycle | §4.4 (read backoff), simulator `SetHardwareState()` API | `[deferred to Phase 2]` |
+| R7 — Device Unplug Lifecycle | §4.4 (read backoff), simulator `SetHardwareState()` API | `[implemented]` |
 
 ---
 

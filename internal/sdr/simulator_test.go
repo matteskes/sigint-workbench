@@ -130,3 +130,96 @@ func TestSimulator_NoiseLevel(t *testing.T) {
 		t.Error("with 3 signals and zero noise, output should not be all zeros")
 	}
 }
+
+func TestSimulator_HardwareState_Default(t *testing.T) {
+	sim := NewSimulator(146_520_000, 2_000_000)
+
+	// Before Open, state is zero value (Connected).
+	if sim.HardwareState() != Connected {
+		t.Errorf("pre-Open state = %v, want %v", sim.HardwareState(), Connected)
+	}
+
+	if err := sim.Open(); err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer sim.Close()
+
+	// After Open, must be Connected.
+	if sim.HardwareState() != Connected {
+		t.Errorf("post-Open state = %v, want %v", sim.HardwareState(), Connected)
+	}
+}
+
+func TestSimulator_SetHardwareState_Disconnected(t *testing.T) {
+	sim := NewSimulator(146_520_000, 2_000_000)
+	if err := sim.Open(); err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer sim.Close()
+
+	// Unplug the device.
+	if err := sim.SetHardwareState(Disconnected); err != nil {
+		t.Fatalf("SetHardwareState(Disconnected) failed: %v", err)
+	}
+
+	if sim.HardwareState() != Disconnected {
+		t.Errorf("state after unplug = %v, want %v", sim.HardwareState(), Disconnected)
+	}
+
+	// ReadIQ MUST fail while disconnected.
+	buf := make([]int16, 1024)
+	if _, err := sim.ReadIQ(buf); err == nil {
+		t.Error("ReadIQ while disconnected: expected error, got nil")
+	} else {
+		t.Logf("ReadIQ error (expected): %v", err)
+	}
+}
+
+func TestSimulator_SetHardwareState_Reconnect(t *testing.T) {
+	sim := NewSimulator(146_520_000, 2_000_000)
+	if err := sim.Open(); err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer sim.Close()
+
+	// Unplug, then reconnect.
+	if err := sim.SetHardwareState(Disconnected); err != nil {
+		t.Fatalf("SetHardwareState(Disconnected) failed: %v", err)
+	}
+
+	buf := make([]int16, 1024)
+	if _, err := sim.ReadIQ(buf); err == nil {
+		t.Error("ReadIQ while disconnected: expected error, got nil")
+	}
+
+	// Reconnect the device.
+	if err := sim.SetHardwareState(Connected); err != nil {
+		t.Fatalf("SetHardwareState(Connected) failed: %v", err)
+	}
+
+	if sim.HardwareState() != Connected {
+		t.Errorf("state after reconnect = %v, want %v", sim.HardwareState(), Connected)
+	}
+
+	// ReadIQ must succeed after reconnect.
+	if _, err := sim.ReadIQ(buf); err != nil {
+		t.Fatalf("ReadIQ after reconnect: %v (backoff may still be in progress)", err)
+	}
+	t.Log("Reconnect successful: ReadIQ succeeds after SetHardwareState(Connected)")
+}
+
+func TestSimulator_HardwareState_String(t *testing.T) {
+	tests := []struct {
+		state DeviceState
+		want  string
+	}{
+		{Connected, "connected"},
+		{Disconnected, "disconnected"},
+		{DeviceState(99), "unknown(99)"},
+	}
+	for _, tt := range tests {
+		if got := tt.state.String(); got != tt.want {
+			t.Errorf("DeviceState(%d).String() = %q, want %q", tt.state, got, tt.want)
+		}
+	}
+}
