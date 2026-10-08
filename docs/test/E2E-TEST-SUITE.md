@@ -608,11 +608,11 @@ Tests map to SPEC sections as follows:
 | 3.1 — Close Code Forwarding | §10.4 (live audio relay), B17, §10.4.4 | `[implemented]` |
 | 3.2 — 502 Handling | §13 (error mapping), §2.2 (unreachable upstream) | `[implemented]` |
 | 3.3 — Multi-Client Fan-Out | §14.3 (N-client hub), §14.4.3 | `[implemented]` |
-| 4.1 — Full Pipeline | §4–§6 (IQ → DSP → classification) | |
-| 4.2 — Recording Lifecycle | §10, §11 (recording + retention) | |
-| 5.1 — Settings Effect | §20 (setup screen) | |
-| 5.2 — Settings Round-Trip | §16.6 (settings schema) | |
-| 5.3 — Config Cleanup | D2, A3, A4, A8, A13 | |
+| 4.1 — Full Pipeline | §4–§6 (IQ → DSP → classification) | `[implemented]` |
+| 4.2 — Recording Lifecycle | §10, §11 (recording + retention) | `[implemented]` |
+| 5.1 — Settings Effect | §20 (setup screen) | `[implemented]` |
+| 5.2 — Settings Round-Trip | §16.6 (settings schema) | `[implemented]` |
+| 5.3 — Config Cleanup | D2, A3, A4, A8, A13 | `[implemented]` |
 | 6.1 — Tile Bounds | §16 (map config) | |
 | 7.1 — Classification Accuracy | §6.5 (class source enum) | |
 | 8.1 — CW+WFM+Below-Center | §5.3 (below-center), D4 (classification) | |
