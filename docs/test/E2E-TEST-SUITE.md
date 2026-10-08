@@ -613,12 +613,12 @@ Tests map to SPEC sections as follows:
 | 5.1 — Settings Effect | §20 (setup screen) | `[implemented]` |
 | 5.2 — Settings Round-Trip | §16.6 (settings schema) | `[implemented]` |
 | 5.3 — Config Cleanup | D2, A3, A4, A8, A13 | `[implemented]` |
-| 6.1 — Tile Bounds | §16 (map config) | |
-| 7.1 — Classification Accuracy | §6.5 (class source enum) | |
-| 8.1 — CW+WFM+Below-Center | §5.3 (below-center), D4 (classification) | |
-| 8.2 — Aggressive Sweep | UI-BUGCHECK B12–B16 | |
-| 9.1 — REST Contract | §13 (API specification) | |
-| 9.2 — CORS Contract | §17.2 (origin policy) | |
+| 6.1 — Tile Bounds | §16 (map config) | `[implemented]` |
+| 7.1 — Classification Accuracy | §6.5 (class source enum) | `[implemented]` |
+| 8.1 — CW+WFM+Below-Center | §5.3 (below-center), D4 (classification) | `[implemented]` |
+| 8.2 — Aggressive Sweep | UI-BUGCHECK B12–B16 | `[implemented]` |
+| 9.1 — REST Contract | §13 (API specification) | `[implemented]` |
+| 9.2 — CORS Contract | §17.2 (origin policy) | `[implemented]` |
 | R1 — Service Restart Resilience | §3.2 (API overview, service lifecycle), D10 (restart SLAs) | |
 | R2 — Error Format Validation | §13 (error contract, D10) | |
 | R3 — Multi-SDR Concurrency | §7.1 (scan loop, D5 max SDRs), A1 (concurrent queueing) | |
