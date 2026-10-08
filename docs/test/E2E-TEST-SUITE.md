@@ -1,9 +1,9 @@
 # SIGINT Workbench — E2E Test Suite Specification
 
 **Based on:** `docs/UI-BUGCHECK.md` (B1–B19) and `docs/STACK-AUDIT.md` (A1–A23)
-**Scope:** End-to-end testing across all layers — SDR hardware → UDP pipeline → API → WebSocket → Frontend UI
-**Runtime:** `make dev` stack (Docker TCP services + native SDR capture + Vite dev server)
-**Tools:** Playwright (frontend), curl/WSCat (WebSocket probes), extended smoke-test.sh (UDP pipeline)
+**Scope:** Full-stack: SDR hardware, API, WebSocket, Frontend UI
+**Runtime:** `make dev` (Docker services, SDR capture, Vite server)
+**Tools:** Playwright (frontend), curl/WSCat (WebSocket), smoke-test.sh (UDP)
 
 ---
 
@@ -12,7 +12,7 @@
 ### 1.1 Languages Used
 
 | Language | Where Used |
-|---|---|
+| --- | --- |
 | **Go 1.25** | All 6 backend services (`cmd/sdr-capture`, `iq-ingest`, `signal-processor`, `recorder`, `api-gateway`, `ws-hub`), bench tools (`rtl-list`, `rtl-calibrate`, `smoke-frames`), all `internal/` packages |
 | **TypeScript 5.7** | Frontend: API client, audio decoder, store modules (signals, audio, connection, spectrum, sdrs, tdoa, health), hooks |
 | **Svelte 5** | 22+ `.svelte` components: views (analysis, recordings, signals, spectrum, setup, home), shell (App Bar, ConnectionPill, ShortcutsOverlay), components (Inspector, MapView, AudioPlayer, LiveAudioPlayer, VUMeter, SpectrumView, etc.) |
@@ -24,7 +24,7 @@
 ### 1.2 API Types
 
 | API Type | Protocol | Endpoint / Method | Service |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | **REST JSON** | HTTP GET/POST/PUT/DELETE | `/health`, `/api/signals`, `/api/signals/{id}`, `/api/signals/{id}/annotations`, `/api/signals/{id}/track`, `/api/recordings`, `/api/recordings/{id}/audio`, `/api/recordings/{id}/tfr`, `/api/sdrs`, `/api/sdrs/{id}/status`, `/api/sdrs/{id}`, `/api/sdrs/{id}/scan`, `/api/settings`, `/api/events/signal-tower`, `/setup`, `/api/v1/status`, `/api/v1/frequency`, `/api/v1/gain`, `/api/v1/scan` | `api-gateway` (proxies to capture, recorder, settings) |
 | **WebSocket (upgrade)** | HTTP 101 Upgrade | `GET /ws` (event relay), `GET /ws/audio` (live audio relay) | `api-gateway` relays to `ws-hub` / `recorder` |
 | **WebSocket frames** | Binary + Text frames | Audio: `audio.meta` (text hello) → binary Opus packets; Events: JSON `ws.Event` with `type` + `payload` | `ws-hub` (event types: `signal.new`, `signal.update`, `signal.removed`, `signal.tdoa`, `sdr.status`, `audio.level`, `track.update`, `spectrum.frame`) |
@@ -42,7 +42,7 @@
 ### 2.1 Bug Findings & Extracted Lessons
 
 | Bug | Description | Lesson |
-|---|---|---|
+| --- | --- | --- |
 | **B1** | Missing favicon (404 on every page load) | Every static asset referenced in HTML must exist on disk; 404s in the critical path create console noise that masks real errors |
 | **B2** | TCP dial reports capture "ok" while its HTTP API is dead | A TCP open to a wedged process returns "ok" while the API is dead; probes must validate HTTP status codes, not just TCP connectivity |
 | **B3** | Arizona MBTiles TileJSON metadata is corrupt (bounds=[…0,…]) | GeoJSON/MBTiles bounds west of Greenwich can produce mid-Atlantic centers; validate/clip bounds before rendering |
@@ -58,7 +58,7 @@
 ### 3.1 Audit Findings & Extracted Lessons
 
 | Audit | Description | Lesson |
-|---|---|---|
+| --- | --- | --- |
 | **A1** | Hub `Broadcast()` writes synchronously to all clients — one slow client blocks the entire hub | Per-client drop queues are required; a slow client must never stall broadcast to active clients |
 | **A2** | Four+ editable settings knobs are parsed but never consumed by services | Settings saved via API must actually change service behavior; test the full save→effect chain, not just file I/O |
 | **A3** | Nginx `/ws/` proxies directly to ws-hub, bypassing the gateway relay | WebSocket routes must go through the gateway (which handles origin checking, CORS, close code forwarding); direct hub access is dead-wrong |
@@ -74,13 +74,15 @@
 ## 4. E2E Test Suite
 
 ### 4.1 Category: API Health & Connectivity Probes
+
 *Addresses: B2, A1, A12*
 
 #### Test 1.1 — HTTP Health Probe Validates Actual API (from B2)
+
 **Scenario:** A service process is wedged — its kernel listen backlog accepts TCP dials, but the HTTP stack is dead.
 
 | Step | Action | Expected |
-|---|---|---|
+| --- | --- | --- |
 | 1 | `GET http://localhost:8080/health` | 200, `{"status":"ok"}` |
 | 2 | `GET http://localhost:8081/health` | 200, `{"status":"ok","clients":N}` |
 | 3 | `GET http://localhost:127.0.0.1:9090/api/v1/status` | 200, per-device status array (at least one SDR) |
@@ -89,11 +91,12 @@
 **Why:** A TCP dial would return "ok" for all three even when wedged. Only an HTTP 200 validates the API is functional.
 
 #### Test 1.2 — Hub Backpressure Simulation (from A1) `[implemented]`
+
 **Test file:** `tests/e2e/api/backpressure_test.go`
 **Scenario:** Two WebSocket clients connect to `/ws`; one stops reading.
 
 | Step | Action | Expected |
-|---|---|---|
+| --- | --- | --- |
 | 1 | Connect Client A and Client B to `ws://localhost:8081/ws` | Both receive 101 |
 | 2 | Pipeline 50 events via `POST /api/events` | Both receive all 50 |
 | 3 | Stop Client A's read loop (but keep connection open) | Hub does NOT block |
@@ -103,16 +106,19 @@
 **Why:** Without per-client queues, Client A's stopped read blocks the hub's broadcast goroutine, starving Client B.
 
 **Test functions:**
+
 - `TestHubBackpressure` — full backpressure lifecycle (Steps 1-5)
 - `TestHubNonblockBroadcast` — stress test with 5 concurrent clients, 200-event burst
 - `TestHubSlowClientQueueShedding` — validates queue shedding preserves fast client delivery
 
 #### Test 1.3 — Zombie Client Eviction (from A12)
+
 **Implementation:** `tests/e2e/api/zombie_eviction_test.go::TestZombieClientEviction`
 **Scenario:** A WS client connects, sends no messages, receives no pongs.
 **Steps:**
+
 | Step | Action | Expected |
-|---|---|---|
+| --- | --- | --- |
 | 1 | Connect Client A (zombie — never reads) and Client B (active) | Both report 101 Upgrade |
 | 2 | Verify hub `ClientCount()` is ≥ 2 | `GET /health` reports clients ≥ 2 |
 | 3 | Post events — Client B receives them, Client A stays silent | Hub delivers to Client B only |
@@ -120,11 +126,13 @@
 | 5 | Close Client B | Hub client count → 0 |
 
 #### Test 1.4 — Close Frame Forwarding (from B17, §10.4.4)
+
 **Implementation:** `tests/e2e/api/close_frame_forwarding_test.go::TestCloseFrameForwarding`
 **Scenario:** One client sends a WebSocket close frame with a specific code and reason; verify peer clients receive the same close frame through the full gateway relay chain.
 **Steps:**
+
 | Step | Action | Expected |
-|---|---|---|
+| --- | --- | --- |
 | 1 | Connect Client A (sends close) and Client B (observer) | Both report 101 Upgrade |
 | 2 | Drain initial hub messages | Clean state |
 | 3 | Client A writes close frame (code 1000, custom reason) | Hub delivers close frame to peers |
@@ -135,13 +143,15 @@
 ---
 
 ### 4.2 Category: Frontend UI Behavior
+
 *Addresses: B9, B10, B11, B12, B13, B14, B15, B16, B19*
 
 #### Test 2.1 — Canvas Text Rendering at High DPR (from B9)
+
 **Platform:** Playwright with `deviceScaleFactor: 2` (MacBook Retina simulation)
 
 | Step | Action | Expected |
-|---|---|---|
+| --- | --- | --- |
 | 1 | Navigate to `/spectrum` | SpectrumView renders |
 | 2 | Verify canvas has `devicePixelRatio` 2 (check `canvas.width / canvas.clientWidth`) | Native-resolution canvas |
 | 3 | Verify label text (e.g., "-30", "0.5", "480.0") is crisp, not smeared | Labels at correct pixel positions |
@@ -151,10 +161,11 @@
 **Why:** Fixed-size bitmaps stretched by CSS smear every label into unreadable mush at DPR 2.
 
 #### Test 2.2 — Keyboard Interaction Contract (from B12, B13)
+
 **Platform:** Playwright with keyboard emulation
 
 | Step | Action | Expected |
-|---|---|---|
+| --- | --- | --- |
 | 1 | Press `/` | Search input receives focus, shows focus ring |
 | 2 | Type digits and letters | Text lands in search field, no route switch triggered |
 | 3 | Press `?` | Shortcuts overlay toggles open/closed |
@@ -166,10 +177,11 @@
 **Why:** The global keyboard shortcuts overlay must respect native browser activation keys and close one layer per Escape press.
 
 #### Test 2.3 — Deep-Link URL Lifecycle (from B14, B15, B19)
+
 **Platform:** Playwright with URL manipulation
 
 | Step | Action | Expected |
-|---|---|---|
+| --- | --- | --- |
 | 1 | Navigate to `/signals` | Page renders, URL is clean (no `?signal=`) |
 | 2 | Click a signal row to open the Inspector | URL becomes `?signal=<valid-id>` |
 | 3 | Click "Clear Selection" (Esc button) | `?signal=` is removed via `history.replaceState`, no console errors |
@@ -180,10 +192,11 @@
 **Why:** When the Inspector unmounts (selection cleared), the stale `?signal=` must not remain in the URL, causing errors on subsequent navigation.
 
 #### Test 2.4 — Narrow Viewport Layout (from B16)
+
 **Platform:** Playwright viewport resizing
 
 | Step | Action | Expected |
-|---|---|---|
+| --- | --- | --- |
 | 1 | Resize viewport to 375 × 812 (iPhone SE) | Page renders, no horizontal scrollbar |
 | 2 | Resize to 480 × 800 | Page renders, no horizontal scrollbar |
 | 3 | Resize to 1280 × 480 (landscape mobile) | Shell remains usable, navigation wraps internally |
@@ -191,8 +204,9 @@
 | 5 | On 375px: verify navigation uses internal scrolling, not document overflow | Nav items wrap to second row/column, scroll container is bounded |
 
 **Why:** Every page horizontally overflowed at 375px in the original bug. Internal scrolling + nav wrapping fixes this.
+
 | Step | Action | Expected |
-|---|---|---|
+| --- | --- | --- |
 | 1 | Connect a WS client to `ws://localhost:8080/ws` | 101 Upgrade |
 | 2 | Do not read from, do not pong — wait 120 seconds | Hub eviction trigger fires |
 | 3 | `GET http://localhost:8081/health` | `clients` count decremented by 1 |
@@ -210,13 +224,15 @@
 ---
 
 ### 4.3 Category: WebSocket End-to-End
+
 *Addresses: B17, B18*
 
 #### Test 3.1 — Clean WS Close Code Forwarding (from B17)
+
 **Platform:** Playwright WebSocket capture
 
 | Step | Action | Expected |
-|---|---|---|
+| --- | --- | --- |
 | 1 | Connect to `ws://localhost:8080/ws/audio` via Playwright | 101 Upgrade with `Origin: http://localhost:5173` |
 | 2 | Receive the `audio.meta` hello message (text frame) | Contains `type`, `signalId`, `centerHz`, `modulation`, `subType`, `sampleRate`, `channels`, `bitrate` |
 | 3 | Wait for session expiry (~3 seconds, no active session) | Close frame received with code 1000, reason "no live stream" |
@@ -227,10 +243,11 @@
 **Why:** The recorder sends a clean 1000 close, but the gateway must forward it intact — not degrade to abnormal 1006 (TCP hangup). If 1006 is forwarded, the dashboard renders "ended" as an error instead of a normal closure.
 
 #### Test 3.2 — Gateway-to-Upstream 502 Handling (from B17)
+
 **Scenario:** The recorder service is disconnected (Docker container stopped).
 
 | Step | Action | Expected |
-|---|---|---|
+| --- | --- | --- |
 | 1 | Stop the recorder container (`docker compose stop recorder`) | Recorder unreachable |
 | 2 | Connect to `ws://localhost:8080/ws/audio` | 502 JSON response: `{"error":"recorder unreachable"}` |
 | 3 | Verify the browser handles the 502 without unhandled rejection | No console errors |
@@ -239,10 +256,11 @@
 **Why:** Unreachable upstream should answer with a 502 JSON, not a raw socket error. The frontend must handle this gracefully.
 
 #### Test 3.3 — Multi-Client WS Fan-Out
+
 **Platform:** Playwright with multiple browser contexts (simulating tabs)
 
 | Step | Action | Expected |
-|---|---|---|
+| --- | --- | --- |
 | 1 | Open 3 browser tabs, navigate each to `http://localhost:3000` | All 3 show `● live` connection pill |
 | 2 | Trigger a signal detection event (via simulation or on-air) | All 3 tabs receive the event simultaneously |
 | 3 | Close one tab | Remaining 2 tabs continue receiving events |
@@ -251,13 +269,15 @@
 **Why:** The hub must broadcast to all connected clients. One client closing should not affect others.
 
 ### 4.4 Category: Full Pipeline Smoke Test
+
 *Addresses: B5, B18, extends existing smoke-test.sh*
 
 #### Test 4.1 — Complete IQ-to-UI Pipeline
+
 **Extends:** `scripts/smoke-test.sh` (existing CW + WFM smoke test)
 
 | Step | Action | Expected |
-|---|---|---|
+| --- | --- | --- |
 | 1 | `docker compose up -d` (all services) | All containers healthy |
 | 2 | Start native `sdr-capture` with simulator mode (`-config config/sdr-capture.sim.yaml`) | Two simulated devices streaming IQ |
 | 3 | Send synthetic CW frames (via `smoke-frames -mod cw`) | `signal-processor` detects CW at 16.0000 MHz |
@@ -271,10 +291,11 @@
 **Why:** This validates the full chain from IQ samples through DSP/Classification to the UI, catching integration issues that unit tests miss.
 
 #### Test 4.2 — Recording Lifecycle (from B18)
+
 **Scenario:** Live signals trigger recording sessions.
 
 | Step | Action | Expected |
-|---|---|---|
+| --- | --- | --- |
 | 1 | Simulate signals via `sdr-capture` simulator | `signal-processor` publishes detections |
 | 2 | Recorder picks up signals, starts WAV + IQ recording | Files written to configured `RECORDINGS_DIR` |
 | 3 | `GET http://localhost:8080/api/recordings` | Recording entries appear with relative `file_path` |
@@ -287,13 +308,15 @@
 ---
 
 ### 4.5 Category: Settings & Configuration
+
 *Addresses: A2, A3, A4, A8, A13*
 
 #### Test 5.1 — Settings Save Actually Changes Service Behavior (from A2)
+
 **Scenario:** Saved settings must propagate to running services, not just file I/O.
 
 | Step | Action | Expected |
-|---|---|---|
+| --- | --- | --- |
 | 1 | `GET http://localhost:8080/api/settings` | Returns all editable knobs |
 | 2 | Save a signal TTL (e.g., 60 seconds) via `PUT /api/settings` | 200 response |
 | 3 | Wait 61 seconds, then query `/api/signals?min=-90&max=90` | Signals older than TTL are archived/removed |
@@ -305,7 +328,7 @@
 #### Test 5.2 — Settings Round-Trip Persistence
 
 | Step | Action | Expected |
-|---|---|---|
+| --- | --- | --- |
 | 1 | `GET /api/settings` → list all keys and values | All documented knobs present |
 | 2 | `PUT /api/settings` → update multiple values | 200 response |
 | 3 | `GET /api/settings` again | Updated values persist |
@@ -314,7 +337,7 @@
 #### Test 5.3 — Dead Config Cleanup Verification (from A3, A4, A8, A13)
 
 | Step | Action | Expected |
-|---|---|---|
+| --- | --- | --- |
 | 1 | Parse `docker-compose.yml` — no references to `classifier` or `location-service` containers | D2 stubs fully removed |
 | 2 | Parse `.env.example` — all variables are consumed by at least one service | No retired vars (`CLASSIFIER_PORT`, `LOCATION_SERVICE_PORT`, etc.) |
 | 3 | Parse `docker/nginx.conf` — `/ws` proxies to `api-gateway:8080`, not `ws-hub:8081` | A3 fix verified |
@@ -322,12 +345,13 @@
 | 5 | Check `frontend/src/lib/map/config.ts` — no dead `API_URL`/`WS_URL` exports | A13 fix verified |
 
 ### 4.6 Category: Map & Geospatial
+
 *Addresses: B3*
 
 #### Test 6.1 — Tile Bounds Validation (from B3)
 
 | Step | Action | Expected |
-|---|---|---|
+| --- | --- | --- |
 | 1 | `GET http://localhost:8082/data/v3.json` | TileJSON returned |
 | 2 | Parse `bounds` array: `[minLon, minLat, maxLon, maxLat]` | `maxLon > minLon` (not 0 for regions west of Greenwich) |
 | 3 | Navigate to `/` (home/map view) | MapLibre renders tiles, camera is within the data region (not mid-Atlantic) |
@@ -336,12 +360,13 @@
 **Why:** B3 found Arizona MBTiles with `bounds: [-114.8325, 30.05891, 0, 37.00596]` — `maxLon = 0` pushed the entire render to the mid-Atlantic Ocean.
 
 ### 4.7 Category: Signal Classification Accuracy
+
 *Addresses: B4*
 
 #### Test 7.1 — Confidence Threshold & Class Source Validation (from B4)
 
 | Step | Action | Expected |
-|---|---|---|
+| --- | --- | --- |
 | 1 | Feed noise-only IQ frames (no tones) through the pipeline | No high-confidence classifications produced (confidence < threshold) |
 | 2 | Feed CW tones at various SNR levels (−20 dB, −10 dB, 0 dB, +10 dB, +25 dB) | Classification confidence increases with SNR; below threshold SNR → no classification or low confidence |
 | 3 | Feed WFM tones (modulated) | Correct "broadcast" class source, not "land_mobile" or "marine" |
@@ -350,13 +375,15 @@
 ---
 
 ### 4.8 Category: Regression Suite (Existing Smoke + UI-BUGCHECK Sweep)
+
 *Addresses: B5, B10–B16, B19*
 
 #### Test 8.1 — CW + WFM + Below-Center (Extending Existing smoke-test.sh)
+
 **Existing** (from `scripts/smoke-test.sh`), validated in CI:
 
 | Step | Action | Expected |
-|---|---|---|
+| --- | --- | --- |
 | 1 | Build signal-processor with `-tags onnx` | Binary compiles with ONNX Runtime |
 | 2 | Stream CW frames (`smoke-frames -mod cw -count 5`) | CW peak detected at 16.0000 MHz in logs |
 | 3 | Stream WFM frames (`smoke-frames -mod wfm -count 5`) | WFM peak detected at ~100.8 MHz in logs |
@@ -364,10 +391,11 @@
 | 5 | Verify class source enum is valid for each detection | No `method:label` values in class field |
 
 #### Test 8.2 — Aggressive UI Sweep (from UI-BUGCHECK B12–B16)
+
 **Platform:** Playwright with aggressive interaction patterns
 
 | Step | Action | Expected |
-|---|---|---|
+| --- | --- | --- |
 | 1 | Table search with regex metacharacters (`.*[`) | No crash, shows "no signals match" |
 | 2 | Table search with 300-char unicode string | No crash, graceful "no match" |
 | 3 | Freq column sort toggle (click header) | Sort direction toggles (96.234 → 97.294 → 94.909 MHz) |
@@ -385,7 +413,7 @@
 #### Test 9.1 — REST API Contract Completeness
 
 | Step | Action | Expected |
-|---|---|---|
+| --- | --- | --- |
 | 1 | Test every SPEC-documented endpoint (all paths from §13, §7.4) | Each returns documented status codes |
 | 2 | Send invalid JSON to JSON endpoints | 400 `{"error":"invalid JSON"}` |
 | 3 | Send GET to POST-only endpoints | 405 `{"error":"method not allowed"}` |
@@ -396,15 +424,17 @@
 #### Test 9.2 — CORS Configuration
 
 | Step | Action | Expected |
-|---|---|---|
+| --- | --- | --- |
 | 1 | Send `GET /api/signals` with `Origin: http://localhost:5173` | 200, `Access-Control-Allow-Origin: http://localhost:5173` |
 | 2 | Send `GET /api/signals` with `Origin: http://evil.example.com` | 403 (denied by `ALLOWED_ORIGINS`) |
 | 3 | Send `GET /api/signals` with no `Origin` header | 200 (non-browser clients pass) |
 | 4 | WebSocket handshake with foreign origin | 403 (same origin policy enforced) |
 | 5 | Set `ALLOWED_ORIGINS=""` (empty) | All origins denied (not silently allow-all) |
+
 ---
 
 ## 4.10 Robustness & Resilience Tests
+
 *Addresses: A12 (zombie prevention), D10 (error format contract), SERVICE_RESTART resilience*
 
 ### 4.10.1 Global Test Infrastructure (applies to ALL tests)
@@ -444,7 +474,7 @@ Backoff: none (constant polling is fine for e2e)
 ```
 
 | Scenario | Default Timeout | Reason |
-|---|---|---|
+| --- | --- | --- |
 | Signal detection via pipeline | 10s | FFT + ONNX inference takes 200–800ms per frame |
 | WS event relay | 5s | Hub fan-out is fast unless backpressure kicks in |
 | DB commit (signal insertion) | 10s | PostGIS insert + index update |
@@ -457,7 +487,7 @@ Backoff: none (constant polling is fine for e2e)
 ## 5. Priority Matrix
 
 | Priority | Tests | Rationale |
-|---|---|---|
+| --- | --- | --- |
 | **P0 — Blockers** | 1.1, 1.2, 3.1, 4.1, R1 | Break normative SPEC contracts; data loss or silent failure |
 | **P1 — Critical** | 1.3, 2.1, 2.2, 2.3, 4.2, R2, R3 | User-facing failures, resource leaks, broken recording |
 | **P2 — Important** | 2.4, 3.2, 3.3, 5.1, 7.1, R4, R5, R6 | Regression prevention, classification accuracy |
@@ -468,6 +498,7 @@ Backoff: none (constant polling is fine for e2e)
 ## 6. Execution Instructions
 
 ### 6.1 Prerequisites
+
 ```bash
 # Full stack with hardware (macOS):
 make build-capture && ./bin/sdr-capture -config config/sdr-capture.yaml
@@ -596,7 +627,7 @@ e2e:
 Tests map to SPEC sections as follows:
 
 | Test | SPEC Reference |
-|---|---|
+| --- | --- |
 | 1.1 — Health Probes | §3.2, §13 (API overview) | `[implemented]` |
 | 1.2 — Backpressure | §14.3 (fan-out contract) | `[implemented]` |
 | | 1.3 — Zombie Eviction | §14.3, A12 (keepalive contract) | `[implemented]` |
@@ -639,10 +670,11 @@ Tests map to SPEC sections as follows:
 6. **R5 seed data** — Create a fixture script to insert realistic signal coordinates (Arizona bounds from B3) into the database for UI tests, avoiding the `bounds: 0` tile problem that previously pushed the map to the mid-Atlantic.
 
 ### 4.10.3 Test R1 — Service Restart Resilience (B5 extension)
+
 *Scenario: A service crashes and restarts while clients are connected.*
 
 | Step | Action | Expected |
-|---|---|---|
+| --- | --- | --- |
 | 1 | Connect WS client to `/ws` | 101 Upgrade |
 | 2 | Verify client receives `signal.update` events (poll every 500ms) | Events flowing |
 | 3 | `docker compose restart api-gateway` | Gateway restarts |
@@ -655,10 +687,11 @@ Tests map to SPEC sections as follows:
 **Why:** The SPEC doesn't define recovery SLAs, but a production system must handle container restarts gracefully. This catches connection leaks and state corruption during restart.
 
 ### 4.10.4 Test R2 — Error Format Validation (D10)
+
 *Scenario: All services must return error responses in a consistent JSON format.*
 
 | Step | Action | Expected |
-|---|---|---|
+| --- | --- | --- |
 | 1 | Hit every error path (404, 502, 503) across all services | Each returns `{"error":"<message>"}` |
 | 2 | Parse all error JSON responses — assert `"error"` key exists | No HTML errors, no 500 tracebacks |
 | 3 | Verify `api-gateway` returns 503 when DB is down | `{"error":"database unavailable"}` |
@@ -671,10 +704,11 @@ Tests map to SPEC sections as follows:
 **Why:** B17 fixed 502 JSON but the spec doesn't mandate a uniform error contract across all services. This test ensures consistency — every service returns `{"error":"<string>"}` for errors, never HTML, never tracebacks.
 
 ### 4.10.5 Test R3 — Multi-SDR Concurrent Signal Detection (from B5)
+
 *Scenario: 100 SDRs sweep concurrently — test signal detection when many devices scan simultaneously.*
 
 | Step | Action | Expected |
-|---|---|---|
+| --- | --- | --- |
 | 1 | Start 100 simulated SDRs (simulator mode, sharing `iq-ingest` UDP port) | 100 `SDRMetadata` entries in `sdrs` table |
 | 2 | Each simulator sends 5 CW frames at different frequencies (14.5 MHz ± 50 MHz span) | 500 frames sent to `iq-ingest` |
 | 3 | Verify `signal-processor` detects peaks from all 100 devices | 100 unique signal entries in DB |
@@ -686,10 +720,11 @@ Tests map to SPEC sections as follows:
 **Why:** The SPEC doesn't specify a maximum concurrent SDRs, but the simulator supports 100. This validates the upper bound before production deployments.
 
 ### 4.10.6 Test R4 — Connection State During Network Instability
+
 *Scenario: Browser experiences transient network drops during signal tracking.*
 
 | Step | Action | Expected |
-|---|---|---|
+| --- | --- | --- |
 | 1 | Connect WS to `/ws`, verify event relay | Events flowing |
 | 2 | Simulate network drop (Throttle: "Offline" in Playwright DevTools) | WS closes (code 1006 from TCP disconnect) |
 | 3 | Wait 10 seconds while offline | UI shows "connecting" state, no crash |
@@ -700,10 +735,11 @@ Tests map to SPEC sections as follows:
 **Why:** B19 found the recorder's `wasClean` flag was not correctly forwarded — but the broader question of connection resilience (what happens when the network drops mid-session) was never tested systematically.
 
 ### 4.10.7 Test R5 — PostGIS Schema Compliance
+
 *Scenario: Signal coordinates, frequencies, and metadata stored in PostGIS must comply with schema constraints.*
 
 | Step | Action | Expected |
-|---|---|---|
+| --- | --- | --- |
 | 1 | Insert signals with extreme coordinate values (lat/lon near ±180, ±90) | Accepted by schema (PostGIS `GEOGRAPHY` handles edge cases) |
 | 2 | Insert signals with extreme frequencies (0 Hz, 1.7 GHz, 10 GHz) | Accepted by `float8` column |
 | 3 | Insert 500 signals (max spec limit per query) | All inserted, `GET /api/signals` returns 500 |
@@ -715,10 +751,11 @@ Tests map to SPEC sections as follows:
 **Why:** The schema (db/init.sql + 5 migrations) uses PostGIS `GEOGRAPHY` types, `float8` for frequencies, and `app_settings` for config. If INSERT/UPDATE logic doesn't match schema constraints, signals silently fail or corrupt the database.
 
 ### 4.10.8 Test R6 — SNR Boundary Detection (near confidence threshold)
+
 *Scenario: Signals right at the classification confidence threshold (0.5–0.7) should be handled gracefully.*
 
 | Step | Action | Expected |
-|---|---|---|
+| --- | --- | --- |
 | 1 | Send CW frames at −20 dB SNR (well below classification threshold) | No classification or very low confidence (confidence < 0.3) |
 | 2 | Send CW frames at −10 dB SNR (lower boundary) | Confidence 0.3–0.5 (low-confidence range) |
 | 3 | Send CW frames at 0 dB SNR (typical) | Normal classification (confidence 0.7–0.95) |
@@ -749,10 +786,10 @@ an air-gapped installation may make, mediated through a supply machine.
 Verify zero outbound connectivity with a pre-flight check.
 
 | Step | Action | Expected |
-|---|---|---|
+| --- | --- | --- |
 | 1 | Run nslookup localhost and ping -c1 -W1 127.0.0.1 (loopback OK) | Loopback works |
 | 2 | Attempt ping -c1 -W1 8.8.8.8 and ping -c1 -W1 1.1.1.1 (external) | All fail (1–5 s timeout each) |
-| 3 | Attempt curl -sf --connect-timeout 3 http://169.254.169.254/latest/meta-data/ (cloud metadata) | Fails (non-zero exit or 404) |
+| 3 | Attempt curl -sf --connect-timeout 3 <http://169.254.169.254/latest/meta-data/> (cloud metadata) | Fails (non-zero exit or 404) |
 | 4 | Attempt ping -c1 -W1 10.0.0.1 (gateway/router) | Fails (gateway unreachable) |
 | 5 | Verify each tool returns a clear failure code (not a false-positive) | Exit 1 for all 4 checks |
 | 6 | Log all 4 results as the air-gap baseline | Audit entry created |
@@ -768,7 +805,7 @@ inference data or model metadata to external endpoints. Verify it is
 fully disabled in an air-gapped context.
 
 | Step | Action | Expected |
-|---|---|---|
+| --- | --- | --- |
 | 1 | Set `ORT_DISABLE_TELEMETRY=1` + `ORTE_LOG_LEVEL=0` (ORTE: ONNX Runtime Env) | No telemetry library loaded |
 | 2 | Load ONNX classifier: `oc.Load()` (see §12.3) | Loads successfully |
 | 3 | Run 10 inference calls on the CW test suite (conf 0.0–1.0) | All return valid classifications |
@@ -791,7 +828,7 @@ before the system goes air-gapped. Verify the target system can boot and
 operate with zero network calls.
 
 | Step | Action | Expected |
-|---|---|---|
+| --- | --- | --- |
 | 1 | Supply machine pre-copies: model (`models/rf_ml.onnx`), tiles (`tiles/data/*.mbtiles`), configs (`config/*.yaml`) | All files present on air-gap target |
 | 2 | Unplug network cable / disable network interfaces (or firewall all `OUTPUT` policy to `DROP`) | Zero outbound traffic possible |
 | 3 | Start all 6 services (`sdr-capture`, `iq-ingest`, `signal-processor`, `recorder`, `api-gateway`, `ws-hub`) | All start successfully |
@@ -811,7 +848,7 @@ design is non-compliant (H3: maximum isolation).
 single service from starving others.
 
 | Step | Action | Expected |
-|---|---|---|
+| --- | --- | --- |
 | 1 | Deploy with cgroup limits: `cpu.quota=50%`, `memory=512MB` per service | cgroups active (check `/sys/fs/cgroup/`) |
 | 2 | Inject a high-rate signal burst (100 events/s for 10 s) | No OOM kills; all services stay up |
 | 3 | Monitor `cat /sys/fs/cgroup/.../memory.current` per service | Within allocated memory limit |
@@ -834,7 +871,7 @@ and the operator transfers the tile set via USB/external media. Audit
 every step.
 
 | Step | Action | Expected |
-|---|---|---|
+| --- | --- | --- |
 | 1 | Operator requests `europe/monaco` via admin UI | API accepts request, returns `request_id: abc123` |
 | 2 | Supply machine runs `supply-tiles.sh europe/monaco` (see §4.11 scripts) | `data/monaco.mbtiles` created, valid metadata |
 | 3 | Operator inspects `validate-tiles.sh monaco.mbtiles` | Bounds check passes (west < east, center inside) |
@@ -853,7 +890,7 @@ tile download would be a policy violation (H3).
 full stack from cold. Validate the system starts and operates normally.
 
 | Step | Action | Expected |
-|---|---|---|
+| --- | --- | --- |
 | 1 | Disconnect all network interfaces (or firewall `OUTPUT` chain: `DROP`) | `iptables -L OUTPUT | grep DROP` confirms policy |
 | 2 | Start all 6 services in sequence | Each starts, logs "ready" |
 | 3 | `GET http://127.0.0.1:8080/health` (gateway) | 200, `{"status":"ok"}` |
@@ -872,7 +909,7 @@ together prove the offline boot workflow end-to-end.
 to remote-in and clear logs. Validate graceful handling of disk full.
 
 | Step | Action | Expected |
-|---|---|---|
+| --- | --- | --- |
 | 1 | Fill disk: `dd if=/dev/zero of=fillfile bs=1M count=900` (or cgroup `pids.max` + write loop) | System disk ≥ 95 % full |
 | 2 | Send classification request (ONNX inference) | Fails cleanly (logs "disk space low") |
 | 3 | Send a POST `/api/signals/{id}/annotations` | Returns `507 Insufficient Storage` (RFC 4918) |
@@ -891,7 +928,7 @@ flood the WebSocket hub to cause denial-of-service on the UI. Validate
 the hub's defense-in-depth.
 
 | Step | Action | Expected |
-|---|---|---|
+| --- | --- | --- |
 | 1 | Connect 500 WebSocket clients simultaneously | All get 101 (hub accepts, within limits) |
 | 2 | Each client sends 100 events/sec for 30 s | 50 k events ingested in 30 s |
 | 3 | Monitor `hub.ClientCount()` | ≤ configured max (e.g., 1024) |
