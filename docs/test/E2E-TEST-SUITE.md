@@ -108,8 +108,29 @@
 - `TestHubSlowClientQueueShedding` — validates queue shedding preserves fast client delivery
 
 #### Test 1.3 — Zombie Client Eviction (from A12)
+**Implementation:** `tests/e2e/api/zombie_eviction_test.go::TestZombieClientEviction`
 **Scenario:** A WS client connects, sends no messages, receives no pongs.
+**Steps:**
+| Step | Action | Expected |
+|---|---|---|
+| 1 | Connect Client A (zombie — never reads) and Client B (active) | Both report 101 Upgrade |
+| 2 | Verify hub `ClientCount()` is ≥ 2 | `GET /health` reports clients ≥ 2 |
+| 3 | Post events — Client B receives them, Client A stays silent | Hub delivers to Client B only |
+| 4 | Wait 120s for eviction timeout (shortened for local dev) | Hub evicts Client A, decrements count |
+| 5 | Close Client B | Hub client count → 0 |
 
+#### Test 1.4 — Close Frame Forwarding (from B17, §10.4.4)
+**Implementation:** `tests/e2e/api/close_frame_forwarding_test.go::TestCloseFrameForwarding`
+**Scenario:** One client sends a WebSocket close frame with a specific code and reason; verify peer clients receive the same close frame through the full gateway relay chain.
+**Steps:**
+| Step | Action | Expected |
+|---|---|---|
+| 1 | Connect Client A (sends close) and Client B (observer) | Both report 101 Upgrade |
+| 2 | Drain initial hub messages | Clean state |
+| 3 | Client A writes close frame (code 1000, custom reason) | Hub delivers close frame to peers |
+| 4 | Client B reads close frame | `CloseError` with matching code + reason |
+| 5 | Verify hub `ClientCount()` decrements | Count drops by 1 |
+| 6 | Repeat through gateway relay (port 8080/ws) | Gateway relay forwards close frames |
 
 ---
 
@@ -578,7 +599,8 @@ Tests map to SPEC sections as follows:
 |---|---|
 | 1.1 — Health Probes | §3.2, §13 (API overview) | `[implemented]` |
 | 1.2 — Backpressure | §14.3 (fan-out contract) | `[implemented]` |
-| 1.3 — Zombie Eviction | §14.3, A12 (keepalive contract) |
+| | 1.3 — Zombie Eviction | §14.3, A12 (keepalive contract) | `[implemented]` |
+| | 1.4 — Close Frame Fwd | §10.4.4, B17, §14.3 | `[implemented]` |
 | 2.1 — Canvas DPR | §18 (spectrum/waterfall) |
 | 2.2 — Keyboard Contract | §15 (keyboard shortcuts) |
 | 2.3 — Deep-Link URL | §3.1 (?signal=<id> mirror) |
