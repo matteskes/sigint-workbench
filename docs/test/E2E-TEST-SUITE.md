@@ -619,12 +619,12 @@ Tests map to SPEC sections as follows:
 | 8.2 — Aggressive Sweep | UI-BUGCHECK B12–B16 | `[implemented]` |
 | 9.1 — REST Contract | §13 (API specification) | `[implemented]` |
 | 9.2 — CORS Contract | §17.2 (origin policy) | `[implemented]` |
-| R1 — Service Restart Resilience | §3.2 (API overview, service lifecycle), D10 (restart SLAs) | |
-| R2 — Error Format Validation | §13 (error contract, D10) | |
-| R3 — Multi-SDR Concurrency | §7.1 (scan loop, D5 max SDRs), A1 (concurrent queueing) | |
-| R4 — Network Instability | §14.2 (connection management), B19 (WS lifecycle) | |
-| R5 — PostGIS Schema Compliance | §16 (data model), db/init.sql + 5 migrations | |
-| R6 — SNR Boundary Detection | §6.5 (class confidence), B4 (confidence guardrails) | |
+| R1 — Service Restart Resilience | §3.2 (API overview, service lifecycle), D10 (restart SLAs) | `[implemented]` |
+| R2 — Error Format Validation | §13 (error contract, D10) | `[implemented]` |
+| R3 — Multi-SDR Concurrency | §7.1 (scan loop, D5 max SDRs), A1 (concurrent queueing) | `[implemented]` |
+| R4 — Network Instability | §14.2 (connection management), B19 (WS lifecycle) | `[implemented]` |
+| R5 — PostGIS Schema Compliance | §16 (data model), db/init.sql + 5 migrations | `[implemented]` |
+| R6 — SNR Boundary Detection | §6.5 (class confidence), B4 (confidence guardrails) | `[implemented]` |
 | R7 — Device Unplug Lifecycle | §4.4 (read backoff), simulator `SetHardwareState()` API | `[deferred to Phase 2]` |
 
 ---
