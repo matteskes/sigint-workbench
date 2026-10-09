@@ -60,7 +60,7 @@ func TestMultiSDRConcurrentSignals(t *testing.T) {
 				types := []string{"cw", "wfm", "noise"}
 				payload, _ := json.Marshal(map[string]any{
 					"type":    "signal.new",
-					"payload": map[string]any{"seq": b*100+i, "freq_mhz": freq, "class_source": types[int(b+i)%3]},
+					"payload": map[string]any{"seq": b*100 + i, "freq_mhz": freq, "class_source": types[int(b+i)%3]},
 				})
 				resp, err := http.Post("http://localhost:8081/api/events",
 					"application/json", bytes.NewReader(payload))

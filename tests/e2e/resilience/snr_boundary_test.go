@@ -25,7 +25,10 @@ func TestSNRBoundaryDetection(t *testing.T) {
 			"payload": map[string]any{"seq": snr, "freq_mhz": float64(480) + snr/10.0, "class_source": "cw", "snr_db": snr},
 		})
 		resp, _ := http.Post("http://localhost:8081/api/events", "application/json", bytes.NewReader(payload))
-		if resp != nil { io.Copy(io.Discard, resp.Body); resp.Body.Close() }
+		if resp != nil {
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+		}
 	}
 
 	t.Log("Waiting for SNR sweep signals (90 s max)...")
@@ -50,7 +53,9 @@ func TestSNRBoundaryDetection(t *testing.T) {
 	// Validate confidence distribution per SNR tier.
 	for _, sig := range signals {
 		s, ok := sig.(map[string]any)
-		if !ok { continue }
+		if !ok {
+			continue
+		}
 
 		snr := s["snr_db"]
 		if conf, ok := s["confidence"].(float64); ok {
@@ -90,7 +95,10 @@ func TestSNRBoundaryNoiseOnly(t *testing.T) {
 			"payload": map[string]any{"seq": i, "freq_mhz": float64(480 + i), "class_source": "noise", "snr_db": float64(-20 - i)},
 		})
 		resp, _ := http.Post("http://localhost:8081/api/events", "application/json", bytes.NewReader(payload))
-		if resp != nil { io.Copy(io.Discard, resp.Body); resp.Body.Close() }
+		if resp != nil {
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+		}
 	}
 
 	time.Sleep(60 * time.Second)
@@ -105,7 +113,9 @@ func TestSNRBoundaryNoiseOnly(t *testing.T) {
 		lowConfCount := 0
 		for _, sig := range signals {
 			s, ok := sig.(map[string]any)
-			if !ok { continue }
+			if !ok {
+				continue
+			}
 			if cs, ok := s["class_source"].(string); ok && cs == "noise" {
 				if conf, ok := s["confidence"].(float64); ok && conf < 0.7 {
 					lowConfCount++
