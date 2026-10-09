@@ -71,10 +71,12 @@ func TestHubBackpressure(t *testing.T) {
 		t.Errorf("batch 0: Client B received %d events (expected 50)", countB)
 	}
 
-	// Step 3: (Stall logic omitted for simplicity in this pass — we verify
-	// both clients receive the events.)
-
+	// Step 3: Stall Client A (stop reading). This fills Client A's 256-frame
+	// send queue — the hub sheds oldest frames so the broadcast loop never
+	// blocks. Client B must receive all subsequent events unimpeded.
+	connA.SetReadDeadline(time.Now().Add(-1 * time.Second))
 	var countB2 int
+
 	for i := 0; i < 200; i++ {
 		payload, _ := json.Marshal(map[string]any{
 			"type":    "signal.new",
@@ -88,8 +90,8 @@ func TestHubBackpressure(t *testing.T) {
 	}
 	time.Sleep(2 * time.Second)
 	countB2, _ = countFrames(connB, 5*time.Second)
-	if countB2 < 50 {
-		t.Errorf("Client B received only %d events (expected 50+)", countB2)
+	if countB2 < 180 {
+		t.Errorf("batch 1: Client B received %d events (expected ~200; stalled client should not block broadcast)", countB2)
 	}
 
 	// Step 5: Wait for Client A to be evicted by writePump (writeWait = 5s).

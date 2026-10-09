@@ -80,38 +80,40 @@ func ensureAllServicesUp(t *testing.T) {
 
 // parseHealthBody expects a JSON object and returns it as map[string]any,
 // failing the test if the response is not 200 or not parseable.
-func parseHealthBody(url string) map[string]any {
+func parseHealthBody(t *testing.T, url string) map[string]any {
+	t.Helper()
 	resp, err := http.Get(url)
 	if err != nil {
-		panic(fmt.Sprintf("%s: %v", url, err))
+		t.Fatalf("%s: %v", url, err)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		panic(fmt.Sprintf("%s: status %d body: %s", url, resp.StatusCode, string(body)))
+		t.Fatalf("%s: status %d body: %s", url, resp.StatusCode, string(body))
 	}
 	var result map[string]any
 	if err := json.Unmarshal(body, &result); err != nil {
-		panic(fmt.Sprintf("%s: not valid JSON: %s", url, string(body)))
+		t.Fatalf("%s: not valid JSON: %s", url, string(body))
 	}
 	return result
 }
 
 // parseHealthArray expects a JSON array of objects and returns it,
 // failing the test if the response is not 200 or not parseable.
-func parseHealthArray(url string) []map[string]any {
+func parseHealthArray(t *testing.T, url string) []map[string]any {
+	t.Helper()
 	resp, err := http.Get(url)
 	if err != nil {
-		panic(fmt.Sprintf("%s: %v", url, err))
+		t.Fatalf("%s: %v", url, err)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		panic(fmt.Sprintf("%s: status %d body: %s", url, resp.StatusCode, string(body)))
+		t.Fatalf("%s: status %d body: %s", url, resp.StatusCode, string(body))
 	}
 	var result []map[string]any
 	if err := json.Unmarshal(body, &result); err != nil {
-		panic(fmt.Sprintf("%s: not valid JSON: %s", url, string(body)))
+		t.Fatalf("%s: not valid JSON: %s", url, string(body))
 	}
 	return result
 }

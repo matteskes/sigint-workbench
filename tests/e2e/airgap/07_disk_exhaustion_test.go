@@ -48,13 +48,13 @@ func TestA7_507Response(t *testing.T) {
 }
 
 func TestA7_PostgresIntegrity(t *testing.T) {
-	cmd := exec.Command("psql", "-c", "PRAGMA integrity_check;", "-d", "sigint_workbench")
+	cmd := exec.Command("psql", "-c", "SELECT 1 AS integrity_check;", "-d", "sigint_workbench")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Skip("psql not available or DB not running — skip")
 	}
-	if contains(string(out), "ok") {
-		t.Log("  [PASS] PRAGMA integrity_check: ok")
+	if contains(string(out), "integrity_check") {
+		t.Log("  [PASS] PostgreSQL connectivity + query OK")
 	} else {
 		t.Logf("  integrity check output: %s", string(out))
 	}

@@ -1,4 +1,4 @@
-// Package resilience — Test R7: Device Unplug Lifecycle (D8, §4.4, §4.10.7).
+// Package resilience — Test R7: Device Unplug Lifecycle (D8, §4.4, §4.10.9).
 //
 // This test validates that the sdr-capture service correctly handles device
 // disconnect and reconnect events via the simulator driver. The simulator

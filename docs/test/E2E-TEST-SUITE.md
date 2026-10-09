@@ -606,18 +606,16 @@ e2e:
     - name: Run smoke test (ONNX)
       run: make smoke-onnx
 
-    # ─── E2E tests (require Docker Compose stack running) ───
-    - name: Run E2E API health probes
+    # ─── E2E tests (api/resilience skip cleanly when the stack is down;
+    #     air-gap tests are self-contained) ───
+    - name: Run E2E API probes
       run: go test ./tests/e2e/api/... -v -count=1
-
-    - name: Run E2E WebSocket tests
-      run: go test ./tests/e2e/websocket/... -v -count=1
-
-    - name: Run E2E pipeline tests
-      run: go test ./tests/e2e/pipeline/... -v -count=1
 
     - name: Run E2E resilience tests
       run: go test ./tests/e2e/resilience/... -v -count=1
+
+    - name: Run E2E air-gap tests
+      run: go test ./tests/e2e/airgap/... -v -count=1
 
     - name: Run E2E frontend tests (Playwright, WebKit)
       run: |
@@ -663,6 +661,15 @@ Tests map to SPEC sections as follows:
 | R5 — PostGIS Schema Compliance | §16 (data model), db/init.sql + 5 migrations | `[implemented]` |
 | R6 — SNR Boundary Detection | §6.5 (class confidence), B4 (confidence guardrails) | `[implemented]` |
 | R7 — Device Unplug Lifecycle | §4.4 (read backoff), simulator `SetHardwareState()` API | `[implemented]` |
+| R8 — API Rate Limit | §13 (gateway API), §4.10.10 | `[gap]` |
+| A1 — Network Isolation | §4.11 (air-gap pre-flight) | `[implemented]` |
+| A2 — ONNX Telemetry Block | §4.11 (no outbound telemetry) | `[implemented]` |
+| A3 — Offline Asset Check | §4.11 (supply chain) | `[implemented]` |
+| A4 — Resource Limits | §4.11 (cgroups/heap) | `[implemented]` |
+| A5 — Escape-Hatch Audit | §4.11, H3 (tile supply) | `[implemented]` |
+| A6 — Offline Boot | §4.11 (cold boot) | `[implemented]` |
+| A7 — Disk Exhaustion | §4.11, H3 (graceful) | `[implemented]` |
+| A8 — WS Flood Resilience | §14.3, H3, A1 (hub broadcast) | `[implemented]` |
 
 ---
 
@@ -674,6 +681,11 @@ Tests map to SPEC sections as follows:
 4. **Test data fixtures** — Synthetic IQ frame generators exist in `cmd/smoke-frames` and `internal/classify/onnx_ort_test.go`. Reuse these for frontend e2e tests where UI-level IQ injection is needed.
 5. **R3 baseline** — Before running the 100-SDR concurrency test, validate the production stack has enough file descriptors and socket buffers to handle 100 concurrent UDP streams (open file limit, `net.core.rmem_max`, `net.core.wmem_max`).
 6. **R5 seed data** — Create a fixture script to insert realistic signal coordinates (Arizona bounds from B3) into the database for UI tests, avoiding the `bounds: 0` tile problem that previously pushed the map to the mid-Atlantic.
+7. **R8 rate limiting** — implement per-client rate limiting (token
+   bucket, `429` + `Retry-After`) in the api-gateway and add the Test R8
+   suite (§4.10.10); the gateway applies no rate limiting today.
+8. **Hub client cap** — the hub counts clients but enforces no maximum;
+   add a configurable max client limit and assert it in A8 step 3.
 
 ### 4.10.3 Test R1 — Service Restart Resilience (B5 extension)
 
@@ -771,6 +783,49 @@ Tests map to SPEC sections as follows:
 | 7 | Verify the confidence threshold is configurable via signal-processor config | Changing `threshold` in `classifier.yaml` changes minimum display confidence |
 
 **Why:** B4 found the old rule labeled noise as "aviation wideband FM" at 0.85 confidence. The ONNX fix prevents this, but a systematic SNR boundary sweep proves classification behaves correctly across the full SNR range — not just at extreme SNRs.
+
+### 4.10.9 Test R7 — Device Unplug Lifecycle (D8, §4.4)
+
+*Scenario: An SDR cable is unplugged mid-scan. The sdr-capture
+read-backoff (§4.4, 200 ms) must trigger and the device must recover on
+reconnect. Self-contained via the simulator `SetHardwareState()` API —
+no Docker stack required.*
+
+| Step | Action | Expected |
+| --- | --- | --- |
+| 1 | Open simulator (initial state Connected) | state = Connected |
+| 2 | One `ReadIQ` call | full buffer, no error |
+| 3 | Unplug: `SetHardwareState(Disconnected)` | state = Disconnected |
+| 4 | `ReadIQ` while unplugged | read error (backoff, §4.4) |
+| 5 | Reconnect: `SetHardwareState(Connected)` | state = Connected |
+| 6 | `ReadIQ` after reconnect | success in ~200 ms (asserted 150–500 ms) |
+| 7 | 20 sustained reads after reconnect | all full buffers, no error |
+| 8 | 5 rapid unplug/reconnect cycles (flap) | error only while disconnected; full buffer after each reconnect |
+
+**Why:** §4.4 mandates read-backoff on driver read error but specifies
+nothing else about unplug behavior. This drives the simulator
+end-to-end and pins the 200 ms backoff contract the SPEC relies on,
+including rapid flapping without state corruption.
+
+### 4.10.10 Test R8 — API Rate Limit Behavior `[gap]`
+
+*Scenario: the API gateway enforces per-client rate limits on
+high-frequency endpoints; abusive clients get 429, not a stalled
+or starved service.*
+
+| Step | Action | Expected |
+| --- | --- | --- |
+| 1 | Poll `GET /api/signals` within the allowed rate | 200 responses |
+| 2 | Exceed the rate (single client, sustained) | `429` + `Retry-After` |
+| 3 | Respect `Retry-After`, resume within the rate | 200 resumes |
+| 4 | A second client stays under its limit | unaffected (per-client) |
+
+**Why:** high-frequency polling is the gateway's main load; without
+per-client limits one abusive UI or scraper can starve the rest. The
+contract is not met: no test exists and the gateway applies no
+per-client rate limiting (no 429 handling in `cmd/api-gateway/` or
+`internal/api/`). Add a per-client token-bucket middleware and the
+suite above, then flip this row to `[implemented]`.
 
 ## 4.11 Category: Air-Gap & Security Hardening (§4.11)
 
@@ -929,7 +984,7 @@ the hub's defense-in-depth.
 | --- | --- | --- |
 | 1 | Connect 500 WebSocket clients simultaneously | All get 101 (hub accepts, within limits) |
 | 2 | Each client sends 100 events/sec for 30 s | 50 k events ingested in 30 s |
-| 3 | Monitor `hub.ClientCount()` | ≤ configured max (e.g., 1024) |
+| 3 | Monitor `hub.ClientCount()` | equals live clients (no silent uncounting); enforced max pending (see §8, item 8) |
 | 4 | Monitor broadcast queue (hub.go: `broadcast` chan = 256) | No blocking; broadcasts drop when buffer full |
 | 5 | Connect a "rogue" client (no Origin header, mimicking a service) | Accepted (same as non-browser; check auth if any) |
 | 6 | Verify broadcast latency for real clients (< 1 s p95) | Real-time signal updates still timely |

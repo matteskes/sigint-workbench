@@ -18,14 +18,14 @@ func TestHealthProbe(t *testing.T) {
 	}
 
 	// Step 1: gateway health.
-	gw := parseHealthBody("http://localhost:8080/health")
+	gw := parseHealthBody(t, "http://localhost:8080/health")
 	expectStringField(t, gw, "status")
 	if s, ok := gw["status"].(string); ok && s != "ok" {
 		t.Errorf("status = %q, want \"ok\"", s)
 	}
 
 	// Step 2: ws-hub health.
-	hub := parseHealthBody("http://localhost:8081/health")
+	hub := parseHealthBody(t, "http://localhost:8081/health")
 	expectStringField(t, hub, "status")
 	if s, ok := hub["status"].(string); ok && s != "ok" {
 		t.Errorf("hub status = %q, want \"ok\"", s)
@@ -33,7 +33,7 @@ func TestHealthProbe(t *testing.T) {
 	expectIntField(t, hub, "clients")
 
 	// Step 3: sdr-capture control status (array of device-status objects).
-	devices := parseHealthArray("http://127.0.0.1:9090/api/v1/status")
+	devices := parseHealthArray(t, "http://127.0.0.1:9090/api/v1/status")
 	if len(devices) == 0 {
 		t.Fatal("expected at least one device in capture status")
 	}

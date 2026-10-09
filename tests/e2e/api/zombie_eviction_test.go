@@ -1,8 +1,9 @@
 // Package api — Section 1.3: Zombie Client Eviction (A12).
 //
 // This test simulates a silent ("zombie") WebSocket client and validates
-// that the hub's 120s eviction timeout actually evicts the stale connection,
+// that the hub's eviction timeout actually evicts the stale connection,
 // decrements ClientCount(), and does not interfere with active clients.
+// Timeout defaults to 120s, override with E2E_ZOMBIE_TIMEOUT env var.
 //
 // Spec: §14.3 (WebSocket Events), A12 (keepalive contract), §17.3 (E2E).
 package api
@@ -12,6 +13,8 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -20,8 +23,10 @@ import (
 )
 
 // TestZombieClientEviction validates that the hub evicts a zombie (stalled)
-// client after the configured timeout (120s by default) and decrements its
-// client count — without disrupting any active peers (spec §14.3, A12).
+// client after the configured timeout and decrements its client count —
+// without disrupting any active peers (spec §14.3, A12).
+//
+// Override the default 120s timeout with E2E_ZOMBIE_TIMEOUT (e.g. 30s for CI).
 func TestZombieClientEviction(t *testing.T) {
 	if !serviceReady() {
 		t.Skip("No services running — skipping zombie eviction test")
@@ -61,7 +66,7 @@ func TestZombieClientEviction(t *testing.T) {
 	// Drain any initial messages from both.
 
 	// Step 2: Check the initial hub client count (should be 2).
-	initialHub := parseHealthBody("http://localhost:8081/health")
+	initialHub := parseHealthBody(t, "http://localhost:8081/health")
 	initialClients := 0
 	if c, ok := initialHub["clients"].(float64); ok {
 		initialClients = int(c)
@@ -105,42 +110,42 @@ func TestZombieClientEviction(t *testing.T) {
 		resp.Body.Close()
 	}
 	time.Sleep(2 * time.Second) // Let Client B drain events.
-	t.Logf("Client B received %d events during %d s wait (Client A is zombie)", bCount.Load(), 120)
+	t.Logf("Client B received %d events during wait (Client A is zombie)", bCount.Load())
 
 	// Step 4: Wait for the zombie eviction timeout.
-	// The default is 120 seconds; skip if too long for local development.
-	const evictionTimeout = 120 * time.Second
-	const localShortCut = 0 // Set > 0 to run with a shorter timeout locally
-
-	if localShortCut > 0 {
-		t.Logf("Using shortened wait of %v (local development mode)", time.Duration(localShortCut)*time.Second)
-		time.Sleep(time.Duration(localShortCut) * time.Second)
-	} else {
-		// Production test: wait the full eviction timeout.
-		// Protect against hanging forever with an outer deadline.
-		deadline := time.Now().Add(evictionTimeout + 30*time.Second)
-		t.Logf("Waiting up to %v for zombie eviction timeout (Client A is silent)", evictionTimeout)
-		for time.Now().Before(deadline) {
-			hub := parseHealthBody("http://localhost:8081/health")
-			if c, ok := hub["clients"].(float64); ok && int(c) < initialClients {
-				t.Logf("Eviction detected! Client count dropped from %d to %d", initialClients, int(c))
-				break
-			}
-			time.Sleep(5 * time.Second)
+	// Default is 120s; override with E2E_ZOMBIE_TIMEOUT (seconds).
+	evictionTimeout := 120 * time.Second
+	if raw := os.Getenv("E2E_ZOMBIE_TIMEOUT"); raw != "" {
+		if secs, err := strconv.Atoi(raw); err == nil && secs > 0 {
+			evictionTimeout = time.Duration(secs) * time.Second
+			t.Logf("E2E_ZOMBIE_TIMEOUT set to %v (override from env)", evictionTimeout)
 		}
+	}
 
-		// Check we actually waited long enough.
-		elapsed := time.Since(deadline.Add(-evictionTimeout - 30*time.Second))
-		if elapsed < evictionTimeout-10*time.Second {
-			// Might be a local test with a short timeout — that's fine.
-			_ = elapsed
-		} else {
-			// Full timeout elapsed — verify eviction happened.
-			hub := parseHealthBody("http://localhost:8081/health")
-			if c, ok := hub["clients"].(float64); ok && int(c) >= initialClients {
-				t.Errorf("eviction timeout elapsed (%v) but client count did not drop (still %d, expected < %d)",
-					evictionTimeout, int(c), initialClients)
-			}
+	// Production test: wait the full eviction timeout.
+	// Protect against hanging forever with an outer deadline.
+	deadline := time.Now().Add(evictionTimeout + 30*time.Second)
+	t.Logf("Waiting up to %v for zombie eviction timeout (Client A is silent)", evictionTimeout)
+	for time.Now().Before(deadline) {
+		hub := parseHealthBody(t, "http://localhost:8081/health")
+		if c, ok := hub["clients"].(float64); ok && int(c) < initialClients {
+			t.Logf("Eviction detected! Client count dropped from %d to %d", initialClients, int(c))
+			break
+		}
+		time.Sleep(5 * time.Second)
+	}
+
+	// Check we actually waited long enough.
+	elapsed := time.Since(deadline.Add(-evictionTimeout - 30*time.Second))
+	if elapsed < evictionTimeout-10*time.Second {
+		// Might be a local test with a short timeout — that's fine.
+		_ = elapsed
+	} else {
+		// Full timeout elapsed — verify eviction happened.
+		hub := parseHealthBody(t, "http://localhost:8081/health")
+		if c, ok := hub["clients"].(float64); ok && int(c) >= initialClients {
+			t.Errorf("eviction timeout elapsed (%v) but client count did not drop (still %d, expected < %d)",
+				evictionTimeout, int(c), initialClients)
 		}
 	}
 
@@ -149,7 +154,7 @@ func TestZombieClientEviction(t *testing.T) {
 	connB.Close()
 	time.Sleep(2 * time.Second)
 
-	finalHub := parseHealthBody("http://localhost:8081/health")
+	finalHub := parseHealthBody(t, "http://localhost:8081/health")
 	finalClients := 0
 	if c, ok := finalHub["clients"].(float64); ok {
 		finalClients = int(c)

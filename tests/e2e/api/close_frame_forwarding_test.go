@@ -106,7 +106,7 @@ func TestCloseFrameForwarding(t *testing.T) {
 		t.Errorf("Phase 1 — unexpected close frame fanned out to peer: code=%d reason=%q", closeErr.Code, closeErr.Text)
 	}
 	time.Sleep(1 * time.Second)
-	hub := parseHealthBody("http://localhost:8081/health")
+	hub := parseHealthBody(t, "http://localhost:8081/health")
 	if c, ok := hub["clients"].(float64); ok && int(c) != 1 {
 		t.Errorf("Phase 1 — expected 1 client after A closed, got %d", int(c))
 	} else if ok {
@@ -233,7 +233,7 @@ func TestCloseFrameDirectHub(t *testing.T) {
 
 func verifyNoStaleClients(t *testing.T) {
 	t.Helper()
-	hub := parseHealthBody("http://localhost:8081/health")
+	hub := parseHealthBody(t, "http://localhost:8081/health")
 	if c, ok := hub["clients"].(float64); ok {
 		if int(c) != 0 {
 			t.Logf("WARNING: Hub has %d unexpected clients remaining (ignoring in cleanup)", int(c))
@@ -441,7 +441,7 @@ func TestHubClientCountIncrDecr(t *testing.T) {
 		}
 	})
 
-	hub3 := parseHealthBody("http://localhost:8081/health")
+	hub3 := parseHealthBody(t, "http://localhost:8081/health")
 	count3 := int(hub3["clients"].(float64))
 	if count3 != 3 {
 		t.Errorf("After connecting 3 clients, hub reports %d (expected 3)", count3)
@@ -453,7 +453,7 @@ func TestHubClientCountIncrDecr(t *testing.T) {
 	conns[1].Close()
 	time.Sleep(2 * time.Second)
 
-	hub1 := parseHealthBody("http://localhost:8081/health")
+	hub1 := parseHealthBody(t, "http://localhost:8081/health")
 	count1 := int(hub1["clients"].(float64))
 	if count1 != 1 {
 		t.Errorf("After closing 2 of 3 clients, hub reports %d (expected 1)", count1)
@@ -464,7 +464,7 @@ func TestHubClientCountIncrDecr(t *testing.T) {
 	conns[2].Close()
 	time.Sleep(2 * time.Second)
 
-	hub0 := parseHealthBody("http://localhost:8081/health")
+	hub0 := parseHealthBody(t, "http://localhost:8081/health")
 	count0 := int(hub0["clients"].(float64))
 	if count0 != 0 {
 		t.Errorf("After closing all clients, hub reports %d (expected 0)", count0)
@@ -604,7 +604,7 @@ func TestMultipleConcurrentCloses(t *testing.T) {
 		}
 	})
 
-	hub5 := parseHealthBody("http://localhost:8081/health")
+	hub5 := parseHealthBody(t, "http://localhost:8081/health")
 	count5 := int(hub5["clients"].(float64))
 	if count5 != 5 {
 		t.Errorf("Expected 5 clients, got %d", count5)
@@ -622,7 +622,7 @@ func TestMultipleConcurrentCloses(t *testing.T) {
 
 	time.Sleep(5 * time.Second)
 
-	hub0 := parseHealthBody("http://localhost:8081/health")
+	hub0 := parseHealthBody(t, "http://localhost:8081/health")
 	count0 := int(hub0["clients"].(float64))
 	if count0 != 0 {
 		t.Errorf("After concurrent close of 5 clients, hub reports %d (expected 0)", count0)
@@ -759,7 +759,7 @@ func TestCloseFrameWithMultiplePeers(t *testing.T) {
 
 func ensureClients(t *testing.T) int {
 	t.Helper()
-	hub := parseHealthBody("http://localhost:8081/health")
+	hub := parseHealthBody(t, "http://localhost:8081/health")
 	c, ok := hub["clients"].(float64)
 	if !ok {
 		t.Fatal("hub /health missing 'clients' field")
