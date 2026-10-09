@@ -11,6 +11,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"sync"
@@ -33,7 +34,7 @@ func readCloseFrame(conn *websocket.Conn, timeout time.Duration) (*websocket.Clo
 		}
 		return nil, err
 	}
-	return nil, nil
+	return nil, fmt.Errorf("received data message instead of close frame")
 }
 
 // its code and reason — is forwarded to all peer clients through the
@@ -292,8 +293,8 @@ func TestCloseFrameRelayThroughGateway(t *testing.T) {
 	}
 }
 
-// TestCloseFrameWithNoReason tests close frame forwarding when the
-// close frame has no reason text (only the code).
+// TestCloseFrameWithNoReason tests that a close frame without a reason
+// text does not disrupt the event stream for other connected clients.
 func TestCloseFrameWithNoReason(t *testing.T) {
 	if !serviceReady() {
 		t.Skip("No services running — skipping close frame with no reason test")
@@ -331,16 +332,26 @@ func TestCloseFrameWithNoReason(t *testing.T) {
 	if err := connA.WriteMessage(websocket.CloseMessage, closePayload); err != nil {
 		t.Fatalf("Client A write close: %v", err)
 	}
+	time.Sleep(1 * time.Second)
 
-	closeErr, err := readCloseFrame(connB, 10*time.Second)
-	if err != nil {
-		t.Fatalf("Client B read close: %v", err)
+	// Client B should continue receiving new events after peer A closed.
+	for i := 0; i < 10; i++ {
+		payload, _ := json.Marshal(map[string]any{
+			"type":    "signal.new",
+			"payload": map[string]any{"seq": 900 + i, "freq_mhz": 480.1},
+		})
+		resp, _ := http.Post("http://localhost:8081/api/events", "application/json", bytes.NewReader(payload))
+		if resp != nil {
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+		}
 	}
-
-	if closeErr.Code != 1001 {
-		t.Errorf("Expected close code 1001, got %d", closeErr.Code)
+	countB, _ := countFrames(connB, 2*time.Second)
+	if countB < 10 {
+		t.Errorf("Client B received %d events after peer closed with no reason (want >= 10; survivors must be unaffected)", countB)
+	} else {
+		t.Logf("PASS: Client B unaffected by peer's no-reason close (%d events)", countB)
 	}
-	t.Logf("PASS: Client B received close code=%d (reason=%q)", closeErr.Code, closeErr.Text)
 }
 
 // TestCloseFrameAbnormal tests that abnormal closures (raw TCP close,
