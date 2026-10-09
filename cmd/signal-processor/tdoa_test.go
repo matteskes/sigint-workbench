@@ -163,7 +163,10 @@ func TestTDOAEngineWiring(t *testing.T) {
 	}
 
 	// signal.tdoa + signal.update rode out to the hub.
-	if n := hub.waitCount(2); n < 2 {
+	// signal.tdoa is the last event queued (after applyTDOAFix + publish),
+	// so waiting by type instead of count avoids a race with
+	// runEventWorker's sequential POST loop.
+	if n := hub.waitTypes("signal.tdoa", "signal.update"); n < 2 {
 		t.Fatalf("expected ≥ 2 hub events, got %d", n)
 	}
 	hub.mu.Lock()
@@ -220,7 +223,7 @@ func TestTDOAFlipFlopGuard(t *testing.T) {
 
 	// Before any fix, placement follows the SDR row (§9.3).
 	p.publish(ev, now)
-	if n := hub.waitCount(1); n < 1 {
+	if n := hub.waitTypes("signal.new"); n < 1 {
 		t.Fatalf("expected the first placement event, got %d", n)
 	}
 	var first struct {

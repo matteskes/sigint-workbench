@@ -62,6 +62,37 @@ func (f *fakeHub) waitCount(n int) int {
 	return len(f.events)
 }
 
+// waitTypes blocks until all listed event types are present in the
+// recorded event stream. Returns the total event count once satisfied
+// (or whatever arrived before the deadline).
+func (f *fakeHub) waitTypes(types ...string) int {
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		f.mu.Lock()
+		seen := make(map[string]bool, len(f.events))
+		for _, e := range f.events {
+			seen[e.Type] = true
+		}
+		allPresent := true
+		for _, t := range types {
+			if !seen[t] {
+				allPresent = false
+				break
+			}
+		}
+		if allPresent {
+			c := len(f.events)
+			f.mu.Unlock()
+			return c
+		}
+		f.mu.Unlock()
+		time.Sleep(10 * time.Millisecond)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.events)
+}
+
 func testEvent() signalEvent {
 	return signalEvent{
 		SDRID:     "rtlsdr-0",
@@ -91,7 +122,7 @@ func TestPublishNewThenUpdate(t *testing.T) {
 	p.publish(testEvent(), now)
 	p.publish(testEvent(), now.Add(3*time.Second))
 
-	if n := hub.waitCount(2); n < 2 {
+	if n := hub.waitTypes("signal.new", "signal.update"); n < 2 {
 		t.Fatalf("expected 2 events, got %d", n)
 	}
 	hub.mu.Lock()
