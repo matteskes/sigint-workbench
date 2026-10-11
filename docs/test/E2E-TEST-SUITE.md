@@ -1086,6 +1086,15 @@ do not need tile data and run regardless.  Roughly 72 of 78 tests
 execute, versus 54 on an RF-active bench where the 15 injection tests
 flood-gate and the recorder is deliberately up.
 
+**Phase 2 first really ran on the 2026-10-10/11 run — and skipped
+anyway.**  `recorderReady()` probed `GET /api/recordings`, which the
+gateway answers from its own database, so the probe reported
+"recorder up" with the recorder container stopped; the three 502
+tests had never actually executed anywhere.  The probe now exercises
+the proxied `/ws/audio` upgrade itself — 502 ⇒ recorder down,
+anything else (4xx bad-signal rejection, 101) ⇒ up — so phase 2 runs
+its three tests for real.
+
 ### 7.1 Event injection path
 
 - `postEvent(type, payload)` (Node-side) publishes to the **ws-hub**

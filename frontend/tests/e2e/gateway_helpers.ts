@@ -123,13 +123,28 @@ export async function pipelineActive(): Promise<boolean> {
 }
 
 /**
- * Whether the recorder service is answering behind the gateway.  The
- * gateway maps an unreachable recorder to 502 on proxied REST routes
- * (§13), so `GET /api/recordings` is a cheap recorder health probe.
+ * Whether the recorder service is answering behind the gateway.
+ *
+ * `GET /api/recordings` cannot be the probe: the gateway serves that
+ * list from its own database, so it answers 200 with the recorder
+ * stopped — the first e2e-ui CI run stopped the recorder container for
+ * phase 2 and every 502 test still skipped (the tests had never
+ * actually run anywhere).  Probe the proxied `/ws/audio` upgrade
+ * instead: §13 maps an unreachable recorder to **502** on that route,
+ * while a live recorder answers the handshake itself (4xx for a bad
+ * signal id, 101 for a good one).  A down gateway surfaces as a thrown
+ * handshake — the describe-level servicesReady() gate already covers
+ * that case for callers inside a gated file.
  */
 export async function recorderReady(): Promise<boolean> {
-  const { status } = await getJson(`${GATEWAY_HTTP}/api/recordings`);
-  return status === 200;
+  try {
+    const { status } = await rawHandshake(
+      `${GATEWAY_HTTP}/ws/audio?signal=recorder-probe`
+    );
+    return status !== 502;
+  } catch {
+    return false; // gateway itself unreachable → recorder not reachable
+  }
 }
 
 /**
