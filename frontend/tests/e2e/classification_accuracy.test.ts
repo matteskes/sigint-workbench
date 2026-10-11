@@ -21,6 +21,7 @@ import { test, expect, type Page } from '@playwright/test';
 import {
   pipelineActive,
   freqLabel,
+  gotoSynced,
   getJson,
   installWsCollector,
   messageContaining,
@@ -70,7 +71,8 @@ const pipelineFlooding = await pipelineActive();
 
 test.describe('Map Tile Bounds (6.1)', () => {
   test.skip(!servicesUp, 'No services running — skipping tile bounds test');
-  test.skip(pipelineFlooding, 'live RF pipeline floods the hub (~1600 ev/s) - injection tests need a quiet stack');
+  // No flood gate here: 6.1.x never injects events — it reads the
+  // TileJSON and drives the map, so §2.2 shedding is irrelevant.
 
   test('6.1.1 — TileJSON bounds are valid (maxLon > minLon)', async () => {
     const { status, body } = await getJson('http://localhost:8082/data/v3.json');
@@ -126,7 +128,7 @@ test.describe('Classification relay (7.1)', () => {
   test('7.1.2 — CW event relays and renders with correct parameters', async ({
     page,
   }) => {
-    await page.goto('/');
+    await gotoSynced(page, '/');
     const collector = await installWsCollector(page, `${FRONTEND_WS}/ws`);
 
     const signalId = crypto.randomUUID();
@@ -172,7 +174,7 @@ test.describe('Classification relay (7.1)', () => {
   test('7.1.3 — WFM event relays and renders as broadcast class', async ({
     page,
   }) => {
-    await page.goto('/');
+    await gotoSynced(page, '/');
     const collector = await installWsCollector(page, `${FRONTEND_WS}/ws`);
 
     const signalId = crypto.randomUUID();
@@ -213,7 +215,7 @@ test.describe('Classification relay (7.1)', () => {
   test('7.1.4 — relayed class values stay inside the §6.5 enum', async ({
     page,
   }) => {
-    await page.goto('/');
+    await gotoSynced(page, '/');
     const collector = await installWsCollector(page, `${FRONTEND_WS}/ws`);
 
     const validClasses = [
@@ -280,7 +282,7 @@ test.describe('Regression sweep — CW / WFM / below-center (8.1)', () => {
   test.skip(pipelineFlooding, 'live RF pipeline floods the hub (~1600 ev/s) - injection tests need a quiet stack');
 
   test('8.1.1 — HF CW detection renders at 16.000 MHz', async ({ page }) => {
-    await page.goto('/');
+    await gotoSynced(page, '/');
     const collector = await installWsCollector(page, `${FRONTEND_WS}/ws`);
 
     const signalId = crypto.randomUUID();
@@ -314,7 +316,7 @@ test.describe('Regression sweep — CW / WFM / below-center (8.1)', () => {
   test('8.1.2 — VHF WFM detection renders at 100.811 MHz', async ({
     page,
   }) => {
-    await page.goto('/');
+    await gotoSynced(page, '/');
     const collector = await installWsCollector(page, `${FRONTEND_WS}/ws`);
 
     const signalId = crypto.randomUUID();
@@ -348,7 +350,7 @@ test.describe('Regression sweep — CW / WFM / below-center (8.1)', () => {
   test('8.1.3 — below-center CW detection renders at 14.500 MHz', async ({
     page,
   }) => {
-    await page.goto('/');
+    await gotoSynced(page, '/');
     const collector = await installWsCollector(page, `${FRONTEND_WS}/ws`);
 
     const signalId = crypto.randomUUID();
@@ -382,7 +384,7 @@ test.describe('Regression sweep — CW / WFM / below-center (8.1)', () => {
   test('8.1.4 — modulation strings relay intact (CW/AM/FM/LSB)', async ({
     page,
   }) => {
-    await page.goto('/');
+    await gotoSynced(page, '/');
     const collector = await installWsCollector(page, `${FRONTEND_WS}/ws`);
 
     const modulations = ['CW', 'AM', 'FM', 'LSB'];
@@ -499,7 +501,7 @@ test.describe('Rapid injection and removal (8.3)', () => {
   test('8.3.1 — 20 signals in, 10 removed, UI tracks both', async ({
     page,
   }) => {
-    await page.goto('/');
+    await gotoSynced(page, '/');
     const collector = await installWsCollector(page, `${FRONTEND_WS}/ws`);
 
     const stamp = Date.now();

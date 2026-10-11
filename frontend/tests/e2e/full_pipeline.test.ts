@@ -18,6 +18,7 @@ import { test, expect } from '@playwright/test';
 import {
   pipelineActive,
   freqLabel,
+  gotoSynced,
   installWsCollector,
   messageContaining,
   postEvent,
@@ -55,7 +56,7 @@ test.describe('Relay + UI pipeline — 4.1 (from E2E-TEST-SUITE.md)', () => {
   }) => {
     test.skip(!(await waitForServices(5_000)), 'services did not become ready');
 
-    await page.goto('/');
+    await gotoSynced(page, '/');
 
     // Observe the same ingress the app itself uses (same-origin via the
     // Vite proxy → gateway → hub).
@@ -89,7 +90,7 @@ test.describe('Relay + UI pipeline — 4.1 (from E2E-TEST-SUITE.md)', () => {
   }) => {
     test.skip(!(await waitForServices(5_000)), 'services did not become ready');
 
-    await page.goto('/');
+    await gotoSynced(page, '/');
     const collector = await installWsCollector(page, `${FRONTEND_WS}/ws`);
 
     const cwId = crypto.randomUUID();
@@ -152,7 +153,7 @@ test.describe('Relay + UI pipeline — 4.1 (from E2E-TEST-SUITE.md)', () => {
   }) => {
     test.skip(!(await waitForServices(5_000)), 'services did not become ready');
 
-    await page.goto('/');
+    await gotoSynced(page, '/');
     const collector = await installWsCollector(page, `${FRONTEND_WS}/ws`);
 
     const signalId = crypto.randomUUID();
@@ -201,7 +202,7 @@ test.describe('Relay + UI pipeline — 4.1 (from E2E-TEST-SUITE.md)', () => {
   test('4.1.4 — signal.removed drops the row', async ({ page }) => {
     test.skip(!(await waitForServices(5_000)), 'services did not become ready');
 
-    await page.goto('/');
+    await gotoSynced(page, '/');
     const collector = await installWsCollector(page, `${FRONTEND_WS}/ws`);
 
     const signalId = crypto.randomUUID();

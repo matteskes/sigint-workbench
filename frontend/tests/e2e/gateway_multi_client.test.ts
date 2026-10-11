@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import {
   pipelineActive,
   installWsCollector,
+  gotoSynced,
   messageContaining,
   postEvent,
   servicesReady,
@@ -45,7 +46,7 @@ test.describe('Multi-client WebSocket fan-out through gateway (§14.3, §14.4.3)
 
     try {
       for (const p of pages) {
-        await p.goto('/');
+        await gotoSynced(p, '/');
       }
 
       // Each page opens a collector WebSocket through the gateway relay.
@@ -94,7 +95,7 @@ test.describe('Multi-client WebSocket fan-out through gateway (§14.3, §14.4.3)
 
     try {
       for (const p of pages) {
-        await p.goto('/');
+        await gotoSynced(p, '/');
       }
       const collectorIds = await Promise.all(
         pages.map((p) => installWsCollector(p, `${FRONTEND_WS}/ws`))

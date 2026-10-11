@@ -1051,6 +1051,25 @@ injected event to be relayed are unrunnable on an active bench; they
 gate on `pipelineActive()` (any capture device streaming) and skip
 with that reason, running on a quiet stack (CI).
 
+**Continuous Integration (`e2e-ui` job):** the GitHub workflow now
+stands the stack up itself with `docker compose` — default profiles
+start everything except sdr-capture, so the pipeline is quiet, which
+is exactly the state the injection tests require.  It runs the Go
+resilience suite first (under plain `go test ./...` it skips with "No
+services running"), then Playwright in two phases: the full suite with
+the recorder up, and `gateway_502_handling` alone with the recorder
+stopped — its negative path is unreachable while the recorder answers.
+Deep-link row-click tests inject a signal through the hub when the
+table is empty and the pipeline is quiet (`ensureSignalRow`), so they
+are no longer data-dependent on live RF.  Expected CI skips: the four
+`test.fixme` entries (§7.2), 5.1.4 (no SDR attached), and 6.1.1 unless
+a tile set has been supplied — `tiles/data/` ships with only a
+`.gitkeep`, so the tile server has nothing to serve until
+`scripts/supply-tiles.sh` (or `tiles/setup-tiles.sh`) is run; 6.1.2/6.1.3
+do not need tile data and run regardless.  Roughly 72 of 78 tests
+execute, versus 54 on an RF-active bench where the 15 injection tests
+flood-gate and the recorder is deliberately up.
+
 ### 7.1 Event injection path
 
 - `postEvent(type, payload)` (Node-side) publishes to the **ws-hub**
@@ -1065,6 +1084,15 @@ with that reason, running on a quiet stack (CI).
 - Payloads are built by `signalPayload()` using the store's schema —
   frequency is **`freqHz`** (`frontend/src/lib/stores/signals.ts`);
   a `frequencyHz` key renders as NaN.
+- **Sync on the app socket before injecting.**  §2.2 broadcast is
+  fire-and-forget: an event published while the page's own `/ws` socket
+  is still CONNECTING is dropped and never healed — the §14.3
+  re-bootstrap covers only events missed after a disconnect, and
+  injected events are never persisted.  Under live RF the race hid
+  behind the processor constantly refreshing the table; on a quiet
+  stack it lost the event 5 times out of 5.  Injection tests navigate
+  with `gotoSynced()`, collectors resolve only after their own socket
+  reports `open`, and `ensureSignalRow()` waits before publishing.
 
 ### 7.2 What the suite verifies vs. what it fixmes
 

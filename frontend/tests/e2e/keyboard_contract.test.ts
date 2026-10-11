@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import {
   pipelineActive,
   freqLabel,
+  gotoSynced,
   installWsCollector,
   postEvent,
   servicesReady,
@@ -156,7 +157,7 @@ test.describe('SignalTable live filtering (needs hub relay)', () => {
 	test('search narrows injected signal rows by id and frequency', async ({
 		page,
 	}) => {
-		await page.goto('/signals');
+		await gotoSynced(page, '/signals');
 		const collector = await installWsCollector(page, `${FRONTEND_WS}/ws`);
 
 		const id = crypto.randomUUID();

@@ -186,3 +186,87 @@ jobs:
           trivy image --exit-code 1 --severity CRITICAL \
             --pkg-types os,library --ignore-unfixed --format table \
             sigint-recorder:scan
+
+  # ─── E2E: live-stack UI + resilience battery ───
+  # `docker compose up` default profiles start everything except
+  # sdr-capture (that sits behind "prod"): services up, pipeline quiet —
+  # exactly the state the flood-gated injection tests in
+  # frontend/tests/e2e require (the §2.2 firehose sheds under live RF).
+  # Compose env defaults ARE the container topology, so no .env needed.
+  e2e-ui:
+    name: E2E (Go resilience + Playwright, live stack)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # The compose signal-processor mounts ./models with MODEL_PATH=
+      # /models/classifier.onnx; an unfetched LFS pointer would
+      # crash-loop it and take the settings API down with it.
+      - name: Fetch ONNX model (git-lfs)
+        run: git lfs pull models/
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Start stack (docker compose, no capture)
+        run: docker compose up -d --build
+
+      - name: Wait for stack health (before resilience)
+        run: ./scripts/ci-wait-stack.sh
+
+      # Plain `go test ./...` in the go job skips this suite ("No
+      # services running"); with the stack up it runs for real, including
+      # the docker compose restart paths.  Runs BEFORE Playwright because
+      # its restart tests shuffle containers; the wait step after
+      # re-verifies health.
+      - name: Go e2e — resilience suite (live stack)
+        run: go test ./tests/e2e/resilience/ -count=1
+
+      - name: Wait for stack health (after resilience restarts)
+        run: ./scripts/ci-wait-stack.sh
+
+      - name: Install WebKit for Playwright
+        working-directory: frontend
+        run: npx playwright install --with-deps webkit
+
+      # Phase 1: full suite, recorder up.  Expected skips: the four
+      # test.fixme entries (need iq-ingest frame injection / recorder Go
+      # coverage), 5.1.4 (no SDR attached), and 6.1.1 (no tile set is
+      # supplied — tiles/data has only .gitkeep).  See
+      # E2E-TEST-SUITE.md §7.
+      - name: Playwright phase 1 — full suite (recorder up)
+        working-directory: frontend
+        run: npx playwright test
+
+      # Phase 2: the gateway 502 negative path is only reachable with
+      # the recorder stopped; on the live stack those three tests
+      # self-skip, so give them their own phase.
+      - name: Playwright phase 2 — gateway 502 (recorder down)
+        working-directory: frontend
+        run: |
+          docker compose stop recorder
+          npx playwright test tests/e2e/gateway_502_handling.test.ts
+
+      - name: Upload Playwright artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            frontend/playwright-report/
+            frontend/test-results/
+          if-no-files-found: ignore
+          retention-days: 7

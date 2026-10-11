@@ -133,6 +133,93 @@ export async function recorderReady(): Promise<boolean> {
 }
 
 /**
+ * Guarantee at least one clickable signal row in the SignalTable.
+ *
+ * On an RF-active bench the table fills by itself.  On a quiet stack
+ * (CI: compose without capture) there is nothing to click, so this
+ * injects one `signal.new` through the hub ingest endpoint and waits
+ * for the row to render via the /ws broadcast.  Injection is skipped
+ * while the pipeline is flooding — §2.2 shedding would make the wait a
+ * coin flip — and the caller then skips, as before.
+ *
+ * Returns true when a row exists (pre-existing or injected).
+ */
+export async function ensureSignalRow(page: Page): Promise<boolean> {
+  const rows = page.locator('[role="row"]');
+  if ((await rows.count()) > 0) return true;
+  if (await pipelineActive()) return false;
+  await hubSocketOpen(page); // §2.2: a CONNECTING socket loses the event
+  const injected = await postEvent('signal.new', signalPayload());
+  if (injected.status !== 200) return false;
+  try {
+    await rows.first().waitFor({ state: 'visible', timeout: 5_000 });
+    return true;
+  } catch {
+    return false; // hub relayed but the UI never rendered a row
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// App-socket sync — §2.2 broadcast is fire-and-forget
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Install an in-page watcher that records the app's own `/ws` socket
+ * (opened during hydration, `frontend/src/lib/api/client.ts`).  Must be
+ * called *before* the `page.goto()` it should cover: it hooks the
+ * `WebSocket` constructor via `addInitScript`, which only runs for
+ * later navigations.
+ */
+export async function watchHubSocket(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const w = window as unknown as { __hubSockets?: WebSocket[] };
+    w.__hubSockets = [];
+    const Orig = window.WebSocket;
+    function Patched(url: string | URL, protocols?: string | string[]) {
+      const ws = protocols === undefined ? new Orig(url) : new Orig(url, protocols);
+      if (String(url).includes('/ws')) w.__hubSockets!.push(ws);
+      return ws;
+    }
+    Patched.prototype = Orig.prototype;
+    window.WebSocket = Patched as unknown as typeof WebSocket;
+  });
+}
+
+/**
+ * Resolve once the page's app-level `/ws` socket is open.  §2.2 relay
+ * is broadcast-only: an event published while the socket is still
+ * CONNECTING is dropped on the floor and never healed — the §14.3
+ * re-bootstrap covers only events missed after a disconnect, and
+ * injected events are not persisted anyway.  Under live RF this race
+ * hid behind the processor constantly refreshing the table; on a quiet
+ * stack (CI) it lost the event 5 times out of 5.  No-op when
+ * `watchHubSocket` was not installed.
+ */
+export async function hubSocketOpen(page: Page): Promise<void> {
+  await page.waitForFunction(
+    () => {
+      const w = window as unknown as { __hubSockets?: WebSocket[] };
+      if (!Array.isArray(w.__hubSockets)) return true; // watcher absent
+      return w.__hubSockets.some((s) => s.readyState === 1);
+    },
+    undefined,
+    { timeout: 10_000 }
+  );
+}
+
+/**
+ * `page.goto(path)` synchronised with the app's WebSocket handshake —
+ * navigation followed by `hubSocketOpen()`.  Injection tests must
+ * navigate through this instead of a bare `goto`; see the doc comment
+ * on `hubSocketOpen` for why.
+ */
+export async function gotoSynced(page: Page, path: string): Promise<void> {
+  await watchHubSocket(page);
+  await page.goto(path);
+  await hubSocketOpen(page);
+}
+
+/**
  * Issue a raw HTTP request with WebSocket upgrade headers from Node.
  * Unlike a browser `WebSocket`, this exposes the real HTTP response for
  * failed handshakes — 502 with the JSON error body (§13) or the hub's
@@ -243,6 +330,10 @@ export async function installWsCollector(
       log({ type: 'error', reason: String(err) });
     }
   }, { collectorId: id, wsUrl: url });
+  // The collector socket itself must be open before the caller
+  // publishes — a §2.2 broadcast fired while it is still CONNECTING
+  // would be silently missed and logged as a vacuous timeout.
+  await waitForWsLog(page, id, (entry) => entry.type === 'open', 5_000);
   return id;
 }
 

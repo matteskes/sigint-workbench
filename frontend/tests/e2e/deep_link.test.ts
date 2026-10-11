@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { ensureSignalRow, gotoSynced } from './gateway_helpers';
 
 /**
  * Test 2.3 — Deep-Link URL Lifecycle (from B14, B15, B19).
@@ -17,7 +18,7 @@ test.describe('Deep-link URL lifecycle (§2.3, B14–B15, B19)', () => {
 	});
 
 	test('signal selection adds ?signal=<id> to URL', async ({ page }) => {
-		await page.goto('/signals');
+		await gotoSynced(page, '/signals');
 
 		// Wait for the signal table to render (it always mounts, even
 		// with no data — that's fine).
@@ -25,12 +26,16 @@ test.describe('Deep-link URL lifecycle (§2.3, B14–B15, B19)', () => {
 		await expect(table.first()).toBeVisible({ timeout: 5_000 });
 
 		// Click a signal row.  The row is a `<button role="row">`
-		// (SignalTable.svelte).  If no signals exist, we can't click
-		// one, so skip.
+		// (SignalTable.svelte).  On a quiet stack (CI: no RF) the table
+		// starts empty, so inject one signal through the hub ingest;
+		// when that is not possible (pipeline flooding, §2.2 shedding —
+		// or the injection failed) skip as before.
+		const hasRow = await ensureSignalRow(page);
+		test.skip(
+			!hasRow,
+			'no signal row — pipeline flooding or injection failed'
+		);
 		const rows = page.locator('[role="row"]');
-		const rowCount = await rows.count();
-		test.skip(rowCount === 0, 'no signals to click');
-		if (rowCount === 0) return;
 
 		// Click the first row to open the inspector.
 		await rows.first().click();
@@ -43,13 +48,16 @@ test.describe('Deep-link URL lifecycle (§2.3, B14–B15, B19)', () => {
 	});
 
 	test('clear selection removes ?signal= from URL (B14)', async ({ page }) => {
-		await page.goto('/signals');
+		await gotoSynced(page, '/signals');
 
-		// Open the inspector via a row click.
+		// Open the inspector via a row click (injects on a quiet stack —
+		// see the sibling test above).
+		const hasRow = await ensureSignalRow(page);
+		test.skip(
+			!hasRow,
+			'no signal row — pipeline flooding or injection failed'
+		);
 		const rows = page.locator('[role="row"]');
-		const rowCount = await rows.count();
-		test.skip(rowCount === 0, 'no signals to click');
-		if (rowCount === 0) return;
 		await rows.first().click();
 
 		// Wait for the URL to update (the deep-link mirror in
