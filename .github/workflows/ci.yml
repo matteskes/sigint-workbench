@@ -211,9 +211,11 @@ jobs:
 
       # The compose signal-processor mounts ./models with MODEL_PATH=
       # /models/classifier.onnx; an unfetched LFS pointer would
-      # crash-loop it and take the settings API down with it.
-      - name: Fetch ONNX model (git-lfs)
-        run: git lfs pull models/
+      # crash-loop it and take the settings API down with it. The tiles
+      # fixture (tiles/data/v3.mbtiles, §6.1.1) is LFS-tracked too: an
+      # unfetched pointer there breaks tileserver-gl the same way.
+      - name: Fetch LFS assets (ONNX model + tile fixture)
+        run: git lfs pull models/ tiles/data/
 
       - uses: actions/setup-go@v5
         with:
@@ -257,8 +259,9 @@ jobs:
 
       # Phase 1: full suite, recorder up.  Expected skips: the four
       # test.fixme entries (need iq-ingest frame injection / recorder Go
-      # coverage), 5.1.4 (no SDR attached), and 6.1.1 (no tile set is
-      # supplied — tiles/data has only .gitkeep).  See
+      # coverage) and 5.1.4 (no SDR attached).  6.1.1 runs against the
+      # checked-in Arizona tile fixture (tiles/data/v3.mbtiles, LFS —
+      # fetched in the LFS assets step above).  See
       # E2E-TEST-SUITE.md §7.
       - name: Playwright phase 1 — full suite (recorder up)
         working-directory: frontend

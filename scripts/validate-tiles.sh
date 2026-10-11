@@ -37,8 +37,12 @@ else
     echo "--- Check 1: SQLite schema ---"
 
     # Check required tables exist.
+    # Required tables per the MBTiles spec: metadata + tiles.
+    # ('tile_images' was a pre-1.0 raster draft table — tilemaker and
+    # tileserver-gl emit only the modern 'tiles' table, and requiring
+    # the draft here failed every real vector fixture.)
     TABLES="$(sqlite3 "$MBTILES" "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;")"
-    for req_table in metadata tiles tile_images; do
+    for req_table in metadata tiles; do
         if echo "$TABLES" | grep -q "^${req_table}$"; then
             echo "  [PASS] Table '${req_table}' exists."
         else

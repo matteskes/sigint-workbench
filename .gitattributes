@@ -1,5 +1,10 @@
 # Track ONNX model files with git-lfs
 models/*.onnx filter=lfs diff=lfs merge=lfs -text
 
+# Track the checked-in tile fixture with git-lfs (the CI/dev tile set
+# rendered from the Arizona extract, zooms 0–9; full-detail renders
+# stay local and are never committed — see tiles/setup-tiles.sh).
+tiles/data/*.mbtiles filter=lfs diff=lfs merge=lfs -text
+
 # Shell scripts executable
 *.sh text eol=lf

@@ -364,7 +364,13 @@ fails here. Suite-gated (skips without the stack / docker compose).
 | 3 | Navigate to `/` (home/map view) | MapLibre renders tiles, camera is within the data region (not mid-Atlantic) |
 | 4 | Zoom through levels 0–14 | No missing tiles or 404 errors |
 
-**Why:** B3 found Arizona MBTiles with `bounds: [-114.8325, 30.05891, 0, 37.00596]` — `maxLon = 0` pushed the entire render to the mid-Atlantic Ocean.
+**Why:** B3 found Arizona MBTiles with `bounds: [-114.8325, 30.05891,
+0, 37.00596]` — `maxLon = 0` pushed the entire render to the
+mid-Atlantic Ocean. The checked-in `tiles/data/v3.mbtiles` fixture
+(git-lfs, Arizona z0–9, B3-patched metadata) ships so this test runs
+in CI with no supply step; `tiles/setup-tiles.sh` fails loudly on the
+same corrupt-metadata pattern after every render (the sqlite3 patch
+flow), and `scripts/validate-tiles.sh` re-checks the file.
 
 ### 4.7 Category: Signal Classification Accuracy
 
@@ -1089,13 +1095,16 @@ stopped — its negative path is unreachable while the recorder answers.
 Deep-link row-click tests inject a signal through the hub when the
 table is empty and the pipeline is quiet (`ensureSignalRow`), so they
 are no longer data-dependent on live RF.  Expected CI skips: the four
-`test.fixme` entries (§7.2), 5.1.4 (no SDR attached), and 6.1.1 unless
-a tile set has been supplied — `tiles/data/` ships with only a
-`.gitkeep`, so the tile server has nothing to serve until
-`scripts/supply-tiles.sh` (or `tiles/setup-tiles.sh`) is run; 6.1.2/6.1.3
-do not need tile data and run regardless.  Roughly 72 of 78 tests
-execute, versus 54 on an RF-active bench where the 15 injection tests
-flood-gate and the recorder is deliberately up.
+`test.fixme` entries (§7.2) and 5.1.4 (no SDR attached).  6.1.1 runs
+against the checked-in Arizona tile fixture —
+`tiles/data/v3.mbtiles` (git-lfs, z0–9, B3-patched metadata), fetched
+by the e2e job's LFS pull — served through the compose stanza's
+explicit `--mbtiles /data/v3.mbtiles` argument: without it the image
+falls into demo mode and tries to download sample tiles into the
+read-only mount (the historical crash loop).  6.1.2/6.1.3 do not need
+tile data and run regardless.  Roughly 76 of 81 tests execute, versus
+54 on an RF-active bench where the 15 injection tests flood-gate and
+the recorder is deliberately up.
 
 **Phase 2 first really ran on the 2026-10-10/11 run — and skipped
 anyway.**  `recorderReady()` probed `GET /api/recordings`, which the

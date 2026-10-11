@@ -133,22 +133,21 @@ make setup
 #    sharing one iq-ingest port (SPEC §16.4).
 
 # 3. Set Up Map Tiles
-./tiles/setup-tiles.sh europe/monaco
-#    Downloads the Geofabrik PBF and renders MBTiles. Regions are
-#    Geofabrik extract paths (europe/monaco,
-#    north-america/us/california — bare state names 404). There is NO
-#    `brew install tilemaker` (no core formula; the old tap was
-#    removed): the script uses tilemaker from PATH, else the project
-#    Docker image, automatically. Skipping this leaves tiles/data
-#    empty and the tiles container crash-loops — its /data mount is
-#    read-only, so it cannot fetch its own sample data. Minimal
-#    fallback instead:
-#    curl -fsSL -o tiles/data/zurich_switzerland.mbtiles \
-#      https://github.com/maptiler/tileserver-gl/releases/download/v1.3.0/zurich_switzerland.mbtiles
-#    Custom regions: tileserver-gl serves the FIRST tiles/data/*.mbtiles
-#    (alphabetical) as source "v3" — exactly what the frontend's
-#    default VITE_TILE_URL targets — so keep one region's .mbtiles in
-#    tiles/data and run `docker compose restart tiles` after rendering.
+#    A tile fixture ships with the repo — tiles/data/v3.mbtiles
+#    (Arizona z0–9, git-lfs) — so the map works out of the box in CI
+#    and on fresh clones. To swap in your own region:
+./tiles/setup-tiles.sh north-america/us/arizona 0 14
+#    Downloads the Geofabrik PBF and renders MBTiles, normalized to
+#    tiles/data/v3.mbtiles — the tileserver-gl source id the frontend
+#    (map/config.ts) and the e2e suite (6.1.1) hardcode — then run
+#    `docker compose restart tiles`. Regions are Geofabrik extract
+#    paths (europe/monaco, north-america/us/california — bare state
+#    names 404). There is NO `brew install tilemaker` (no core
+#    formula; the old tap was removed): the script uses tilemaker from
+#    PATH, else the project Docker image, automatically.
+#    Full-detail z0–14 renders are local-only: they replace the
+#    fixture in your working tree and are git-ignored — never commit
+#    them (the checked-in fixture stays small for LFS).
 
 # 4a. macOS Development
 make dev

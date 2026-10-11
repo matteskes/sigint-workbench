@@ -228,10 +228,24 @@ services:
 
   tiles:
     image: maptiler/tileserver-gl:latest
+    # Explicit input file, NOT demo mode: with no input the image tries
+    # to download sample tiles into /data — read-only here, which was
+    # the historical EROFS restart loop (docker logs: "No input file
+    # found → [DEMO] Downloading …"). The source id comes from the
+    # FILENAME stem: the file must be named v3.mbtiles so the map style
+    # (frontend map/config.ts) and the e2e suite (6.1.1) hit
+    # /data/v3.json and /data/v3/{z}/{x}/{y}.pbf.
+    # tiles/setup-tiles.sh normalizes its output to that name; the
+    # checked-in tiles/data/v3.mbtiles (git-lfs) is the Arizona z0–9
+    # CI/dev fixture, full z0–14 renders stay local-only.
+    command: ["--mbtiles", "/data/v3.mbtiles"]
     ports:
       - "${TILE_SERVER_PORT:-8082}:8080"
     volumes:
-      - ./tiles/config.yaml:/config.yaml:ro
+      # Read-only on purpose: a supply render writes via setup-tiles.sh
+      # on the host, never inside the container. If this container ever
+      # crash-loops again, the tile set is missing — do not make the
+      # mount writable.
       - ./tiles/data:/data:ro
     networks: [sdr-net]
     logging: *default-logging

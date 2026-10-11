@@ -1,6 +1,10 @@
 #!/bin/bash
 # setup-tiles.sh — Download or generate an MBTiles file for the tile server.
 #
+# The result is normalized to tiles/data/v3.mbtiles: tileserver-gl
+# derives its source id from the filename and the frontend (plus the
+# e2e suite) hardcode source "v3".
+#
 # Usage:
 #   ./tiles/setup-tiles.sh <geofabrik-region> [zoom_min] [zoom_max]
 #
@@ -134,7 +138,22 @@ else
         --process "/work/tilemaker/process-openmaptiles.lua"
 fi
 
-# ─── Step 5: Metadata sanity check ───
+# ─── Step 5: Normalize to the frontend's contract name ───
+# tileserver-gl derives the source id from the FILENAME: the map style
+# and the e2e suite hardcode /data/v3.json and
+# /data/v3/{z}/{x}/{y}.pbf (frontend/src/lib/map/config.ts,
+# classification_accuracy.test.ts 6.1.1). The alphabetical-first scan
+# only decides which file happens to back "v3" when nothing is named
+# v3.mbtiles — fragile and invisible. Rename the fresh render so the
+# served source id is v3 by construction. Single-active-tileset model:
+# a newly rendered region replaces the previous one.
+V3="${DATA_DIR}/v3.mbtiles"
+if [ "$OUTPUT" != "$V3" ]; then
+    mv -f "$OUTPUT" "$V3"
+    OUTPUT="$V3"
+fi
+
+# ─── Step 6: Metadata sanity check ───
 # tilemaker has a known metadata bug: for regions west of the prime
 # meridian it can write the east bound as 0.000000 (and derive a
 # mid-Atlantic center from it) — docs/UI-BUGCHECK.md B3, observed on
@@ -185,7 +204,7 @@ echo "MBTiles file: ${OUTPUT}"
 echo "Size: $(du -h "$OUTPUT" | cut -f1)"
 echo ""
 echo "Start the tile server with: docker compose up tiles"
-echo "tileserver-gl serves the FIRST tiles/data/*.mbtiles (alphabetical)"
-echo "as source 'v3' — the frontend's default URL"
-echo "http://localhost:8082/data/v3/{z}/{x}/{y}.pbf — so run"
+echo "The file is named v3.mbtiles, so tileserver-gl serves it as"
+echo "source 'v3' — the frontend's default URL"
+echo "http://localhost:8082/data/v3/{z}/{x}/{y}.pbf. Run"
 echo "'docker compose restart tiles' after rendering a new region."
