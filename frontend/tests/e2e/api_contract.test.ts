@@ -17,6 +17,7 @@
 
 import { test, expect } from '@playwright/test';
 import {
+  getJson,
   postEvent,
   rawHandshake,
   servicesReady,
@@ -24,21 +25,26 @@ import {
   GATEWAY_HTTP,
 } from './gateway_helpers';
 
-test.describe('REST API Contract (9.1)', () => {
-  let servicesUp = false;
-  test.beforeAll(async () => {
-  	servicesUp = await servicesReady();
-  });
-  test.skip(() => !servicesUp, 'No services running — skipping REST contract test');
+// Computed once per worker when the file loads. Playwright evaluates
+// test.skip() predicates while the file is collected - before any
+// beforeAll can run - so a beforeAll-assigned flag was always false at
+// evaluation time and the gated tests skipped forever (found live:
+// every gated test skipped against a fully healthy stack). Top-level
+// await gives the predicates the real health answer.
+const servicesUp = await servicesReady();
 
-  test('9.1.1 — GET /api/health returns 200', async ({ page }) => {
-    await page.goto('/');
-    const result = await page.evaluate(async () => {
-      const r = await fetch('/api/health');
-      return { status: r.status, body: await r.json().catch(() => null) };
-    });
-    expect(result.status).toBe(200);
+test.describe('REST API Contract (9.1)', () => {
+  test.skip(!servicesUp, 'No services running — skipping REST contract test');
+
+  test('9.1.1 — GET /health returns 200', async () => {
+    // The documented health route is `/health` on the gateway (SPEC
+    // §17.1); `/api/health` does not exist, and Vite only proxies /api
+    // and /ws — so this probe runs Node-side against the gateway.
+    const { status, body } = await getJson(`${GATEWAY_HTTP}/health`);
+    expect(status).toBe(200);
+    expect((body as { status?: string })?.status).toBe('ok');
   });
+
 
   test('9.1.2 — GET /api/signals returns array (may be empty)', async ({
     page,
@@ -113,9 +119,12 @@ test.describe('REST API Contract (9.1)', () => {
 
   // ── Invalid input handling ──────────────────────────────────────
 
-  test('9.1.9 — POST /api/signals with invalid JSON → 400', async ({
+  test('9.1.9 — POST /api/signals is not a REST route → 405', async ({
     page,
   }) => {
+    // Signals are created by the pipeline (§2.2), never via REST — the
+    // gateway registers GET only, so any POST answers 405 regardless of
+    // body validity.
     await page.goto('/');
     const result = await page.evaluate(async () => {
       const r = await fetch('/api/signals', {
@@ -125,10 +134,9 @@ test.describe('REST API Contract (9.1)', () => {
       });
       return { status: r.status, body: await r.json().catch(() => null) };
     });
-    expect(result.status).toBe(400);
-    expect(
-      (result.body as { error?: string } | null)?.error
-    ).toBeDefined();
+    expect(result.status).toBe(405);
+    // 405 carries no JSON error envelope — the method is simply not
+    // registered on /api/signals (§2.2: signals are pipeline-created).
   });
 
   test('9.1.10 — hub ingest POST /api/events with invalid JSON → 400', async () => {
@@ -266,11 +274,7 @@ test.describe('REST API Contract (9.1)', () => {
 // ──────────────────────────────────────────────────────────────────────
 
 test.describe('CORS Configuration (9.2)', () => {
-  let servicesUp = false;
-  test.beforeAll(async () => {
-  	servicesUp = await servicesReady();
-  });
-  test.skip(() => !servicesUp, 'No services running — skipping CORS test');
+  test.skip(!servicesUp, 'No services running — skipping CORS test');
 
   test('9.2.1 — allowed origin gets the ACAO echo on REST GET', async ({
     request,

@@ -16,6 +16,7 @@
 
 import { test, expect } from '@playwright/test';
 import {
+  pipelineActive,
   freqLabel,
   installWsCollector,
   messageContaining,
@@ -36,12 +37,18 @@ async function waitForServices(timeoutMs = 30_000): Promise<boolean> {
   return false;
 }
 
+// Computed once per worker when the file loads. Playwright evaluates
+// test.skip() predicates while the file is collected - before any
+// beforeAll can run - so a beforeAll-assigned flag was always false at
+// evaluation time and the gated tests skipped forever (found live:
+// every gated test skipped against a fully healthy stack). Top-level
+// await gives the predicates the real health answer.
+const servicesUp = await servicesReady();
+const pipelineFlooding = await pipelineActive();
+
 test.describe('Relay + UI pipeline — 4.1 (from E2E-TEST-SUITE.md)', () => {
-  let servicesUp = false;
-  test.beforeAll(async () => {
-  	servicesUp = await servicesReady();
-  });
-  test.skip(() => !servicesUp, 'No services running — skipping relay pipeline test');
+  test.skip(!servicesUp, 'No services running — skipping relay pipeline test');
+  test.skip(pipelineFlooding, 'live RF pipeline floods the hub (~1600 ev/s) - injection tests need a quiet stack');
 
   test('4.1.1 — event injection → hub broadcast → store → UI row', async ({
     page,

@@ -25,12 +25,16 @@ import {
  *
  * Spec: §13 (error mapping), §2.2 (unreachable upstream → 502 JSON).
  */
+// Computed once per worker when the file loads. Playwright evaluates
+// test.skip() predicates while the file is collected - before any
+// beforeAll can run - so a beforeAll-assigned flag was always false at
+// evaluation time and the gated tests skipped forever (found live:
+// every gated test skipped against a fully healthy stack). Top-level
+// await gives the predicates the real health answer.
+const servicesUp = await servicesReady();
+
 test.describe('Gateway 502 handling for unreachable upstream (§2.2, §13)', () => {
-  let servicesUp = false;
-  test.beforeAll(async () => {
-  	servicesUp = await servicesReady();
-  });
-  test.skip(() => !servicesUp, 'No services running — skipping 502 handling test');
+  test.skip(!servicesUp, 'No services running — skipping 502 handling test');
 
   test('gateway rejects the /ws/audio handshake when recorder is down', async ({
     page,

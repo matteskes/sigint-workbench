@@ -104,6 +104,25 @@ export async function servicesReady(): Promise<boolean> {
 
 
 /**
+ * Whether any capture device is actively streaming.  A live RF pipeline
+ * floods the hub at roughly 1600 events/s on this bench, and the hub's
+ * §2.2 firehose contract sheds broadcast frames once its fan-out buffer
+ * fills — so tests that inject known events and expect each one to be
+ * relayed are unrunnable while dongles stream.  Gated tests skip with
+ * that reason on an active bench and run on a quiet stack (CI).
+ */
+export async function pipelineActive(): Promise<boolean> {
+  try {
+    const resp = await fetch('http://127.0.0.1:9090/api/v1/status');
+    if (!resp.ok) return false;
+    const devices = (await resp.json()) as Array<{ active?: boolean }>;
+    return Array.isArray(devices) && devices.some((d) => d.active === true);
+  } catch {
+    return false; // capture down → pipeline not flooding
+  }
+}
+
+/**
  * Whether the recorder service is answering behind the gateway.  The
  * gateway maps an unreachable recorder to 502 on proxied REST routes
  * (§13), so `GET /api/recordings` is a cheap recorder health probe.

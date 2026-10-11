@@ -1,7 +1,6 @@
 import { test, expect } from '@playwright/test';
 import {
   installWsCollector,
-  messageContaining,
   recorderReady,
   servicesReady,
   waitForWsLog,
@@ -23,12 +22,16 @@ import {
  *
  * Spec: §10.4 (live audio relay), §10.4.4 (clean close), B17.
  */
+// Computed once per worker when the file loads. Playwright evaluates
+// test.skip() predicates while the file is collected - before any
+// beforeAll can run - so a beforeAll-assigned flag was always false at
+// evaluation time and the gated tests skipped forever (found live:
+// every gated test skipped against a fully healthy stack). Top-level
+// await gives the predicates the real health answer.
+const servicesUp = await servicesReady();
+
 test.describe('Close code forwarding through gateway relay (§10.4, B17)', () => {
-  let servicesUp = false;
-  test.beforeAll(async () => {
-  	servicesUp = await servicesReady();
-  });
-  test.skip(() => !servicesUp, 'No services running — skipping close code forwarding test');
+  test.skip(!servicesUp, 'No services running — skipping close code forwarding test');
 
   test('gateway forwards recorder clean 1000 close to browser (not 1006)', async ({
     page,
@@ -39,25 +42,20 @@ test.describe('Close code forwarding through gateway relay (§10.4, B17)', () =>
     );
 
     await page.goto('/');
+    // The recorder requires a UUID signal id (`signal must be a UUID`,
+    // internal/record/ws_server.go) — a non-UUID 400s the upgrade before
+    // the close semantics under test can run.
     const id = await installWsCollector(
       page,
-      `${FRONTEND_WS}/ws/audio?signal=e2e-close-code-${Date.now()}`
+      `${FRONTEND_WS}/ws/audio?signal=${crypto.randomUUID()}`
     );
 
-    // The recorder says hello with an audio.meta JSON frame…
-    const meta = await waitForWsLog(
-      page,
-      id,
-      messageContaining('audio.meta'),
-      5_000
-    );
-    expect(meta, 'expected an audio.meta hello frame from the recorder').not.toBeNull();
-
-    // …then closes cleanly (1000, "no live stream") once no session
-    // materialises.  The gateway relay must forward code and reason
-    // unchanged.  Allow up to 10 s for the recorder's ~3 s grace window.
-    const close = await waitForWsLog(page, id, (l) => l.type === 'close', 10_000);
-    expect(close, 'expected a close frame within 10 s').not.toBeNull();
+    // A UUID with no live in-band stream: after the recorder's ~3 s
+    // grace window the streamer answers ErrNoStream and the server
+    // closes cleanly — no hello frame is sent on this path (the
+    // audio.meta hello only precedes a live stream).
+    const close = await waitForWsLog(page, id, (l) => l.type === 'close', 15_000);
+    expect(close, 'expected a close frame within 15 s').not.toBeNull();
     expect(close!.code).toBe(1000);
     expect(close!.reason).toContain('no live stream');
   });
@@ -71,7 +69,7 @@ test.describe('Close code forwarding through gateway relay (§10.4, B17)', () =>
     await page.goto('/');
     const id = await installWsCollector(
       page,
-      `${FRONTEND_WS}/ws/audio?signal=e2e-close-reason-${Date.now()}`
+      `${FRONTEND_WS}/ws/audio?signal=${crypto.randomUUID()}`
     );
 
     const close = await waitForWsLog(page, id, (l) => l.type === 'close', 10_000);

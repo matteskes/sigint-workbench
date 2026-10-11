@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import {
+  pipelineActive,
   installWsCollector,
   messageContaining,
   postEvent,
@@ -20,12 +21,18 @@ import {
  *
  * Spec: §14.3 (fan-out contract), §14.4.3 (N-client hub).
  */
+// Computed once per worker when the file loads. Playwright evaluates
+// test.skip() predicates while the file is collected - before any
+// beforeAll can run - so a beforeAll-assigned flag was always false at
+// evaluation time and the gated tests skipped forever (found live:
+// every gated test skipped against a fully healthy stack). Top-level
+// await gives the predicates the real health answer.
+const servicesUp = await servicesReady();
+const pipelineFlooding = await pipelineActive();
+
 test.describe('Multi-client WebSocket fan-out through gateway (§14.3, §14.4.3)', () => {
-  let servicesUp = false;
-  test.beforeAll(async () => {
-  	servicesUp = await servicesReady();
-  });
-  test.skip(() => !servicesUp, 'No services running — skipping multi-client fan-out test');
+  test.skip(!servicesUp, 'No services running — skipping multi-client fan-out test');
+  test.skip(pipelineFlooding, 'live RF pipeline floods the hub (~1600 ev/s) - injection tests need a quiet stack');
 
   test('all 3 pages receive the broadcast event from the hub', async ({
     browser,

@@ -15,12 +15,16 @@
 import { test, expect } from '@playwright/test';
 import { servicesReady } from './gateway_helpers';
 
+// Computed once per worker when the file loads. Playwright evaluates
+// test.skip() predicates while the file is collected - before any
+// beforeAll can run - so a beforeAll-assigned flag was always false at
+// evaluation time and the gated tests skipped forever (found live:
+// every gated test skipped against a fully healthy stack). Top-level
+// await gives the predicates the real health answer.
+const servicesUp = await servicesReady();
+
 test.describe('Settings API — 5.1–5.2 (from E2E-TEST-SUITE.md)', () => {
-	let servicesUp = false;
-	test.beforeAll(async () => {
-		servicesUp = await servicesReady();
-	});
-	test.skip(() => !servicesUp, 'No services running — skipping settings test');
+	test.skip(!servicesUp, 'No services running — skipping settings test');
 
 	test('5.1.1 — settings GET returns editable knobs', async ({ page }) => {
 		await page.goto('/');
@@ -52,19 +56,22 @@ test.describe('Settings API — 5.1–5.2 (from E2E-TEST-SUITE.md)', () => {
 		await page.goto('/');
 
 		// Capture the current knob so the test restores it afterwards.
+		// The section id is `processing` (its file is
+		// signal-processor.yaml); `signal_ttl` is env-only (§7.3), not a
+		// settings-section knob, so this exercises a real YAML knob.
 		const original = await page.evaluate(async () => {
 			const res = await fetch('/api/settings');
 			if (!res.ok) return null;
 			const data = await res.json();
-			const values = data.values?.['signal-processor'];
-			return (values?.signal_ttl as number | undefined) ?? null;
+			const values = data.values?.['processing'];
+			return (values?.['peak_detection.threshold_db'] as number | undefined) ?? null;
 		});
 
 		const put = await page.evaluate(async () => {
-			const res = await fetch('/api/settings/signal-processor', {
+			const res = await fetch('/api/settings/processing', {
 				method: 'PUT',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ values: { signal_ttl: 15 } }),
+				body: JSON.stringify({ values: { 'peak_detection.threshold_db': -57 } }),
 			});
 			if (!res.ok) {
 				const body = await res.json().catch(() => ({}));
@@ -82,18 +89,20 @@ test.describe('Settings API — 5.1–5.2 (from E2E-TEST-SUITE.md)', () => {
 			const res = await fetch('/api/settings');
 			if (!res.ok) return null;
 			const data = await res.json();
-			return data.values['signal-processor'] ?? null;
+			return data.values['processing'] ?? null;
 		});
 		expect(afterSave).not.toBeNull();
-		expect(afterSave.signal_ttl).toBe(15);
+		expect(afterSave['peak_detection.threshold_db']).toBe(-57);
 
 		// Restore the original knob so the suite leaves no trace.
-		if (original !== null && original !== 15) {
+		if (original !== null && original !== -57) {
 			const restored = await page.evaluate(async (value) => {
-				const res = await fetch('/api/settings/signal-processor', {
+				const res = await fetch('/api/settings/processing', {
 					method: 'PUT',
 					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ values: { signal_ttl: value } }),
+					body: JSON.stringify({
+						values: { 'peak_detection.threshold_db': value },
+					}),
 				});
 				return res.ok;
 			}, original);

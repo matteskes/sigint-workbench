@@ -19,6 +19,7 @@
 
 import { test, expect, type Page } from '@playwright/test';
 import {
+  pipelineActive,
   freqLabel,
   getJson,
   installWsCollector,
@@ -58,12 +59,18 @@ async function relayedPayloads(
   return frames.filter((f) => JSON.stringify(f.payload).includes(sigId));
 }
 
+// Computed once per worker when the file loads. Playwright evaluates
+// test.skip() predicates while the file is collected - before any
+// beforeAll can run - so a beforeAll-assigned flag was always false at
+// evaluation time and the gated tests skipped forever (found live:
+// every gated test skipped against a fully healthy stack). Top-level
+// await gives the predicates the real health answer.
+const servicesUp = await servicesReady();
+const pipelineFlooding = await pipelineActive();
+
 test.describe('Map Tile Bounds (6.1)', () => {
-  let servicesUp = false;
-  test.beforeAll(async () => {
-  	servicesUp = await servicesReady();
-  });
-  test.skip(() => !servicesUp, 'No services running — skipping tile bounds test');
+  test.skip(!servicesUp, 'No services running — skipping tile bounds test');
+  test.skip(pipelineFlooding, 'live RF pipeline floods the hub (~1600 ev/s) - injection tests need a quiet stack');
 
   test('6.1.1 — TileJSON bounds are valid (maxLon > minLon)', async () => {
     const { status, body } = await getJson('http://localhost:8082/data/v3.json');
@@ -102,11 +109,8 @@ test.describe('Map Tile Bounds (6.1)', () => {
 // ──────────────────────────────────────────────────────────────────────
 
 test.describe('Classification relay (7.1)', () => {
-  let servicesUp = false;
-  test.beforeAll(async () => {
-  	servicesUp = await servicesReady();
-  });
-  test.skip(() => !servicesUp, 'No services running — skipping classification relay test');
+  test.skip(!servicesUp, 'No services running — skipping classification relay test');
+  test.skip(pipelineFlooding, 'live RF pipeline floods the hub (~1600 ev/s) - injection tests need a quiet stack');
 
   test.fixme(
     '7.1.1 — noise-only frames produce no high-confidence classifications',
@@ -272,11 +276,8 @@ test.describe('Classification relay (7.1)', () => {
 // ──────────────────────────────────────────────────────────────────────
 
 test.describe('Regression sweep — CW / WFM / below-center (8.1)', () => {
-  let servicesUp = false;
-  test.beforeAll(async () => {
-  	servicesUp = await servicesReady();
-  });
-  test.skip(() => !servicesUp, 'No services running — skipping regression sweep');
+  test.skip(!servicesUp, 'No services running — skipping regression sweep');
+  test.skip(pipelineFlooding, 'live RF pipeline floods the hub (~1600 ev/s) - injection tests need a quiet stack');
 
   test('8.1.1 — HF CW detection renders at 16.000 MHz', async ({ page }) => {
     await page.goto('/');
@@ -492,11 +493,8 @@ test.describe('Aggressive UI sweep (8.2)', () => {
 // ──────────────────────────────────────────────────────────────────────
 
 test.describe('Rapid injection and removal (8.3)', () => {
-  let servicesUp = false;
-  test.beforeAll(async () => {
-  	servicesUp = await servicesReady();
-  });
-  test.skip(() => !servicesUp, 'No services running — skipping rapid injection test');
+  test.skip(!servicesUp, 'No services running — skipping rapid injection test');
+  test.skip(pipelineFlooding, 'live RF pipeline floods the hub (~1600 ev/s) - injection tests need a quiet stack');
 
   test('8.3.1 — 20 signals in, 10 removed, UI tracks both', async ({
     page,

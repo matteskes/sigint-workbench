@@ -40,8 +40,12 @@ func pumpEvents(count, start int) {
 
 func readFrames(ws *websocket.Conn, timeout time.Duration) int {
 	count := 0
+	// Window semantics: the deadline is set ONCE so the loop is bounded
+	// by `timeout` total. Resetting it per frame (the old form) never
+	// terminates while the hub is delivering a continuous event stream
+	// (live RF pipeline ≈ 1600 frames/s on this bench).
+	ws.SetReadDeadline(time.Now().Add(timeout))
 	for {
-		ws.SetReadDeadline(time.Now().Add(timeout))
 		if _, _, err := ws.ReadMessage(); err != nil {
 			break
 		}
@@ -194,7 +198,11 @@ func TestServiceRestartPartialGateway(t *testing.T) {
 							allOK = false
 							break
 						}
-						if status, ok3 := infoMap["status"].(string); !ok3 || status != "ok" {
+						// Component payload shape is {"ok": true}
+						// (the same contract TestGateProbe in
+						// tests/e2e/api checks); there is no
+						// "status" string field.
+						if okv, ok3 := infoMap["ok"].(bool); !ok3 || !okv {
 							allOK = false
 							break
 						}

@@ -1036,6 +1036,21 @@ automated suite: it drives the same WebKit engine headlessly via
 for UI validation. The keyboard contract (§15) and deep-link/canvas
 checks that MCP surfaced (B6–B11) are pinned by 2.1–2.4.
 
+**Live validation (2026-10-10, macOS dev bench, full stack):** the
+gated suites ran against a live stack for the first time. Two gate
+bugs surfaced and were fixed: `servicesReady()` was consulted in a
+`beforeAll`-assigned flag, but Playwright evaluates `test.skip()`
+predicates at file-collection time — before any `beforeAll` runs — so
+every gated test skipped forever; the flags are now computed with
+top-level `await` at file load. And `readFrames`-style per-frame
+deadline resets in the Go resilience suite never terminate while the
+hub delivers a continuous stream (live: ~1600 events/s from two
+scanning dongles). Because the §2.2 firehose sheds broadcast frames
+once its fan-out buffer fills, injection tests that expect every
+injected event to be relayed are unrunnable on an active bench; they
+gate on `pipelineActive()` (any capture device streaming) and skip
+with that reason, running on a quiet stack (CI).
+
 ### 7.1 Event injection path
 
 - `postEvent(type, payload)` (Node-side) publishes to the **ws-hub**
@@ -1056,7 +1071,7 @@ checks that MCP surfaced (B6–B11) are pinned by 2.1–2.4.
 | Suite | Verifies | fixme (needs real pipeline) |
 | --- | --- | --- |
 | 4.1 full_pipeline | ingest → broadcast → store → table row (new/update/removed) | — |
-| 4.2 recording | `/api/recordings` contract: 200 array, relative `file_path`, metadata | 4.2.1, 4.2.4 (recorder Go suite) |
+| 4.2 recording | `/api/recordings` contract: 200 array, relative `filePath`, metadata | 4.2.1, 4.2.4 (recorder Go suite) |
 | 5.1 settings | settings round-trip with restore; SDR retune + restore | 5.1.3 TTL (signal-processor Go suite) |
 | 7.1 / 8.1 classification | relayed payload fields intact (`freqHz` schema, §6.5 class enum, modulation) + row rendering | 7.1.1 noise floor (classify Go tests, `make smoke-onnx`) |
 | 3.1 / 3.2 / 3.3 gateway | clean 1000 close pass-through (B17), 502 JSON body (§13), 3-client fan-out (§14.3) | — |

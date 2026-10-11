@@ -17,11 +17,12 @@ import { getJson, servicesReady, GATEWAY_HTTP } from './gateway_helpers';
 
 interface RecordingEntry {
   id?: string;
-  file_path?: string;
+  // Recordings REST payload is camelCase (§13); there is no SDR
+  // reference — recordings join to signals, which carry the SDR.
+  filePath?: string;
   status?: string;
-  start_time?: string;
-  signal_id?: string;
-  sdr_id?: string;
+  startTime?: string;
+  signalId?: string;
 }
 
 async function recordings(): Promise<{
@@ -35,12 +36,16 @@ async function recordings(): Promise<{
   };
 }
 
+// Computed once per worker when the file loads. Playwright evaluates
+// test.skip() predicates while the file is collected - before any
+// beforeAll can run - so a beforeAll-assigned flag was always false at
+// evaluation time and the gated tests skipped forever (found live:
+// every gated test skipped against a fully healthy stack). Top-level
+// await gives the predicates the real health answer.
+const servicesUp = await servicesReady();
+
 test.describe('Recording REST contract — 4.2 (from E2E-TEST-SUITE.md)', () => {
-  let servicesUp = false;
-  test.beforeAll(async () => {
-  	servicesUp = await servicesReady();
-  });
-  test.skip(() => !servicesUp, 'No services running — skipping recording contract test');
+  test.skip(!servicesUp, 'No services running — skipping recording contract test');
 
   test.fixme('4.2.1 — recording session creation and file serving', async () => {
     // Needs the real pipeline: a live signal must reach the recorder to
@@ -56,17 +61,17 @@ test.describe('Recording REST contract — 4.2 (from E2E-TEST-SUITE.md)', () => 
     const { status, body } = await recordings();
     expect(status).toBe(200);
     for (const rec of body) {
-      // file_path is served relative to the recordings root (§10.4);
+      // filePath is served relative to the recordings root (§10.4);
       // an absolute path would leak the container filesystem layout.
-      if (rec.file_path) {
+      if (rec.filePath) {
         expect(
-          rec.file_path.startsWith('/'),
-          `${rec.file_path} must be relative`
+          rec.filePath.startsWith('/'),
+          `${rec.filePath} must be relative`
         ).toBe(false);
       }
       if (rec.status === 'finalized') {
         expect(
-          rec.file_path,
+          rec.filePath,
           'finalized recordings must have a file path'
         ).toBeTruthy();
       }
@@ -76,17 +81,16 @@ test.describe('Recording REST contract — 4.2 (from E2E-TEST-SUITE.md)', () => 
   test('4.2.3 — recording metadata is complete', async () => {
     const { status, body } = await recordings();
     expect(status).toBe(200);
+    // The recordings REST payload is camelCase (§13): signalId,
+    // startTime, … . The schema has no SDR reference — recordings join
+    // to signals, which carry the SDR.
     for (const rec of body) {
       expect(
-        rec.signal_id,
+        rec.signalId,
         `recording ${rec.id} must reference a signal`
       ).toBeTruthy();
-      expect(
-        rec.sdr_id,
-        `recording ${rec.id} must reference an SDR`
-      ).toBeTruthy();
-      if (rec.start_time) {
-        expect(Number.isNaN(Date.parse(rec.start_time))).toBe(false);
+      if (rec.startTime) {
+        expect(Number.isNaN(Date.parse(rec.startTime))).toBe(false);
       }
     }
   });
