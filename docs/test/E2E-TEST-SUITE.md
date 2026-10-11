@@ -967,16 +967,19 @@ every step.
 | Step | Action | Expected |
 | --- | --- | --- |
 | 1 | Operator requests `europe/monaco` via admin UI | API accepts request, returns `request_id: abc123` |
-| 2 | Supply machine runs `supply-tiles.sh europe/monaco` (see §4.11 scripts) | `data/monaco.mbtiles` created, valid metadata |
-| 3 | Operator inspects `validate-tiles.sh monaco.mbtiles` | Bounds check passes (west < east, center inside) |
-| 4 | Operator copies `monaco.mbtiles` to air-gap system's `tiles/data/` | File present in correct directory |
+| 2 | Supply machine runs `supply-tiles.sh europe/monaco` (see §4.11 scripts) | `tiles/data/v3.mbtiles` created (renders normalize to the served source id `v3`), validated, copied to `transfer/europe_monaco/` with `MANIFEST.txt` |
+| 3 | Operator inspects the supply run's `validate-tiles.sh` output | Bounds check passes (west < east, center inside) |
+| 4 | Operator transports `transfer/europe_monaco/` to the air-gap system and runs `deploy.sh` | `deploy.sh` re-validates and places the tileset at `tiles/data/v3.mbtiles` (single-active-tileset: a new region replaces the old) |
 | 5 | On air-gap system: `docker compose restart tiles` (or equivalent) | Tile server picks up new region |
 | 6 | Query `/data/v3/0/0/0.pbf` for the new region | Returns valid vector tile |
 | 7 | Audit log entry: timestamp, operator, region, hash | Logged in `system.audit.log` with SHA-256 of file |
 
 **Why:** The escape hatch is a single point of compliance risk. Every
 download must be logged, hash-verified, and auditable. A non-logged
-tile download would be a policy violation (H3).
+tile download would be a policy violation (H3). If tilemaker's B3
+loud-fail fires mid-supply, the operator patches the metadata per its
+instructions and re-runs — setup's idempotence guard skips the render
+once the tileset validates.
 
 ### Test 4.11.A6 — Offline Boot Validation
 

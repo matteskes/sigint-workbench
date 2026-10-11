@@ -42,21 +42,30 @@ func TestA5_ManifestVerification(t *testing.T) {
 	if root == "" {
 		root = findRoot()
 	}
-	manifestPath := filepath.Join(root, "transfer", "europe_monaco", "MANIFEST.txt")
-	data, err := os.ReadFile(manifestPath)
-	if os.IsNotExist(err) {
+
+	// Region-agnostic: any completed supply run leaves
+	// transfer/<region-slug>/MANIFEST.txt. (The europe_monaco hardcode
+	// predated the Arizona region switch.)
+	matches, err := filepath.Glob(filepath.Join(root, "transfer", "*", "MANIFEST.txt"))
+	if err != nil {
+		t.Fatalf("glob transfer manifests: %v", err)
+	}
+	if len(matches) == 0 {
 		t.Log("  No MANIFEST.txt found; verifying format via supply-tiles.sh content.")
 		return
 	}
-	if err != nil {
-		t.Fatalf("read MANIFEST.txt: %v", err)
-	}
-	for _, field := range []string{"Region:", "Operator:", "Timestamp:",
-		"SHA-256:", "Supply host:", "Supply date:"} {
-		if contains(string(data), field) {
-			t.Logf("  [PASS] MANIFEST contains: %s", field)
-		} else {
-			t.Logf("  [FAIL] MANIFEST missing: %s", field)
+	for _, manifestPath := range matches {
+		data, err := os.ReadFile(manifestPath)
+		if err != nil {
+			t.Fatalf("read %s: %v", manifestPath, err)
+		}
+		for _, field := range []string{"Region:", "Operator:", "Timestamp:",
+			"SHA-256:", "Supply host:", "Supply date:"} {
+			if contains(string(data), field) {
+				t.Logf("  [PASS] %s contains: %s", manifestPath, field)
+			} else {
+				t.Logf("  [FAIL] %s missing: %s", manifestPath, field)
+			}
 		}
 	}
 }

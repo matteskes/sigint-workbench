@@ -37,6 +37,19 @@ OUTPUT="${DATA_DIR}/${REGION_SLUG}.mbtiles"
 
 mkdir -p "$DATA_DIR" "$PBF_DIR"
 
+# ─── Step 0: Idempotence — reuse a valid tileset ───
+# The B3 loud-fail (Step 6) tells the operator to patch the rendered
+# metadata in place; re-running this script must then reuse the patched
+# tileset instead of re-rendering over it (and failing identically).
+# Skip everything only when the normalized v3.mbtiles exists AND
+# passes validate-tiles.sh; delete tiles/data/v3.mbtiles to re-render.
+if [ -s "${DATA_DIR}/v3.mbtiles" ] && \
+   "${SCRIPT_DIR}/../scripts/validate-tiles.sh" "${DATA_DIR}/v3.mbtiles" >/dev/null 2>&1; then
+    echo "--- tiles/data/v3.mbtiles exists and validates — nothing to do. ---"
+    echo "    (Delete it to force a fresh download/render.)"
+    exit 0
+fi
+
 # ─── Step 1: Download OSM PBF from Geofabrik ───
 # Geofabrik names files <region>-latest.osm.pbf (dash, not dot).
 PBF_URL="https://download.geofabrik.de/${REGION}-latest.osm.pbf"

@@ -42,11 +42,24 @@ if ! "${SCRIPT_DIR}/../tiles/setup-tiles.sh" "$REGION" "$ZOOM_MIN" "$ZOOM_MAX"; 
     exit 1
 fi
 
-# ─── Step 2: Locate the generated .mbtiles file ───
+# ─── Step 2: Locate the rendered tileset ───
+# setup-tiles.sh normalizes every render to tiles/data/v3.mbtiles —
+# tileserver-gl derives the served source id from the filename stem and
+# the frontend/e2e contract hardcodes /data/v3.json — so the artifact
+# is always v3.mbtiles, regardless of region.
 DATA_DIR="${TILES_DIR}/data"
-MBTILES="${DATA_DIR}/${REGION_SLUG}.mbtiles"
+MBTILES="${DATA_DIR}/v3.mbtiles"
 if [[ ! -s "$MBTILES" ]]; then
     echo "ERROR: ${MBTILES} not found or empty after setup-tiles.sh."
+    exit 1
+fi
+
+# ─── Step 2b: Validate before signing (chain-of-custody) ───
+# Never hash or transfer an unvalidated tileset: run the repo
+# validator — the same checks deploy.sh re-runs on the air-gap target
+# before placing the file (§4.11).
+if ! "${SCRIPT_DIR}/validate-tiles.sh" "$MBTILES"; then
+    echo "ERROR: tileset failed validation — aborting transfer."
     exit 1
 fi
 
@@ -64,7 +77,10 @@ else
 fi
 
 # ─── Step 4: Copy tiles + manifest into transfer directory ───
-cp "$MBTILES" "${TRANSFER_DIR}/${REGION_SLUG}/"
+# The transfer artifact carries the region slug for the operator;
+# deploy.sh places it at tiles/data/v3.mbtiles on the air-gap target
+# (the served source id contract, §4.11).
+cp "$MBTILES" "${TRANSFER_DIR}/${REGION_SLUG}/${REGION_SLUG}.mbtiles"
 
 # ─── Step 5: Generate MANIFEST.txt (signed audit record) ───
 MANIFEST="${TRANSFER_DIR}/${REGION_SLUG}/MANIFEST.txt"

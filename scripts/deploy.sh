@@ -64,8 +64,12 @@ for region_dir in "${TRANSFER_DIR}"/*/; do
     if [[ -f "$MBTILES" ]]; then
         # Validate before deploying.
         if "${SCRIPT_DIR}/validate-tiles.sh" "$MBTILES"; then
-            cp "$MBTILES" "${TILES_DATA_DIR}/${SLUG}.mbtiles"
-            echo "  [OK] tiles/data/${SLUG}.mbtiles"
+            # The target name IS the served source id contract (v3):
+            # tileserver-gl derives it from the filename stem, and the
+            # frontend/e2e hardcode /data/v3.json. Single-active-tileset:
+            # a newly deployed region replaces the previous one.
+            cp "$MBTILES" "${TILES_DATA_DIR}/v3.mbtiles"
+            echo "  [OK] tiles/data/v3.mbtiles (from ${SLUG})"
 
             # Generate audit log entry.
             FILE_HASH=""

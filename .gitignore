@@ -27,6 +27,9 @@ tiles/data/*
 tiles/pbfs/*
 !tiles/pbfs/.gitkeep
 
+# Escape-hatch transfer staging (physical-media copies; local only)
+transfer/
+
 # Environment
 .env
 .env.local
