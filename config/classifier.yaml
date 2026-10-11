@@ -9,4 +9,4 @@ rules:
 # ONNX ML classifier
 onnx:
   enabled: true
-  min_confidence: 0.5   # Below this, fall back to rules
+  min_confidence: 0.5 # Below this, fall back to rules

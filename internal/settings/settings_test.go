@@ -271,6 +271,147 @@ func TestSaveWritesBackup(t *testing.T) {
 	}
 }
 
+// A save must not reformat the file around the edited value: the
+// shipped configs use 2-space indent, blank lines between top-level
+// sections and tag-free scalars. Found live: a single-knob §20 save
+// rewrote 75 diff lines (4-space re-indent from yaml.Marshal's
+// default, dropped blank lines, an explicit !!float tag on the edited
+// scalar). This pins the one-line-diff contract.
+func TestSavePreservesHouseFormatting(t *testing.T) {
+	src := `# signal-processor configuration (§5)
+listen_port: 9100
+
+# Peak detection
+peak_detection:
+  threshold_db: -60
+  min_snr_db: 10
+  min_spacing_bins: 10
+  max_peaks: 20
+
+# FFT settings (§5.7)
+fft:
+  size: 4096
+  window: rectangular
+
+# Footer-style run naming the next section, with an internal blank
+# line — yaml.v3 re-emits those, and the blank-line walk must step
+# over them instead of stopping.
+
+# Spectrum tap (§18)
+spectrum:
+  bins: 256
+  rate_hz: 5
+`
+	dir := t.TempDir()
+	write(t, dir, "signal-processor.yaml", src)
+	st := NewStore(dir)
+	if _, err := st.Save("processing",
+		map[string]any{"peak_detection.threshold_db": -57.0}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	out, err := os.ReadFile(filepath.Join(dir, "signal-processor.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(out)
+	if !strings.Contains(text, "threshold_db: -57\n") {
+		t.Fatalf("value not updated:\n%s", text)
+	}
+	for _, want := range []string{
+		"# signal-processor configuration (§5)",
+		"# Peak detection",
+		"# FFT settings (§5.7)",
+		"# Spectrum tap (§18)",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("comment lost: %q\nFILE:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "    ") {
+		t.Fatalf("4-space indent crept in:\n%s", text)
+	}
+	if strings.Contains(text, "!!") {
+		t.Fatalf("explicit tag emitted:\n%s", text)
+	}
+	// Except the edited line, the saved file must equal the source —
+	// blank-line layout intact.
+	got := strings.Split(strings.TrimSuffix(text, "\n"), "\n")
+	want := strings.Split(strings.TrimSuffix(src, "\n"), "\n")
+	if len(got) != len(want) {
+		t.Fatalf("line count changed: %d -> %d\nFILE:\n%s", len(want), len(got), text)
+	}
+	for i := range want {
+		if got[i] != want[i] && !strings.Contains(got[i], "threshold_db: -57") {
+			t.Fatalf("line %d rewritten:\n- %q\n+ %q", i+1, want[i], got[i])
+		}
+	}
+}
+
+// A compact header block — one comment, several keys, no separator
+// blanks (recorder.yaml's `# Recorder Configuration` header) — must
+// stay compact: only comment-headed sections get the separator blank.
+func TestSaveKeepsCompactHeader(t *testing.T) {
+	src := `# Recorder Configuration
+recordings_dir: /recordings
+listen_port: 9011
+
+# Audio encoding
+audio:
+  sample_rate: 48000
+  channels: 1
+`
+	dir := t.TempDir()
+	write(t, dir, "recorder.yaml", src)
+	st := NewStore(dir)
+	if _, err := st.Save("recorder",
+		map[string]any{"audio.sample_rate": 48000.0}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	out, err := os.ReadFile(filepath.Join(dir, "recorder.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Split(strings.TrimSuffix(string(out), "\n"), "\n")
+	want := strings.Split(strings.TrimSuffix(src, "\n"), "\n")
+	if len(got) != len(want) {
+		t.Fatalf("line count changed: %d -> %d\nFILE:\n%s", len(want), len(got), string(out))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("line %d rewritten:\n- %q\n+ %q", i+1, want[i], got[i])
+		}
+	}
+}
+
+// Saving is format-idempotent: once normalized, a save changes nothing
+// beyond the edited value. The e2e suite PUTs the same knob twice per
+// run (set and restore); with the shipped file normalized the pair
+// must leave the file byte-identical.
+func TestSaveIsIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "signal-processor.yaml", processingYAML)
+	st := NewStore(dir)
+	if _, err := st.Save("processing",
+		map[string]any{"peak_detection.threshold_db": -57.0}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	first, err := os.ReadFile(filepath.Join(dir, "signal-processor.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Save("processing",
+		map[string]any{"peak_detection.threshold_db": -57.0}); err != nil {
+		t.Fatalf("second save: %v", err)
+	}
+	second, err := os.ReadFile(filepath.Join(dir, "signal-processor.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(first) != string(second) {
+		t.Fatalf("second save rewrote the file:\nFIRST:\n%s\nSECOND:\n%s", first, second)
+	}
+}
+
 // Optional strings model presence: empty removes the key again.
 func TestSaveOptionalStringRemoval(t *testing.T) {
 	dir := t.TempDir()

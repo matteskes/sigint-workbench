@@ -2524,6 +2524,17 @@ re-validation → backup → atomic rename`:
 - Edits preserve mapping comments; keys the wizard creates carry
   `# Configured via the setup screen (SPEC §20).`. Rewritten list
   items (the SDR list) are regenerated without inner comments.
+- Re-marshalling normalizes to the shipped configs' house style —
+  2-space indent, tag-free scalars, a blank line before each
+  comment-headed top-level section — so a one-knob save diffs as
+  that knob, not as a file-wide reformatting (before this,
+  `yaml.Marshal`'s 4-space default and dropped blank lines turned a
+  single threshold change into a 75-line diff). Line comments re-emit
+  with single-space alignment and blanks between sequence items are
+  not representable. The shipped `config/*.yaml` are stored in the
+  normalized form, except `sdr-capture.yaml`, whose hand-written
+  list-item comments a save would drop — it normalizes on its next
+  capture-section save.
 - The marshalled result is re-decoded into the same typed configs
   the services load and re-validated against their domain rules
   (FFT power-of-two 64-16384, §18.1 `spectrum.bins` divides

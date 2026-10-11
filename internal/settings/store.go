@@ -283,7 +283,7 @@ func (st *Store) Save(sectionID string, values map[string]any) (*SaveResult, err
 	if err := applyValues(root, sec, values); err != nil {
 		return nil, err
 	}
-	out, err := yaml.Marshal(&doc)
+	out, err := marshalNode(&doc)
 	if err != nil {
 		return nil, fmt.Errorf("settings: re-marshal %s: %w", sec.File, err)
 	}

@@ -8,10 +8,8 @@ consumers:
   - name: signal-processor
     host: signal-processor
     port: 9010
-
   - name: recorder
     host: recorder
     port: 9011
-
 stats:
   interval_s: 5
