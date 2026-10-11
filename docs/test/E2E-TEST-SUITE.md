@@ -331,6 +331,16 @@ covered on the recorder live-audio relay (B17, §10.4.4).
 | 3 | `GET /api/settings` again | Updated values persist |
 | 4 | Restart the api-gateway container | Settings reloaded from file, values match saved state |
 
+Steps 1–3 run in the Playwright suite (`settings_and_config.test.ts`
+5.1.2). Step 4 — the restart/reload half the browser cannot do — runs
+in the Go resilience suite
+(`tests/e2e/resilience/settings_restart_test.go`,
+`TestSettingsPersistAcrossGatewayRestart`): save a scalar knob,
+restart api-gateway via `docker compose restart`, and verify the
+value is reloaded from the YAML file — the single source of truth
+(§17.1). A regression that keeps settings only in gateway memory
+fails here. Suite-gated (skips without the stack / docker compose).
+
 #### Test 5.3 — Dead Config Cleanup Verification (from A3, A4, A8, A13)
 
 | Step | Action | Expected |
@@ -527,7 +537,8 @@ make smoke-onnx             # scripts/smoke-test.sh
 make e2e-api                # tests/e2e/api
 go test ./tests/e2e/resilience/... ./tests/e2e/airgap/... -v -count=1
 
-# E2E: frontend Playwright (WebKit; requires the dev stack)
+# E2E: frontend Playwright (WebKit).  Starts the Vite dev server
+# itself; Go services are probed and the gated suites skip when down.
 make e2e                    # frontend/tests/e2e
 
 # Type check
@@ -669,7 +680,7 @@ Tests map to SPEC sections as follows:
 | A5 — Escape-Hatch Audit | §4.11, H3 (tile supply) | `[implemented]` |
 | A6 — Offline Boot | §4.11 (cold boot) | `[implemented]` |
 | A7 — Disk Exhaustion | §4.11, H3 (graceful) | `[implemented]` |
-| A8 — WS Flood Resilience | §14.3, H3, A1 (hub broadcast) | `[implemented]` |
+| A8 — WS Flood Resilience | §14.3 (fan-out + client cap), H3, A1 (hub broadcast) | `[implemented]` |
 
 ---
 
@@ -677,15 +688,18 @@ Tests map to SPEC sections as follows:
 
 1. **On-air TDOA validation** (docs/HARDWARE.md §7, §17.4 slice 5) — requires a third receiver; unchanged by this test suite.
 2. **CI confirmation of the `markdown` job** — confirm markdownlint returns green on the next push (STACK-AUDIT A23).
-3. **Playwright MCP integration** — The SPEC notes that UI validation was done via Playwright MCP (WebKit). The e2e tests should use the same tooling for consistency.
-4. **Test data fixtures** — Synthetic IQ frame generators exist in `cmd/smoke-frames` and `internal/classify/onnx_ort_test.go`. Reuse these for frontend e2e tests where UI-level IQ injection is needed.
-5. **R3 baseline** — Before running the 100-SDR concurrency test, validate the production stack has enough file descriptors and socket buffers to handle 100 concurrent UDP streams (open file limit, `net.core.rmem_max`, `net.core.wmem_max`).
-6. **R5 seed data** — Create a fixture script to insert realistic signal coordinates (Arizona bounds from B3) into the database for UI tests, avoiding the `bounds: 0` tile problem that previously pushed the map to the mid-Atlantic.
-7. **R8 rate limiting** — implement per-client rate limiting (token
+3. **Test data fixtures** — Synthetic IQ frame generators exist in `cmd/smoke-frames` and `internal/classify/onnx_ort_test.go`. Reuse these for frontend e2e tests where UI-level IQ injection is needed.
+4. **R5 seed data** — Create a fixture script to insert realistic signal coordinates (Arizona bounds from B3) into the database for UI tests, avoiding the `bounds: 0` tile problem that previously pushed the map to the mid-Atlantic.
+5. **R8 rate limiting** — implement per-client rate limiting (token
    bucket, `429` + `Retry-After`) in the api-gateway and add the Test R8
    suite (§4.10.10); the gateway applies no rate limiting today.
-8. **Hub client cap** — the hub counts clients but enforces no maximum;
-   add a configurable max client limit and assert it in A8 step 3.
+
+Closed from this list: **Playwright MCP integration** — the automated
+WebKit Playwright suite supersedes ad-hoc MCP UI validation (§7,
+tooling note); **R3 baseline** — `assertR3StackBaseline` pre-flight
+(fd limit + socket buffers) now guards both R3 tests (§4.10.5);
+**hub client cap** — `WS_HUB_MAX_CLIENTS` is enforced at the hub's
+upgrade handler and asserted in A8 step 3 (§4.11/A8; §14.3).
 
 ### 4.10.3 Test R1 — Service Restart Resilience (B5 extension)
 
@@ -736,6 +750,16 @@ Tests map to SPEC sections as follows:
 | 7 | Send 1,000 frames per second aggregate (10 SDRs × 100 fps) | No frames dropped, `iq-ingest` consumer queues don't grow unbounded |
 
 **Why:** The SPEC doesn't specify a maximum concurrent SDRs, but the simulator supports 100. This validates the upper bound before production deployments.
+
+**Pre-flight (follow-up #5, closed):** both R3 tests first run
+`assertR3StackBaseline` (`tests/e2e/resilience/r3_baseline_test.go`):
+soft `RLIMIT_NOFILE` ≥ 512, a live probe allocating 100 UDP sockets
+with 256 KiB read/write buffers, and the kernel maxima
+(`net.core.rmem_max` / `net.core.wmem_max` on Linux;
+`kern.ipc.maxsockbuf` on macOS). An under-provisioned host fails the
+run with the exact remediation instead of failing confusingly
+mid-burst. `TestR3StackBaseline` runs the same checks standalone so a
+deployment host can be validated without the 100-SDR load.
 
 ### 4.10.6 Test R4 — Connection State During Network Instability
 
@@ -984,7 +1008,7 @@ the hub's defense-in-depth.
 | --- | --- | --- |
 | 1 | Connect 500 WebSocket clients simultaneously | All get 101 (hub accepts, within limits) |
 | 2 | Each client sends 100 events/sec for 30 s | 50 k events ingested in 30 s |
-| 3 | Monitor `hub.ClientCount()` | equals live clients (no silent uncounting); enforced max pending (see §8, item 8) |
+| 3 | Monitor `hub.ClientCount()`; connect one client beyond `WS_HUB_MAX_CLIENTS` (default 1024, `0` = unlimited) | Count equals live clients (no silent uncounting); the over-cap upgrade is refused `503` `{"error":…}` before the handshake and its slot reopens on disconnect (§14.3) |
 | 4 | Monitor broadcast queue (hub.go: `broadcast` chan = 256) | No blocking; broadcasts drop when buffer full |
 | 5 | Connect a "rogue" client (no Origin header, mimicking a service) | Accepted (same as non-browser; check auth if any) |
 | 6 | Verify broadcast latency for real clients (< 1 s p95) | Real-time signal updates still timely |
@@ -993,3 +1017,70 @@ the hub's defense-in-depth.
 **Why:** A1 found synchronous `Broadcast()` blocks on slow clients.
 A8 proves the fix: the hub must handle a flood without blocking or
 starving legitimate traffic (H3: availability in a classified environment).
+
+---
+
+## 7. UI E2E Suite Implementation Notes
+
+Status of the Playwright suite in `frontend/tests/e2e/` (WebKit,
+`npx playwright test`).  The Vite dev server on :5173 is started
+automatically by `playwright.config.ts`; the Go services are probed with
+`servicesReady()` and gated suites skip with a clear reason when the
+stack is down.
+
+**Tooling consistency (follow-up #3, closed):** the ad-hoc browser
+validation sweeps previously done through Playwright MCP (WebKit) —
+the UI-BUGCHECK §2/§15 re-verifications — are superseded by this
+automated suite: it drives the same WebKit engine headlessly via
+`npx playwright test`, so manual MCP sessions are no longer needed
+for UI validation. The keyboard contract (§15) and deep-link/canvas
+checks that MCP surfaced (B6–B11) are pinned by 2.1–2.4.
+
+### 7.1 Event injection path
+
+- `postEvent(type, payload)` (Node-side) publishes to the **ws-hub**
+  ingest endpoint, `POST http://localhost:8081/api/events`, and callers
+  assert the `200 {"status":"accepted"}` response.  The **api-gateway
+  has no `/api/events` route** — posting there used to disappear as a
+  silent 404.
+- Hub ingest is **broadcast-only** (§2.2): events are relayed to `/ws`
+  clients and never persisted.  Assertions therefore target live WS
+  delivery and the rendered UI — never `GET /api/signals`, which cannot
+  observe injected events.
+- Payloads are built by `signalPayload()` using the store's schema —
+  frequency is **`freqHz`** (`frontend/src/lib/stores/signals.ts`);
+  a `frequencyHz` key renders as NaN.
+
+### 7.2 What the suite verifies vs. what it fixmes
+
+| Suite | Verifies | fixme (needs real pipeline) |
+| --- | --- | --- |
+| 4.1 full_pipeline | ingest → broadcast → store → table row (new/update/removed) | — |
+| 4.2 recording | `/api/recordings` contract: 200 array, relative `file_path`, metadata | 4.2.1, 4.2.4 (recorder Go suite) |
+| 5.1 settings | settings round-trip with restore; SDR retune + restore | 5.1.3 TTL (signal-processor Go suite) |
+| 7.1 / 8.1 classification | relayed payload fields intact (`freqHz` schema, §6.5 class enum, modulation) + row rendering | 7.1.1 noise floor (classify Go tests, `make smoke-onnx`) |
+| 3.1 / 3.2 / 3.3 gateway | clean 1000 close pass-through (B17), 502 JSON body (§13), 3-client fan-out (§14.3) | — |
+
+The suite never asserts classifier output on values the test itself
+injected; classification accuracy belongs to `internal/classify` tests
+and the ONNX smoke fixture.
+
+### 7.3 Mechanics
+
+- WS frames are observed with an in-page collector
+  (`installWsCollector` + `waitForWsLog` / `messageContaining`); every
+  helper passes data through `page.evaluate` **arguments**, never
+  closures — closures over Node scope throw `ReferenceError` in the
+  browser.
+- Failed handshakes are inspected Node-side with `rawHandshake`
+  (a raw `node:http` upgrade request): the browser hides 502/403
+  responses behind a synthetic 1006 close.
+- CORS (9.2): go-chi/cors denies REST by **omitting** the ACAO headers
+  rather than rejecting; the hard 403 of §17.2 lives on the hub's
+  WebSocket upgrade path and is asserted via `rawHandshake`.
+- `test.skip` conditions must be **synchronous** per Playwright's
+  types; async readiness checks run in `test.beforeAll` and the
+  callback reads the cached flag.
+- The 5.3 static config checks (A3, A4, A8, A13) run under vitest in
+  `frontend/tests/config_files.test.ts` (`npm run test`), not
+  Playwright — they read repo files, no browser involved.

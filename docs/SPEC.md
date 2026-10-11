@@ -1664,6 +1664,18 @@ payload-by-`id` upsert on `new`/`update`, delete on `removed`.
 - Ordering is FIFO per client but **not** guaranteed across
   producers (processor is the only v1 producer, so in practice
   total order holds).
+- **Client cap `[implemented]`** (A8; doc follow-up #8): upgrades
+  beyond `WS_HUB_MAX_CLIENTS` (ws-hub env; default 1024, `0` =
+  unlimited; invalid or negative values fall back to the default so
+  a typo cannot silently remove the guard) are refused with `503`
+  `{"error":"websocket client limit reached"}` **before** the
+  handshake. The gateway's `/ws` relay maps the non-101 upstream to
+  its documented `502` (§2.2), so over-cap browser clients see a
+  clean error and the UI reconnect/backoff applies. Slots are
+  accounted synchronously (atomic CAS) at upgrade time — hub
+  registration itself is asynchronous, so `ClientCount()` alone
+  would race under a connection flood — and released when the
+  client's read loop exits.
 
 ### 14.4 Gap fixes
 
@@ -1972,6 +1984,7 @@ built-in default):
 | signal-processor | `config/signal-processor.yaml` + `config/classifier.yaml` (`-processor-config`/`-classifier-config`); flags `-port/-threshold/-max-peaks/-model` and env `SIGNAL_TTL`, `SDR_CONFIG`, `MODEL_PATH`, `WS_HUB_URL`, `CAPTURE_API_HOST` (§5.6 polling) override |
 | recorder | `config/recorder.yaml` (`-config`); flags `-port/-ws-port/-dir` and env `RECORDER_UDP_PORT`, `RECORDER_WS_PORT`, `RECORDER_TFR_PORT`, `RECORDINGS_DIR`, `WS_HUB_URL` (§10.6 `audio.level` publisher; unset = disabled) override |
 | api-gateway | env `RECORDINGS_DIR`, `ALLOWED_ORIGINS` (CORS allowlist, §17.2), `WS_HUB_ADDR` (`/ws` relay, §2.2), `RECORDER_WS_ADDR` (`/ws/audio` relay, §10.4), `CAPTURE_CTRL_ADDR` (control proxy, §7.4), `CONFIG_DIR` (writable config dir backing the setup screen, §20) |
+| ws-hub | env `WS_HUB_MAX_CLIENTS` (client cap, §14.3), `ALLOWED_ORIGINS` (WS origin check, §17.2); flag `-port` |
 
 **Target:** the YAML files in `config/` are the **single source of
 truth**; each service loads its own file (flags/env remain as

@@ -21,6 +21,7 @@ func TestMultiSDRConcurrentSignals(t *testing.T) {
 		t.Skip("No services running")
 	}
 	ensureAllServicesUp(t)
+	assertR3StackBaseline(t)
 
 	// Step 1: Start 100 concurrent SDR signals spanning 50 MHz (1 MHz apart, 480–530 MHz).
 	// Step 2: Send 500 frames of mixed CW, WFM, noise in 5 batches of 100.
@@ -168,6 +169,7 @@ func TestMultiSDRMixedTraffic(t *testing.T) {
 		t.Skip("No services running")
 	}
 	ensureAllServicesUp(t)
+	assertR3StackBaseline(t)
 
 	// Send 30 mixed-type signals concurrently.
 	var wg sync.WaitGroup

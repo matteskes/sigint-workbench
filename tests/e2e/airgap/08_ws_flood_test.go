@@ -4,6 +4,7 @@ package airgap
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -167,14 +168,30 @@ func TestA8_TimeoutBehavior(t *testing.T) {
 // it unregisters on read error").
 type floodHarness struct {
 	hub  *ws.Hub
+	gate *ws.ClientLimiter // admission cap; nil = unlimited
 	srv  *httptest.Server
 	pend chan *websocket.Conn
 }
 
 // newFloodHarness starts a hub + httptest server that upgrades /ws,
 // registers every client, and hands the server-side conn to the test.
+// No admission cap (A8 steps 1/2 want every connection admitted).
 func newFloodHarness(t *testing.T) *floodHarness {
+	return newFloodHarnessCapped(t, 0)
+}
+
+// newFloodHarnessCapped is newFloodHarness with a WS_HUB_MAX_CLIENTS-
+// style admission cap (A8 step 3 / §14.3): upgrades past max are
+// refused with 503 before the handshake, exactly like the production
+// handleWS. Each admitted conn holds its slot until the server-side
+// conn closes — the drain goroutine below mirrors the hub contract
+// that the caller owns the read loop.
+func newFloodHarnessCapped(t *testing.T, max int) *floodHarness {
 	hub := ws.NewHub()
+	var gate *ws.ClientLimiter
+	if max > 0 {
+		gate = ws.NewClientLimiter(max)
+	}
 	pend := make(chan *websocket.Conn, 1024)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter,
 		r *http.Request) {
@@ -182,14 +199,33 @@ func newFloodHarness(t *testing.T) *floodHarness {
 			http.Error(w, "expected /ws", http.StatusNotFound)
 			return
 		}
+		if gate != nil && !gate.Acquire() {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			w.Write([]byte(`{"error":"websocket client limit reached"}`))
+			return
+		}
 		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
 		if err != nil {
+			if gate != nil {
+				gate.Release()
+			}
 			return
 		}
 		hub.Register(conn)
 		pend <- conn
+		if gate != nil {
+			go func() {
+				defer gate.Release()
+				for {
+					if _, _, err := conn.ReadMessage(); err != nil {
+						return
+					}
+				}
+			}()
+		}
 	}))
-	h := &floodHarness{hub: hub, srv: srv, pend: pend}
+	h := &floodHarness{hub: hub, gate: gate, srv: srv, pend: pend}
 	go hub.Run()
 	t.Cleanup(srv.Close)
 	return h
@@ -462,6 +498,7 @@ func TestA8_StalledClientEviction(t *testing.T) {
 			h.hub.Broadcast(ws.Event{Type: "signal.update", Payload: payload})
 		}
 	}()
+
 	// The rogue's queue fills and write deadline expires; it (and
 	// possibly a few other slow clients) get evicted.
 	for {
@@ -499,4 +536,65 @@ func TestA8_StalledClientEviction(t *testing.T) {
 	}
 	t.Logf("A8 steps 5/6: live reader saw the marker post-eviction; ClientCount = %d",
 		h.hub.ClientCount())
+}
+
+// TestA8_Step3_ClientCapEnforced — A8 step 3 / §14.3 (follow-up #8):
+// upgrades beyond the configured client cap are refused with 503 + a
+// D10 error body BEFORE the handshake (no 101, no registration), and
+// a released slot is immediately reusable — the cap stays exact under
+// churn instead of silently uncounting.
+func TestA8_Step3_ClientCapEnforced(t *testing.T) {
+	const capN = 2
+	h := newFloodHarnessCapped(t, capN)
+	url := "ws" + strings.TrimPrefix(h.srv.URL, "http") + "/ws"
+
+	// Fill the hub to capacity — all upgrades within the cap pass.
+	conns := make([]*floodConn, capN)
+	for i := 0; i < capN; i++ {
+		c := h.connectFloodClient(t, true)
+		if c == nil {
+			t.Fatalf("client %d rejected within cap %d", i, capN)
+		}
+		conns[i] = c
+	}
+	t.Cleanup(func() { shutdownFlood(t, h, conns) })
+	floodWaitCount(t, h, capN, 5*time.Second)
+
+	// The next upgrade is refused: 503 + {"error":...}, not a 101.
+	dialer := websocket.Dialer{HandshakeTimeout: 5 * time.Second}
+	_, resp, err := dialer.Dial(url, nil)
+	if err == nil {
+		t.Fatalf("upgrade past cap %d must be refused", capN)
+	}
+	if resp == nil {
+		t.Fatalf("refusal must carry an HTTP response: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("over-cap upgrade → %d, want 503 (%.200s)", resp.StatusCode, body)
+	}
+	var m map[string]any
+	if json.Unmarshal(body, &m) != nil || m["error"] == nil {
+		t.Fatalf("refusal body = %.200s, want D10 {\"error\":...}", body)
+	}
+	if got := h.hub.ClientCount(); got != capN {
+		t.Fatalf("rejected client must not register: ClientCount = %d, want %d",
+			got, capN)
+	}
+	t.Logf("A8 step 3: over-cap upgrade refused with %d + error body; "+
+		"ClientCount stays %d", http.StatusServiceUnavailable, capN)
+
+	// Release one slot (disconnect + unregister); the cap opens and
+	// the next client is admitted again.
+	_ = conns[0].client.Close()
+	h.hub.Unregister(conns[0].server)
+	floodWaitCount(t, h, capN-1, 5*time.Second)
+	c := h.connectFloodClient(t, true)
+	if c == nil {
+		t.Fatal("dial after slot release must succeed")
+	}
+	conns[0] = c
+	floodWaitCount(t, h, capN, 5*time.Second)
+	t.Log("A8 step 3: released slot reusable — cap enforced without leaks")
 }
