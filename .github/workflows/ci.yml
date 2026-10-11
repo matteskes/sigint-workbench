@@ -122,7 +122,16 @@ jobs:
 
       - name: Type check
         working-directory: frontend
-        run: npx svelte-check --tsconfig ./tsconfig.json
+        run: |
+          npx svelte-check --tsconfig ./tsconfig.json
+          # playwright.config.ts sits outside the SvelteKit program
+          # (its generated include covers only vite.config), so a type
+          # error there ships blind — proven live with a deliberate
+          # error svelte-check reported as 0. tsconfig.e2e.json type-
+          # checks it and pins tests/e2e under an explicit config
+          # (node types, no SvelteKit aliases) so coverage does not
+          # depend on SvelteKit template drift.
+          npx tsc -p ./tsconfig.e2e.json
 
   # ─── Markdown lint ───
   markdown:
