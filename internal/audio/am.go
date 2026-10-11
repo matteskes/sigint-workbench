@@ -8,8 +8,8 @@ import (
 
 // AMDemodulator demodulates AM (DSB-FC) and SSB (upper/lower sideband) signals.
 type AMDemodulator struct {
-	AudioRate   uint32 // Output audio sample rate (default 48000)
-	SSBMode     string // "", "upper", or "lower"
+	AudioRate uint32 // Output audio sample rate (default 48000)
+	SSBMode   string // "", "upper", or "lower"
 }
 
 // NewAMDemodulator creates an AM demodulator.

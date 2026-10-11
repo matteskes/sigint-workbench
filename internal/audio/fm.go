@@ -8,9 +8,9 @@ import (
 
 // FMDemodulator demodulates WFM (25 kHz deviation) and NFM (2.5/5 kHz deviation) signals.
 type FMDemodulator struct {
-	DeviationHz  float64 // Frequency deviation (25000 for WFM, 2500/5000 for NFM)
-	AudioRate    uint32  // Output audio sample rate (default 48000)
-	AudioCutoff  float64 // Audio low-pass cutoff in Hz (default 3400)
+	DeviationHz float64 // Frequency deviation (25000 for WFM, 2500/5000 for NFM)
+	AudioRate   uint32  // Output audio sample rate (default 48000)
+	AudioCutoff float64 // Audio low-pass cutoff in Hz (default 3400)
 }
 
 // NewFMDemodulator creates an FM demodulator for the given deviation.
@@ -89,7 +89,7 @@ func (f *FMDemodulator) Demodulate(iq []complex64, sampleRate uint32) ([]float32
 		re2, im2 := real(iq[i]), imag(iq[i])
 
 		// Cross-product phase difference (avoids atan2 for speed)
-		cross := im2*re1-re2*im1
+		cross := im2*re1 - re2*im1
 		dot := re2*re1 + im2*im1
 		dPhase := math.Atan2(float64(cross), float64(dot))
 

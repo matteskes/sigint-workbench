@@ -18,6 +18,17 @@ jobs:
           go-version: "1.25"
           cache: true
 
+      - name: gofmt (format gate)
+        # Hand-written formatting drifts silently; CI owns the canonical
+        # `gofmt -l` answer so review diffs stay formatting-only.
+        run: |
+          unformatted="$(gofmt -l . || true)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::Files needing gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+
       - name: go vet
         run: go vet ./...
 

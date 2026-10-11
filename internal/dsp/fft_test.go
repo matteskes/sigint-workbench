@@ -140,7 +140,7 @@ func TestComputeIQFFT_NegativeOffset(t *testing.T) {
 	sampleRate := uint32(4_800_000)
 	const n = 4096
 	df := float64(sampleRate) / float64(n) // 1000 Hz
-	const tone = -100_000.0 // exactly on bin 3996 (nfft - 100)
+	const tone = -100_000.0                // exactly on bin 3996 (nfft - 100)
 
 	iq := make([]float64, n*2)
 	for i := 0; i < n; i++ {

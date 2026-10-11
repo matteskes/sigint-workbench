@@ -35,8 +35,8 @@ type SDR interface {
 
 // SDRMetadata describes a physical SDR device.
 type SDRMetadata struct {
-	ID      string `json:"id" yaml:"id"`         // Logical ID, e.g. "rtlsdr-0"
-	Model   string `json:"model" yaml:"model"`   // Hardware model, e.g. "RTL2832U"
+	ID      string `json:"id" yaml:"id"`       // Logical ID, e.g. "rtlsdr-0"
+	Model   string `json:"model" yaml:"model"` // Hardware model, e.g. "RTL2832U"
 	Serial  string `json:"serial,omitempty" yaml:"serial,omitempty"`
 	FreqMin uint64 `json:"freqMin" yaml:"freqMin"` // Minimum frequency in Hz
 	FreqMax uint64 `json:"freqMax" yaml:"freqMax"` // Maximum frequency in Hz

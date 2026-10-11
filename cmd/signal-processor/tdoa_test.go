@@ -305,7 +305,7 @@ func TestTDOAEngineIgnoresV1(t *testing.T) {
 				SampleRate:  2_400_000,
 				Timestamp:   t0.Add(time.Duration(k) * 427 * time.Microsecond),
 				Samples:     make([]int16, 2048),
-				Seq:         uint64(k),     // v1: decoders leave these 0
+				Seq:         uint64(k),        // v1: decoders leave these 0
 				SampleIndex: uint64(k * 1024), // …and Feed must not care
 			}
 			f.V2 = false // classic §4.1 frame

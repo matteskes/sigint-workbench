@@ -102,4 +102,3 @@ func TestClientLimiterHeldSlotsExactUnderContention(t *testing.T) {
 		t.Fatalf("active = %d after all releases, want 0", got)
 	}
 }
-

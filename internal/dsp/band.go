@@ -3,11 +3,11 @@ package dsp
 
 // Band represents a known frequency band.
 type Band struct {
-	Name      string  `json:"name"`
-	FreqMin   uint64  `json:"freqMin"` // Hz
-	FreqMax   uint64  `json:"freqMax"` // Hz
-	Category  string  `json:"category"`
-	Notes     string  `json:"notes,omitempty"`
+	Name     string `json:"name"`
+	FreqMin  uint64 `json:"freqMin"` // Hz
+	FreqMax  uint64 `json:"freqMax"` // Hz
+	Category string `json:"category"`
+	Notes    string `json:"notes,omitempty"`
 }
 
 // KnownBands is a table of common RF bands.

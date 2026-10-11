@@ -148,8 +148,8 @@ func TestONNXInferenceEndToEnd(t *testing.T) {
 }
 
 const (
-	e2eSampleRate   = 4_096_000
-	e2eNFFT         = 4096
+	e2eSampleRate = 4_096_000
+	e2eNFFT       = 4096
 	// e2eNoiseFloorDB matches models/train.py NOISE_FLOOR_DB: 1e-6
 	// per-sample noise power -> floor ~ 10*log10(NFFT * 1e-6).
 	e2eNoiseFloorDB = -23.876

@@ -8,10 +8,10 @@ import (
 
 // SignalLocation represents a signal's estimated geographic position.
 type SignalLocation struct {
-	Lat      float64   `json:"lat"`
-	Lon      float64   `json:"lon"`
-	Accuracy float64   `json:"accuracy"` // meters
-	Method   string    `json:"method"`   // "sdr_position", "tdoa", "aoa", "user"
+	Lat       float64   `json:"lat"`
+	Lon       float64   `json:"lon"`
+	Accuracy  float64   `json:"accuracy"` // meters
+	Method    string    `json:"method"`   // "sdr_position", "tdoa", "aoa", "user"
 	Timestamp time.Time `json:"timestamp"`
 }
 
@@ -63,7 +63,7 @@ func (t *Track) updateMovement() {
 	dLat := (curr.Lat - prev.Lat) * (3.14159265 / 180)
 	dLon := (curr.Lon - prev.Lon) * (3.14159265 / 180)
 	a := sin(dLat/2)*sin(dLat/2) +
-		cos(prev.Lat*3.14159265/180)*cos(curr.Lat*3.14159265/180) *
+		cos(prev.Lat*3.14159265/180)*cos(curr.Lat*3.14159265/180)*
 			sin(dLon/2)*sin(dLon/2)
 	c := 2 * atan2(sqrt(a), sqrt(1-a))
 	distanceKm := 6371 * c // Earth radius in km
@@ -75,10 +75,10 @@ func (t *Track) updateMovement() {
 
 // Verification result from two-SDR cross-check.
 type Verification struct {
-	SignalID     string  `json:"signalId"`
-	Verified     bool    `json:"verified"`
-	SDR1         string  `json:"sdr1"`
-	SDR2         string  `json:"sdr2"`
-	Confidence   float64 `json:"confidence"`
-	Timestamp    time.Time `json:"timestamp"`
+	SignalID   string    `json:"signalId"`
+	Verified   bool      `json:"verified"`
+	SDR1       string    `json:"sdr1"`
+	SDR2       string    `json:"sdr2"`
+	Confidence float64   `json:"confidence"`
+	Timestamp  time.Time `json:"timestamp"`
 }

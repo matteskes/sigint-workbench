@@ -569,4 +569,3 @@ func TestIntegrationTDOAQuality(t *testing.T) {
 		t.Errorf("list path quality fields: pairs=%v reference=%v", found.PairsUsed, found.Reference)
 	}
 }
-

@@ -20,8 +20,8 @@ const defaultVoiceBandwidthHz = 3000.0
 
 // SSBDemodulator demodulates USB/LSB single-sideband signals.
 type SSBDemodulator struct {
-	AudioRate      uint32 // Output audio sample rate (default 48000)
-	Sideband       string // "upper"/"usb" (USB) or "lower"/"lsb" (LSB)
+	AudioRate      uint32  // Output audio sample rate (default 48000)
+	Sideband       string  // "upper"/"usb" (USB) or "lower"/"lsb" (LSB)
 	VoiceBandwidth float64 // Audio bandwidth in Hz (default 3000)
 }
 

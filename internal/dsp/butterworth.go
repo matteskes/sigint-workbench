@@ -54,14 +54,14 @@ func designSecondOrder(kind FilterKind, f0, q, fs float64) Biquad {
 	var b0, b1, b2, a0, a1, a2 float64
 	switch kind {
 	case Lowpass:
-		b0, b1, b2 = (1-cosW)/2, 1 - cosW, (1-cosW)/2
-		a0, a1, a2 = 1+alpha, -2*cosW, 1 - alpha
+		b0, b1, b2 = (1-cosW)/2, 1-cosW, (1-cosW)/2
+		a0, a1, a2 = 1+alpha, -2*cosW, 1-alpha
 	case Highpass:
 		b0, b1, b2 = (1+cosW)/2, -(1 + cosW), (1+cosW)/2
-		a0, a1, a2 = 1+alpha, -2*cosW, 1 - alpha
+		a0, a1, a2 = 1+alpha, -2*cosW, 1-alpha
 	case Bandpass:
 		b0, b1, b2 = alpha, 0, -alpha
-		a0, a1, a2 = 1+alpha, -2*cosW, 1 - alpha
+		a0, a1, a2 = 1+alpha, -2*cosW, 1-alpha
 	}
 	return Biquad{b0: b0 / a0, b1: b1 / a0, b2: b2 / a0, a1: a1 / a0, a2: a2 / a0}
 }

@@ -105,13 +105,13 @@ func TestSSBDemodulate_SidebandRejection(t *testing.T) {
 	// rejection ratio.
 	usbWanted := ssbSelectBand(ssbTone(true), ssbTestSR, true, 3000)
 	usbRejected := ssbSelectBand(ssbTone(false), ssbTestSR, true, 3000)
-	if db := 20 * math.Log10(rmsF64(usbRejected) / rmsF64(usbWanted)); db > minRejectionDB {
+	if db := 20 * math.Log10(rmsF64(usbRejected)/rmsF64(usbWanted)); db > minRejectionDB {
 		t.Errorf("USB filter rejects LSB tone at %.1f dB, want <= %.1f dB", db, minRejectionDB)
 	}
 
 	lsbWanted := ssbSelectBand(ssbTone(false), ssbTestSR, false, 3000)
 	lsbRejected := ssbSelectBand(ssbTone(true), ssbTestSR, false, 3000)
-	if db := 20 * math.Log10(rmsF64(lsbRejected) / rmsF64(lsbWanted)); db > minRejectionDB {
+	if db := 20 * math.Log10(rmsF64(lsbRejected)/rmsF64(lsbWanted)); db > minRejectionDB {
 		t.Errorf("LSB filter rejects USB tone at %.1f dB, want <= %.1f dB", db, minRejectionDB)
 	}
 }

@@ -56,13 +56,13 @@ func TestEncodeWAV_Header(t *testing.T) {
 	readU32(36 + uint32(len(samples)*2)) // RIFF chunk size
 	readTag("WAVE")
 	readTag("fmt ")
-	readU32(16) // fmt chunk size
-	readU16(1)  // PCM
-	readU16(1)  // mono
-	readU32(sr) // sample rate
+	readU32(16)     // fmt chunk size
+	readU16(1)      // PCM
+	readU16(1)      // mono
+	readU32(sr)     // sample rate
 	readU32(sr * 2) // byte rate (1 ch * 16 bit)
-	readU16(2)  // block align
-	readU16(16) // bits per sample
+	readU16(2)      // block align
+	readU16(16)     // bits per sample
 	readTag("data")
 	readU32(uint32(len(samples) * 2))
 
@@ -94,7 +94,7 @@ func TestFloat32ToPCM16(t *testing.T) {
 		{-0.5, -16383},
 		{1.0, 32767},
 		{-1.0, -32767},
-		{2.0, 32767},  // clipped to max
+		{2.0, 32767},   // clipped to max
 		{-2.0, -32768}, // clipped to min
 	}
 	out := Float32ToPCM16(make([]float32, len(cases)))

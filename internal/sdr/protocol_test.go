@@ -102,10 +102,10 @@ func TestIQFrame_Decode_BadMagic(t *testing.T) {
 
 func TestIQFrame_Decode_TruncatedPayload(t *testing.T) {
 	buf := make([]byte, IQHeaderSize+4) // only 1 pair worth of payload
-	buf[0] = 0x53 // S
-	buf[1] = 0x44 // D
-	buf[2] = 0x52 // R
-	buf[3] = 0x31 // 1
+	buf[0] = 0x53                       // S
+	buf[1] = 0x44                       // D
+	buf[2] = 0x52                       // R
+	buf[3] = 0x31                       // 1
 	// Set SampleCnt = 10 but only have room for 1
 	buf[32] = 10
 	buf[33] = 0

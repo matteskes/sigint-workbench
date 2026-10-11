@@ -10,7 +10,7 @@ import (
 // Registry manages available demodulators and selects the right one
 // for a given modulation type.
 type Registry struct {
-	mu          sync.RWMutex
+	mu           sync.RWMutex
 	demodulators []Demodulator
 }
 
