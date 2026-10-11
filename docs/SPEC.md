@@ -74,7 +74,12 @@ The system consists of **six application services**:
 6. `ws-hub` — internal event broadcast fan-out (not client-facing).
 
 Infrastructure (not application services): `db` (PostGIS), `tiles`
-(tileserver-gl), `frontend` (nginx-served SvelteKit SPA).
+(tileserver-gl), `frontend` (nginx-served SvelteKit SPA).  The served
+tileset is `tiles/data/v3.mbtiles` — the filename stem is the
+tileserver-gl source id (`v3`) hardcoded by the frontend
+(`map/config.ts`) and the e2e tile test (6.1.1); the air-gap supply
+pipeline replaces it in place (single active tileset — E2E-TEST-SUITE
+§4.11.A5).
 
 The tree ships exactly the six service binaries above (D2 complete;
 the former `classifier`/`location-service` stubs and their compose

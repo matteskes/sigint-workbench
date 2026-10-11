@@ -688,6 +688,12 @@ Tests map to SPEC sections as follows:
 | A7 — Disk Exhaustion | §4.11, H3 (graceful) | `[implemented]` |
 | A8 — WS Flood Resilience | §14.3 (fan-out + client cap), H3, A1 (hub broadcast) | `[implemented]` |
 
+Id spaces in the refs column: `A1`–`A8` name the §4.11 air-gap tests
+(Test 4.11.A1–A8); a parenthesized `A1`–`A23` citation (e.g. row A8's
+"A1 (hub broadcast)") points at the STACK-AUDIT findings of §3; `H3`
+is the §4.11 air-gap hazard class, not the SPEC's locked decisions
+`H1`–`H3` (§15.5).
+
 ---
 
 ## 8. Open Follow-Ups
@@ -879,6 +885,13 @@ supplied via a **supply machine** (one networked host), transferred
 physically, and the target system booted and operated entirely offline.
 The single escape hatch is **tile downloads** — the only network call
 an air-gapped installation may make, mediated through a supply machine.
+
+**Hazard notation:** the `H3` tags in this section are this document's
+air-gap hazard class — *classified-environment operation* (maximum
+isolation of the escape hatch, unattended operation, graceful
+degradation under contention). They are unrelated to the SPEC's locked
+decisions `H1`–`H3` (the SPEC's H3 is the Heimdall DAQ front end,
+§15.5).
 
 ### Test 4.11.A1 — Network Isolation Verification
 
