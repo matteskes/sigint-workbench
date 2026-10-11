@@ -47,6 +47,7 @@ type Server struct {
 	recorderAPI    string          // recorder host:port for the TFR proxy (§19.3)
 	captureCtrl    string          // sdr-capture host:port for the control-API proxy (§7.4)
 	settings       *settings.Store // §20 setup screen store (writable config mount)
+	limiter        *rateLimiter    // per-client REST rate limit (R8, §4.10.10); nil = disabled
 }
 
 // NewServer creates a new API server.
@@ -84,6 +85,7 @@ func NewServer(database *db.DB, log zerolog.Logger) *Server {
 		recorderAPI:    recAPI,
 		captureCtrl:    capAddr,
 		settings:       settings.NewStore(cfgDir),
+		limiter:        newRateLimiterFromEnv(log),
 	}
 	s.buildRoutes()
 	return s
@@ -105,6 +107,14 @@ func (s *Server) buildRoutes() {
 		AllowCredentials: false,
 		MaxAge:           300,
 	}))
+
+	// Per-client REST rate limit (R8, §4.10.10) — after CORS so 429s
+	// still traverse the origin policy, before every route handler. The
+	// middleware itself no-ops for non-/api paths and when the limiter
+	// is nil (RATE_LIMIT_RPS=0).
+	if s.limiter != nil {
+		s.router.Use(s.rateLimit)
+	}
 
 	// Health check
 	s.router.Get("/health", func(w http.ResponseWriter, r *http.Request) {

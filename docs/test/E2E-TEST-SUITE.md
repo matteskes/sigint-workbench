@@ -672,7 +672,7 @@ Tests map to SPEC sections as follows:
 | R5 — PostGIS Schema Compliance | §16 (data model), db/init.sql + 5 migrations | `[implemented]` |
 | R6 — SNR Boundary Detection | §6.5 (class confidence), B4 (confidence guardrails) | `[implemented]` |
 | R7 — Device Unplug Lifecycle | §4.4 (read backoff), simulator `SetHardwareState()` API | `[implemented]` |
-| R8 — API Rate Limit | §13 (gateway API), §4.10.10 | `[gap]` |
+| R8 — API Rate Limit | §13 (gateway API), §4.10.10 | `[implemented]` |
 | A1 — Network Isolation | §4.11 (air-gap pre-flight) | `[implemented]` |
 | A2 — ONNX Telemetry Block | §4.11 (no outbound telemetry) | `[implemented]` |
 | A3 — Offline Asset Check | §4.11 (supply chain) | `[implemented]` |
@@ -690,16 +690,16 @@ Tests map to SPEC sections as follows:
 2. **CI confirmation of the `markdown` job** — confirm markdownlint returns green on the next push (STACK-AUDIT A23).
 3. **Test data fixtures** — Synthetic IQ frame generators exist in `cmd/smoke-frames` and `internal/classify/onnx_ort_test.go`. Reuse these for frontend e2e tests where UI-level IQ injection is needed.
 4. **R5 seed data** — Create a fixture script to insert realistic signal coordinates (Arizona bounds from B3) into the database for UI tests, avoiding the `bounds: 0` tile problem that previously pushed the map to the mid-Atlantic.
-5. **R8 rate limiting** — implement per-client rate limiting (token
-   bucket, `429` + `Retry-After`) in the api-gateway and add the Test R8
-   suite (§4.10.10); the gateway applies no rate limiting today.
 
 Closed from this list: **Playwright MCP integration** — the automated
 Chromium Playwright suite supersedes ad-hoc MCP UI validation (§7,
 tooling note); **R3 baseline** — `assertR3StackBaseline` pre-flight
 (fd limit + socket buffers) now guards both R3 tests (§4.10.5);
 **hub client cap** — `WS_HUB_MAX_CLIENTS` is enforced at the hub's
-upgrade handler and asserted in A8 step 3 (§4.11/A8; §14.3).
+upgrade handler and asserted in A8 step 3 (§4.11/A8; §14.3);
+**R8 rate limiting** — per-client token bucket shipped in the
+api-gateway (`429` + `Retry-After`, `RATE_LIMIT_RPS`/`RATE_LIMIT_BURST`;
+§4.10.10).
 
 ### 4.10.3 Test R1 — Service Restart Resilience (B5 extension)
 
@@ -831,7 +831,7 @@ nothing else about unplug behavior. This drives the simulator
 end-to-end and pins the 200 ms backoff contract the SPEC relies on,
 including rapid flapping without state corruption.
 
-### 4.10.10 Test R8 — API Rate Limit Behavior `[gap]`
+### 4.10.10 Test R8 — API Rate Limit Behavior `[implemented]`
 
 *Scenario: the API gateway enforces per-client rate limits on
 high-frequency endpoints; abusive clients get 429, not a stalled
@@ -845,11 +845,22 @@ or starved service.*
 | 4 | A second client stays under its limit | unaffected (per-client) |
 
 **Why:** high-frequency polling is the gateway's main load; without
-per-client limits one abusive UI or scraper can starve the rest. The
-contract is not met: no test exists and the gateway applies no
-per-client rate limiting (no 429 handling in `cmd/api-gateway/` or
-`internal/api/`). Add a per-client token-bucket middleware and the
-suite above, then flip this row to `[implemented]`.
+per-client limits one abusive UI or scraper can starve the rest.
+`[implemented]` — `internal/api/ratelimit.go`: a per-IP token bucket
+chi middleware mounted after CORS, scoped to `/api/*` only (`/health`
+probes and the `/ws` relays are exempt by design), answering
+`429` + integer `Retry-After`, with idle-bucket eviction and an
+injectable clock for deterministic tests. Steps 1–3 run in
+`frontend/tests/e2e/r8_rate_limit.test.ts` (Node-side, DB-state
+agnostic: the within-rate steps assert the limiter's admission
+decision, not handler success). Step 4 cannot be exercised from
+Playwright — every request the suite can originate, Node fetch and
+browser alike, leaves from 127.0.0.1 and lands in one gateway bucket —
+so it is covered hermetically in Go instead
+(`internal/api/ratelimit_test.go`, `TestRateLimiterPerClientIsolation`,
+per the §7.2 precedent). Knobs: `RATE_LIMIT_RPS` / `RATE_LIMIT_BURST`
+(stock defaults 50/100, sized so the dashboard's polling and every
+other test suite never trip it; `RATE_LIMIT_RPS=0` disables).
 
 ## 4.11 Category: Air-Gap & Security Hardening (§4.11)
 

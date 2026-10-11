@@ -1560,6 +1560,13 @@ General contract:
   `/health` still answers). The check is a cached short-TTL liveness
   probe, so a database that dies after startup answers `503` too —
   not the handlers' query errors as `500`.
+- **Per-client rate limit (R8, §4.10.10)**: a token bucket keyed on
+  the client IP (`RATE_LIMIT_RPS`, default 50 req/s; `RATE_LIMIT_BURST`,
+  default 100) guards every `/api/*` route; exhaustion answers
+  `429` + integer `Retry-After`, and the client is re-admitted once it
+  respects the header. `/health` and the `/ws` relays are exempt —
+  the scope is REST polling. `RATE_LIMIT_RPS=0` disables limiting;
+  invalid values fall back to the defaults (fail-safe).
 - DB-backed handlers run with a **5 s** request timeout; expiry
   surfaces as `500`.
 - CORS: origins from the `ALLOWED_ORIGINS` env (comma-separated;
