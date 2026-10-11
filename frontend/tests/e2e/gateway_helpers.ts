@@ -129,19 +129,24 @@ export async function pipelineActive(): Promise<boolean> {
  * list from its own database, so it answers 200 with the recorder
  * stopped — the first e2e-ui CI run stopped the recorder container for
  * phase 2 and every 502 test still skipped (the tests had never
- * actually run anywhere).  Probe the proxied `/ws/audio` upgrade
- * instead: §13 maps an unreachable recorder to **502** on that route,
- * while a live recorder answers the handshake itself (4xx for a bad
- * signal id, 101 for a good one).  A down gateway surfaces as a thrown
- * handshake — the describe-level servicesReady() gate already covers
- * that case for callers inside a gated file.
+ * actually run anywhere).  The proxied `/ws/audio` upgrade is the
+ * honest probe, with one twist found on the next CI run: the gateway's
+ * relay maps ANY failed upstream handshake to the same 502 "recorder
+ * unreachable" — including a live recorder's 400 for a malformed
+ * signal id — so the probe must send a well-formed UUID, which the
+ * recorder's format check (internal/record/ws_server.go) accepts
+ * before upgrading.  Then the verdict is unambiguous: live recorder ⇒
+ * 101 through the gateway; dead recorder ⇒ the gateway's dial fails
+ * ⇒ 502.  A down gateway surfaces as a thrown handshake — the
+ * describe-level servicesReady() gate already covers that case for
+ * callers inside a gated file.
  */
 export async function recorderReady(): Promise<boolean> {
   try {
     const { status } = await rawHandshake(
-      `${GATEWAY_HTTP}/ws/audio?signal=recorder-probe`
+      `${GATEWAY_HTTP}/ws/audio?signal=${crypto.randomUUID()}`
     );
-    return status !== 502;
+    return status === 101;
   } catch {
     return false; // gateway itself unreachable → recorder not reachable
   }

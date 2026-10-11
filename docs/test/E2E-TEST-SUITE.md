@@ -1090,10 +1090,13 @@ flood-gate and the recorder is deliberately up.
 anyway.**  `recorderReady()` probed `GET /api/recordings`, which the
 gateway answers from its own database, so the probe reported
 "recorder up" with the recorder container stopped; the three 502
-tests had never actually executed anywhere.  The probe now exercises
-the proxied `/ws/audio` upgrade itself — 502 ⇒ recorder down,
-anything else (4xx bad-signal rejection, 101) ⇒ up — so phase 2 runs
-its three tests for real.
+tests had never actually executed anywhere.  Probing the proxied
+`/ws/audio` upgrade fixed that, with a second twist found on the
+next run: the gateway maps ANY failed upstream handshake — a live
+recorder's 400 for a malformed signal id included — to the same
+502, so the probe sends a well-formed UUID (the recorder's format
+check passes, it upgrades) and reads the verdict off the upgrade
+itself: 101 ⇒ recorder up, 502 ⇒ down.
 
 ### 7.1 Event injection path
 
