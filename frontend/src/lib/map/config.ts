@@ -8,8 +8,6 @@ const TILE_URL =
 const FONTS_URL =
 	import.meta.env.VITE_FONTS_URL ?? 'http://localhost:8082/fonts/{fontstack}/{range}.pbf';
 
-export { TILE_URL, FONTS_URL };
-
 // Dark basemap style for the MapLibre map
 export const mapStyle: StyleSpecification = {
 	version: 8,

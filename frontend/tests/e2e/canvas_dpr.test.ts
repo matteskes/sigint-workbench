@@ -7,102 +7,101 @@ import { test, expect } from '@playwright/test';
  * device resolution (devicePixelRatio 2 on Retina MacBooks).  A fixed-
  * size bitmap stretched by CSS smears every label into unreadable mush.
  *
+ * SpectrumView (§18.3) mounts three canvases: the spectrum **line**, the
+ * **waterfall** heatmap, and the **tick** strip.  Line + tick carry text
+ * and are sized by `fitCanvas()` to CSS box × devicePixelRatio at draw
+ * time (the rAF loop draws with a null frame before any data arrives, so
+ * no live spectrum feed is needed).  The waterfall intentionally keeps
+ * its native bins × rows bitmap — stretching that one is the point.
+ *
  * Requirements: the frontend dev server is running at `localhost:5173`.
  */
-test.describe('Canvas DPR 2 rendering (§2.1, B9)', () => {
-	test('waterfall axis labels render at native resolution', async ({ page }) => {
+test.describe('Canvas mounting (§2.1)', () => {
+	const LINE = 'canvas[aria-label^="Spectrum line"]';
+	const WATERFALL = 'canvas[aria-label^="Waterfall"]';
+	// The tick canvas is the only one without an aria-label.
+	const TICK = 'canvas:not([aria-label])';
+
+	test('waterfall, line and tick canvases mount with valid bitmaps', async ({
+		page,
+	}) => {
 		await page.goto('/spectrum');
 
-		// Wait for the SpectrumView component to mount (it shows "waiting
-		// for frames…" until real data arrives — that's fine, we just need
-		// the canvas element to exist).
-		const canvases = page.locator('canvas');
-		await expect(canvases.first()).toBeAttached({ timeout: 10_000 });
-
-		// ── Canvas DPR check ──────────────────────────────────────────
-		// On a Retina display (devicePixelRatio 2), the canvas width
-		// should be ~2× the CSS display width — that's how SvelteKit's
-		// `fitCanvas()` (SpectrumView.svelte line ~95) handles DPR.
-		const dprCheck = await canvases.first()
-			.evaluate((el) => {
-				const canvas = el as HTMLCanvasElement;
-				const style = window.getComputedStyle(canvas);
-				const cssWidth = parseFloat(style.width);
-				return cssWidth > 0 ? canvas.width / cssWidth : -1;
-			});
-
-		// The DPR may be 1 (non-Retina CI) or 2 (MacBook Retina).  Both
-		// are valid — we just assert the canvas is _not_ a fixed-size
-		// bitmap stretched by CSS (which would give DPR ≈ 1).
-		expect(dprCheck).toBeGreaterThanOrEqual(1);
-		expect(dprCheck).toBeLessThanOrEqual(3);
-
-		// ── Tick (frequency-label) canvas ─────────────────────────────
-		// SpectrumView renders 3 canvases: line (spectrum trace),
-		// waterfall (heatmap), and tick (frequency labels).  The tick
-		// canvas is the one that carries text, so it gets fitCanvas().
-		const tickCanvases = page.locator('canvas.tick');
-		// The tick canvas may not have a class in all versions, so just
-		// check that at least one canvas has reasonable DPR.
-		const allCanvases = await page.locator('canvas').all();
-		expect(allCanvases.length).toBeGreaterThanOrEqual(2); // line + waterfall
-
-		// For each canvas, verify that width / clientWidth is within
-		// a reasonable DPR range (1–3).
-		for (const canvas of allCanvases) {
-			const ratio = await canvas.evaluate((el) => {
-				const canvas = el as HTMLCanvasElement;
-				const style = window.getComputedStyle(canvas);
-				const cssW = parseFloat(style.width);
-				return cssW > 0 ? canvas.width / cssW : 1;
-			});
-			expect(ratio).toBeGreaterThanOrEqual(1);
-			expect(ratio).toBeLessThanOrEqual(3);
+		// All three canvases exist…
+		for (const sel of [LINE, WATERFALL, TICK]) {
+			await expect(page.locator(sel)).toBeAttached({ timeout: 10_000 });
 		}
 
-		// ── Waterfall heatmap renders ─────────────────────────────────
-		// The waterfall canvas has native bins × rows; it is intentionally
-		// stretched by CSS (heatmap scaling is the point).  Verify it has
-		// the expected width attribute.
-		const waterfall = page.locator('canvas[width]');
-		await expect(waterfall.first()).toBeAttached();
-		const widthAttr = await waterfall.first().getAttribute('width');
-		expect(widthAttr).not.toBeNull();
-		expect(Number(widthAttr)).toBeGreaterThan(0);
-	});
+		// …the waterfall keeps a native (bins × rows) bitmap, and the
+		// line canvas matches the h-32 (128px) CSS height so labels
+		// aren't vertically stretched.
+		const waterfallWidth = await page
+			.locator(WATERFALL)
+			.getAttribute('width');
+		expect(Number(waterfallWidth)).toBeGreaterThan(0);
 
-	test('line canvas label text is positioned (no smear test)', async ({ page }) => {
+		const lineCssHeight = await page.locator(LINE).evaluate((el) =>
+			parseFloat(window.getComputedStyle(el as HTMLCanvasElement).height)
+		);
+		expect(lineCssHeight).toBeGreaterThanOrEqual(125);
+		expect(lineCssHeight).toBeLessThanOrEqual(131);
+
+		const tickCssHeight = await page.locator(TICK).evaluate((el) =>
+			parseFloat(window.getComputedStyle(el as HTMLCanvasElement).height)
+		);
+		expect(tickCssHeight).toBeGreaterThanOrEqual(12);
+		expect(tickCssHeight).toBeLessThanOrEqual(16);
+	});
+});
+
+test.describe('Canvas DPR 2 — B9 regression', () => {
+	// Forced at the describe level: test.use() is only valid there.
+	// devicePixelRatio 2 makes the regression observable on any machine —
+	// on a DPR-1 runner a smeared, CSS-stretched bitmap (ratio ≈ 1) is
+	// indistinguishable from a correct one.
+	test.use({ deviceScaleFactor: 2 });
+
+	const LINE = 'canvas[aria-label^="Spectrum line"]';
+	// The tick canvas is the only one without an aria-label.
+	const TICK = 'canvas:not([aria-label])';
+
+	test('text canvases are DPR-scaled, not CSS-stretched', async ({
+		page,
+	}) => {
 		await page.goto('/spectrum');
 
-		// Wait for canvases to mount (even with no data, the canvas
-		// elements exist in the DOM).
-		const canvases = page.locator('canvas');
-		await expect(canvases.first()).toBeAttached({ timeout: 10_000 });
+		const dpr = await page.evaluate(() => window.devicePixelRatio);
+		expect(dpr).toBe(2);
 
-		// Verify the spectrum trace canvas has the expected CSS height
-		// (h-32 = 8rem = 128px) so text labels aren't stretched.
-		const lineCanvas = page.locator('canvas[aria-label*="Spectrum line"]');
-		await expect(lineCanvas.first()).toBeAttached();
+		for (const sel of [LINE, TICK]) {
+			const canvas = page.locator(sel);
+			await expect(canvas).toBeAttached({ timeout: 10_000 });
 
-		// Check the CSS height matches the Svelte `h-32` class (128px).
-		const cssHeight = await lineCanvas.first().evaluate((el) => {
-			const style = window.getComputedStyle(el);
-			return parseFloat(style.height);
-		});
-		// Allow a ±2px tolerance (sub-pixel rendering).
-		expect(cssHeight).toBeGreaterThanOrEqual(125);
-		expect(cssHeight).toBeLessThanOrEqual(131);
+			// Give the render loop a frame to fitCanvas() the bitmap,
+			// then require the bitmap to track the CSS box × DPR.  A
+			// fixed bitmap stretched by CSS would pin the ratio at 1.
+			await expect
+				.poll(
+					() =>
+						canvas.evaluate((el) => {
+							const c = el as HTMLCanvasElement;
+							const cssW = parseFloat(
+								window.getComputedStyle(c).width
+							);
+							return cssW > 0 ? c.width / cssW : -1;
+						}),
+					{ timeout: 5_000 }
+				)
+				.toBeGreaterThanOrEqual(1.9);
 
-		// The tick (frequency labels) canvas must also not be smeared:
-		// its height (h-3.5 = 14px) must match the CSS spec.
-		const tickCanvas = page.locator('canvas.tick');
-		if (await tickCanvas.first().isVisible()) {
-			const tickHeight = await tickCanvas.first().evaluate((el) => {
-				const style = window.getComputedStyle(el);
-				return parseFloat(style.height);
+			const ratio = await canvas.evaluate((el) => {
+				const c = el as HTMLCanvasElement;
+				const cssW = parseFloat(window.getComputedStyle(c).width);
+				return cssW > 0 ? c.width / cssW : -1;
 			});
-			expect(tickHeight).toBeGreaterThanOrEqual(12);
-			expect(tickHeight).toBeLessThanOrEqual(16);
+			expect(ratio, `${sel} bitmap must track devicePixelRatio`)
+				.toBeGreaterThanOrEqual(1.9);
+			expect(ratio).toBeLessThanOrEqual(2.1);
 		}
 	});
 });

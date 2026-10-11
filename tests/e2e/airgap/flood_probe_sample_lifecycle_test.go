@@ -5,6 +5,7 @@ package airgap
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
@@ -15,7 +16,15 @@ import (
 // eviction test: 46 draining readers, 5 stalled samples, 1 rogue. The flood
 // runs until the rogue is evicted; then the marker goes out and each sample
 // is read individually with a full timestamp.
+//
+// Diagnostic probe, not a regression test — it prints timings and stack
+// dumps and blocks for minutes under parallel package load (it blew the
+// 10-minute `go test` package timeout inside `make test`). Run it on
+// demand with SIGINT_FLOOD_PROBE=1.
 func TestProbe3_SampleLifecycle(t *testing.T) {
+	if os.Getenv("SIGINT_FLOOD_PROBE") == "" {
+		t.Skip("diagnostic probe; set SIGINT_FLOOD_PROBE=1 to run")
+	}
 	h := newFloodHarness(t)
 	const fast = 46
 	const samples = 5

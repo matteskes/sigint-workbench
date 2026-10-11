@@ -5,6 +5,7 @@ package airgap
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"runtime"
 	"testing"
 	"time"
@@ -14,7 +15,16 @@ import (
 
 // TestProbe4_MarkerTiming isolates the 50k-flood marker path with 500
 // reader clients.
+//
+// Diagnostic probe, not a regression test — it broadcasts 50k events,
+// dumps all goroutine stacks, and prints per-client marker latency. It
+// cannot fit in the 10-minute `go test` package timeout under parallel
+// package load (it panicked inside `make test`). Run it on demand with
+// SIGINT_FLOOD_PROBE=1.
 func TestProbe4_MarkerTiming(t *testing.T) {
+	if os.Getenv("SIGINT_FLOOD_PROBE") == "" {
+		t.Skip("diagnostic probe; set SIGINT_FLOOD_PROBE=1 to run")
+	}
 	h := newFloodHarness(t)
 	const clients = 500
 	conns := make([]*floodConn, clients)

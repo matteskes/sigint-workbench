@@ -10,8 +10,8 @@ import (
 
 func TestA2_TelemetryDisabled(t *testing.T) {
 	env := map[string]string{
-		"ORT_DISABLE_TELEMETRY":     "1",
-		"ORTE_LOG_LEVEL":            "0",
+		"ORT_DISABLE_TELEMETRY":         "1",
+		"ORTE_LOG_LEVEL":                "0",
 		"ORTE_DISABLE_SESSION_STEERING": "1",
 	}
 

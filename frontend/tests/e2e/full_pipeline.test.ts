@@ -1,308 +1,226 @@
 /**
- * Category 4 — Full Pipeline (from E2E-TEST-SUITE.md §4.4, Test 4.1)
+ * Category 4 — Relay + UI Pipeline (from E2E-TEST-SUITE.md §4.4, Test 4.1)
  *
- * Validates the complete signal chain: simulator IQ → signal-processor
- * classification → API → UI.  Uses CLI tools (smoke-frames) to inject
- * known signals, then asserts the entire relay: WebSocket feed, REST
- * signals endpoint, and dashboard UI rendering.
+ * Validates the relay slice of the signal chain: ws-hub ingest → hub
+ * broadcast → gateway relay → browser store → SignalTable rendering.
+ *
+ * Events are published to the hub's ingest endpoint
+ * (`POST :8081/api/events`), which is broadcast-only (§2.2) — nothing is
+ * persisted, so assertions target live WS delivery and the rendered UI,
+ * never `/api/signals`.  The classifier/DB slice of the pipeline (IQ →
+ * classify → persist) is covered by the Go suites (`make test`, the
+ * TEST_DATABASE_URL integration suite).
  *
  * @module full_pipeline
  */
 
 import { test, expect } from '@playwright/test';
-import { servicesReady, publishSignalEvent } from './gateway_helpers';
+import {
+  freqLabel,
+  installWsCollector,
+  messageContaining,
+  postEvent,
+  servicesReady,
+  signalPayload,
+  waitForWsLog,
+  wsLogs,
+  FRONTEND_WS,
+} from './gateway_helpers';
 
-
-test.describe('Full Pipeline — 4.1 (from E2E-TEST-SUITE.md)', () => {
-  async function waitForServices(page, timeoutMs = 30_000): Promise<boolean> {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      try {
-        const ready = await page.evaluate(servicesReady);
-        if (ready) return true;
-      } catch { /* ignore */ }
-      await page.waitForTimeout(1_000);
-    }
-    return false;
+async function waitForServices(timeoutMs = 30_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await servicesReady()) return true;
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
   }
+  return false;
+}
 
-  test('4.1.1 — CLI signal injection → detection → API → UI', async ({
+test.describe('Relay + UI pipeline — 4.1 (from E2E-TEST-SUITE.md)', () => {
+  let servicesUp = false;
+  test.beforeAll(async () => {
+  	servicesUp = await servicesReady();
+  });
+  test.skip(() => !servicesUp, 'No services running — skipping relay pipeline test');
+
+  test('4.1.1 — event injection → hub broadcast → store → UI row', async ({
     page,
   }) => {
+    test.skip(!(await waitForServices(5_000)), 'services did not become ready');
+
     await page.goto('/');
-    const servicesOk = await waitForServices(page);
-    await expect(servicesOk).toBe(true);
+
+    // Observe the same ingress the app itself uses (same-origin via the
+    // Vite proxy → gateway → hub).
+    const collector = await installWsCollector(page, `${FRONTEND_WS}/ws`);
 
     const signalId = crypto.randomUUID();
     const freqHz = 146_520_000;
-    const ts = new Date().toISOString();
-
-    const result = await page.evaluate(publishSignalEvent, [
-      {
-        type: 'signal.new',
-        payload: {
-          id: signalId,
-          frequencyHz: freqHz,
-          bandwidthHz: 12_000,
-          modulation: 'FM',
-          subType: 'NFM',
-          class: 'land_mobile',
-          confidence: 0.85,
-          powerDbm: -75,
-          sdrId: 'S1',
-          t: ts,
-        },
-      },
-    ]);
-    const [status] = result.split(':');
-    await expect(status).toBe('200');
-
-    await page.waitForTimeout(3_000);
-
-    const apiResp = await page.evaluate(
-      async (id) => {
-        const res = await fetch(`http://localhost:8080/api/signals`);
-        if (!res.ok) return { status: res.status, body: null };
-        const signals: Array<{ id: string; frequencyHz?: number }> =
-          await res.json();
-        return {
-          status: res.status,
-          body: signals.find((s) => s.id === id),
-        };
-      },
-      signalId,
+    const posted = await postEvent(
+      'signal.new',
+      signalPayload({ id: signalId, freqHz })
     );
-    await expect(apiResp.status).toBe(200);
-    await expect(apiResp.body).not.toBeNull();
-    await expect(apiResp.body.frequencyHz).toBe(freqHz);
+    expect(posted.status, `hub ingest must accept: ${posted.body}`).toBe(200);
 
-    // Step 5: Navigate to the dashboard and verify the signal appears
-    // in the table UI.
-    await page.reload();
-    await page.waitForTimeout(4_000);
+    // The relay chain must deliver the event to this browser…
+    const relayed = await waitForWsLog(
+      page,
+      collector,
+      messageContaining(signalId),
+      5_000
+    );
+    expect(relayed, 'signal.new must be broadcast to the browser').not.toBeNull();
 
-    const freqStr = (freqHz / 1e6).toFixed(3) + ' MHz';
-    await expect(page.getByText(freqStr)).toBeVisible({
+    // …and the store must render it as a table row.
+    await expect(page.getByText(freqLabel(freqHz))).toBeVisible({
       timeout: 15_000,
     });
   });
 
-  test('4.1.2 — Multi-class pipeline (CW + WFM tones)', async ({ page }) => {
+  test('4.1.2 — multi-class relay (CW + WFM rows render)', async ({
+    page,
+  }) => {
+    test.skip(!(await waitForServices(5_000)), 'services did not become ready');
+
     await page.goto('/');
-    await waitForServices(page);
+    const collector = await installWsCollector(page, `${FRONTEND_WS}/ws`);
 
     const cwId = crypto.randomUUID();
     const cwFreq = 16_000_000; // 16.000 MHz — CW test frequency
-
     const wfmId = crypto.randomUUID();
-    const wfmFreq = 100_800_000; // 100.8 MHz — WFM broadcast
+    const wfmFreq = 100_800_000; // 100.800 MHz — WFM broadcast
 
-    // Inject CW signal.
-    await page.evaluate(publishSignalEvent, [
-      {
-        type: 'signal.new',
-        payload: {
-          id: cwId,
-          frequencyHz: cwFreq,
-          bandwidthHz: 500,
-          modulation: 'CW',
-          class: 'amateur',
-          confidence: 0.92,
-          powerDbm: -60,
-          sdrId: 'S1',
-          t: new Date().toISOString(),
-        },
-      },
-    ]);
+    const cwPosted = await postEvent(
+      'signal.new',
+      signalPayload({
+        id: cwId,
+        freqHz: cwFreq,
+        bandwidthHz: 500,
+        modulation: 'CW',
+        subType: 'CW',
+        class: 'amateur',
+        confidence: 0.92,
+        powerDbm: -60,
+      })
+    );
+    expect(cwPosted.status).toBe(200);
 
-    // Inject WFM signal.
-    await page.evaluate(publishSignalEvent, [
-      {
-        type: 'signal.new',
-        payload: {
-          id: wfmId,
-          frequencyHz: wfmFreq,
-          bandwidthHz: 250_000,
-          modulation: 'WFM',
-          class: 'broadcast',
-          confidence: 0.88,
-          powerDbm: -55,
-          sdrId: 'S1',
-          t: new Date().toISOString(),
-        },
-      },
-    ]);
+    const wfmPosted = await postEvent(
+      'signal.new',
+      signalPayload({
+        id: wfmId,
+        freqHz: wfmFreq,
+        bandwidthHz: 250_000,
+        modulation: 'WFM',
+        subType: 'NFM',
+        class: 'broadcast',
+        confidence: 0.88,
+        powerDbm: -55,
+      })
+    );
+    expect(wfmPosted.status).toBe(200);
 
-    await page.waitForTimeout(3_000);
+    // Both events must reach this browser…
+    for (const id of [cwId, wfmId]) {
+      const relayed = await waitForWsLog(
+        page,
+        collector,
+        messageContaining(id),
+        5_000
+      );
+      expect(relayed, `broadcast of ${id} must arrive`).not.toBeNull();
+    }
 
-    const signals: Array<{
-      id: string;
-      frequencyHz?: number;
-      class?: string;
-    }> = await page.evaluate(async () => {
-      const res = await fetch(`http://localhost:8080/api/signals`);
-      if (!res.ok) return [];
-      return res.json();
-    });
-
-    const foundCw = signals.find((s) => s.id === cwId);
-    const foundWfm = signals.find((s) => s.id === wfmId);
-
-    await expect(foundCw).not.toBeNull();
-    await expect(foundCw.frequencyHz).toBe(cwFreq);
-    await expect(foundCw.class).toBe('amateur');
-
-    await expect(foundWfm).not.toBeNull();
-    await expect(foundWfm.frequencyHz).toBe(wfmFreq);
-    await expect(foundWfm.class).toBe('broadcast');
-
-    // Verify both appear in the UI table.
-    await page.reload();
-    await page.waitForTimeout(4_000);
-
-    const cwMhz = (cwFreq / 1e6).toFixed(3);
-    const wfmMhz = (wfmFreq / 1e6).toFixed(3);
-
-    await expect(page.getByText(cwMhz + ' MHz')).toBeVisible({
+    // …and both rows must render.
+    await expect(page.getByText(freqLabel(cwFreq))).toBeVisible({
       timeout: 15_000,
     });
-
-    await expect(page.getByText(wfmMhz + ' MHz')).toBeVisible({
+    await expect(page.getByText(freqLabel(wfmFreq))).toBeVisible({
       timeout: 15_000,
     });
   });
 
-  test('4.1.3 — Signal update propagation through pipeline', async ({
+  test('4.1.3 — signal.update replaces the row (no duplicate)', async ({
     page,
   }) => {
+    test.skip(!(await waitForServices(5_000)), 'services did not become ready');
+
     await page.goto('/');
-    await waitForServices(page);
+    const collector = await installWsCollector(page, `${FRONTEND_WS}/ws`);
 
     const signalId = crypto.randomUUID();
-    const baseFreq = 146_000_000;
+    const baseFreq = 146_111_000; // 146.111 MHz — unlikely to collide
+    const updatedFreq = 146_222_000; // 146.222 MHz
 
-    // Initial signal injection.
-    await page.evaluate(publishSignalEvent, [
-      {
-        type: 'signal.new',
-        payload: {
-          id: signalId,
-          frequencyHz: baseFreq,
-          bandwidthHz: 12_000,
-          modulation: 'FM',
-          subType: 'NFM',
-          class: 'land_mobile',
-          confidence: 0.7,
-          powerDbm: -80,
-          sdrId: 'S1',
-          t: new Date().toISOString(),
-        },
-      },
-    ]);
+    const newPosted = await postEvent(
+      'signal.new',
+      signalPayload({ id: signalId, freqHz: baseFreq })
+    );
+    expect(newPosted.status).toBe(200);
 
-    await page.waitForTimeout(3_000);
+    // The row renders with the initial frequency first…
+    await expect(page.getByText(freqLabel(baseFreq))).toBeVisible({
+      timeout: 15_000,
+    });
 
-    // Now send an update to the same signal with updated parameters.
-    const updatedFreq = 146_520_000;
-    const updatedConfidence = 0.9;
+    // …then the update supersedes it in place.
+    const updPosted = await postEvent(
+      'signal.update',
+      signalPayload({ id: signalId, freqHz: updatedFreq })
+    );
+    expect(updPosted.status).toBe(200);
 
-    await page.evaluate(publishSignalEvent, [
-      {
-        type: 'signal.update',
-        payload: {
-          id: signalId,
-          frequencyHz: updatedFreq,
-          bandwidthHz: 12_000,
-          modulation: 'FM',
-          subType: 'NFM',
-          class: 'land_mobile',
-          confidence: updatedConfidence,
-          powerDbm: -75,
-          sdrId: 'S1',
-          t: new Date().toISOString(),
-        },
-      },
-    ]);
+    // The store upserts by id: the new frequency must appear…
+    await expect(page.getByText(freqLabel(updatedFreq))).toBeVisible({
+      timeout: 15_000,
+    });
+    // …and the stale frequency must be gone (no duplicate row).
+    await expect(page.getByText(freqLabel(baseFreq))).toBeHidden({
+      timeout: 15_000,
+    });
 
-    await page.waitForTimeout(3_000);
-
-    // Verify the API returns exactly one entry for this signal,
-    // with the updated frequency (not two entries).
-    const apiResp = await page.evaluate(async (id) => {
-      const res = await fetch(`http://localhost:8080/api/signals`);
-      if (!res.ok) return { count: 0, body: null };
-      const signals: Array<{ id: string; frequencyHz?: number }> =
-        await res.json();
-      const found = signals.filter((s) => s.id === id);
-      return {
-        count: found.length,
-        body: found[0] ?? null,
-      };
-    }, signalId);
-
-    await expect(apiResp.count).toBe(1);
-    await expect(apiResp.body.frequencyHz).toBe(updatedFreq);
+    // Exactly two events for this id must have been relayed: the
+    // signal.new and the signal.update.
+    await expect
+      .poll(async () => {
+        const logs = await wsLogs(page, collector);
+        return logs.filter(
+          messageContaining(signalId)
+        ).length;
+      })
+      .toBe(2);
   });
 
-  test('4.1.4 — Signal removal propagation through pipeline', async ({
-    page,
-  }) => {
+  test('4.1.4 — signal.removed drops the row', async ({ page }) => {
+    test.skip(!(await waitForServices(5_000)), 'services did not become ready');
+
     await page.goto('/');
-    await waitForServices(page);
+    const collector = await installWsCollector(page, `${FRONTEND_WS}/ws`);
 
     const signalId = crypto.randomUUID();
+    const freqHz = 146_333_000; // 146.333 MHz — unlikely to collide
 
-    // Inject a signal.
-    await page.evaluate(publishSignalEvent, [
-      {
-        type: 'signal.new',
-        payload: {
-          id: signalId,
-          frequencyHz: 146_000_000,
-          bandwidthHz: 12_000,
-          modulation: 'FM',
-          subType: 'NFM',
-          class: 'land_mobile',
-          confidence: 0.7,
-          powerDbm: -80,
-          sdrId: 'S1',
-          t: new Date().toISOString(),
-        },
-      },
-    ]);
+    const newPosted = await postEvent(
+      'signal.new',
+      signalPayload({ id: signalId, freqHz })
+    );
+    expect(newPosted.status).toBe(200);
 
-    await page.waitForTimeout(3_000);
+    // The signal appears…
+    await expect(page.getByText(freqLabel(freqHz))).toBeVisible({
+      timeout: 15_000,
+    });
 
-    // Verify signal is present.
-    const beforeRemove = await page.evaluate(async (id) => {
-      const res = await fetch(`http://localhost:8080/api/signals`);
-      if (!res.ok) return [];
-      const signals: Array<{ id: string }> = await res.json();
-      return signals.filter((s) => s.id === id);
-    }, signalId);
-    await expect(beforeRemove.length).toBe(1);
+    // …and `signal.removed` drops it from the active list.
+    const rmPosted = await postEvent('signal.removed', {
+      id: signalId,
+      reason: 'e2e-removal',
+    });
+    expect(rmPosted.status).toBe(200);
 
-    // Now send signal.removed event.
-    await page.evaluate(publishSignalEvent, [
-      {
-        type: 'signal.removed',
-        payload: {
-          id: signalId,
-          sdrId: 'S1',
-          t: new Date().toISOString(),
-        },
-      },
-    ]);
-
-    await page.waitForTimeout(3_000);
-
-    // After removal, the signal should not appear in active signals.
-    const afterRemove = await page.evaluate(async (id) => {
-      const res = await fetch(`http://localhost:8080/api/signals`);
-      if (!res.ok) return [];
-      const signals: Array<{ id: string }> = await res.json();
-      return signals.filter((s) => s.id === id);
-    }, signalId);
-    await expect(afterRemove.length).toBe(0);
+    await expect(page.getByText(freqLabel(freqHz))).toBeHidden({
+      timeout: 15_000,
+    });
   });
 });
+

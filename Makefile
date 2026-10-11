@@ -65,7 +65,7 @@ test: ## Run all Go tests
 frontend-test: ## Run frontend unit tests
 	cd frontend && npm test
 
-e2e: ## Run Playwright E2E tests (requires `make dev` or `npm run dev`)
+e2e: ## Run Playwright E2E tests (starts the dev web server; backend suites skip when `make dev` is down)
 	cd frontend && npx playwright test
 
 e2e-ui: ## Run Playwright E2E tests with UI reporter (requires `npm run dev`)
