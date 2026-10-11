@@ -1,28 +1,40 @@
 package api
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
 
 	"sigint-workbench/internal/db"
 )
 
 // newTFRTestServer wires a gateway whose only live dependency is the
-// given recorder address; the DB handle is non-nil (requireDB passes)
-// but never queried by the proxy.
+// given recorder address; requireDB must pass, so the probe cache is
+// seeded OK (no real database is needed here — the §13 DB-down
+// behavior lives in server_db_test.go).
 func newTFRTestServer(recorderAPI string) *httptest.Server {
+	pool, err := pgxpool.New(context.Background(), deadPoolURL)
+	if err != nil {
+		panic(err) // pgxpool.New is lazy; only URL parsing can fail
+	}
 	srv := &Server{
 		router:      chi.NewRouter(),
 		log:         zerolog.Nop(),
-		db:          &db.DB{},
+		db:          &db.DB{Pool: pool},
 		recorderAPI: recorderAPI,
 	}
+	srv.dbProbeMu.Lock()
+	srv.dbProbeAt = time.Now()
+	srv.dbProbeOK = true
+	srv.dbProbeMu.Unlock()
 	srv.buildRoutes()
 	return httptest.NewServer(srv.Handler())
 }

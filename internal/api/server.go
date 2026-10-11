@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -30,6 +31,15 @@ type Server struct {
 	router chi.Router
 	db     *db.DB
 	log    zerolog.Logger
+
+	// Cached DB liveness probe behind requireDB (§13: DB down ⇒ 503
+	// on every /api route). The probe result is shared across
+	// requests for dbProbeTTL so an outage fails fast instead of
+	// paying a ping timeout per request, and a healthy DB is not
+	// pinged per request.
+	dbProbeMu sync.Mutex
+	dbProbeAt time.Time
+	dbProbeOK bool
 
 	recordingsDir  string
 	wsHubAddr      string          // ws-hub host:port for the /ws relay (§2.2)
@@ -151,10 +161,40 @@ func (s *Server) Start(ctx context.Context, addr string) error {
 	return srv.ListenAndServe()
 }
 
-// requireDB responds 503 when the database is unavailable.
+// dbProbeTTL bounds how long a requireDB probe result (pass or fail)
+// is reused; dbProbeTimeout bounds one liveness ping.
+const (
+	dbProbeTTL     = 2 * time.Second
+	dbProbeTimeout = 2 * time.Second
+)
+
+// requireDB responds 503 when the database is unavailable: nil handle
+// (degraded startup) or a pool whose liveness probe fails. The probe
+// is cached for dbProbeTTL under a mutex — without it, a DB that dies
+// after startup kept answering handler-level query errors as 500s,
+// violating the §13 "DB down ⇒ 503 on every /api/* route" contract.
 func (s *Server) requireDB(w http.ResponseWriter) bool {
-	if s.db == nil {
+	if s.db == nil || s.db.Pool == nil {
 		http.Error(w, "database not available", http.StatusServiceUnavailable)
+		return false
+	}
+	s.dbProbeMu.Lock()
+	defer s.dbProbeMu.Unlock()
+	if time.Since(s.dbProbeAt) < dbProbeTTL {
+		if s.dbProbeOK {
+			return true
+		}
+		http.Error(w, "database unavailable", http.StatusServiceUnavailable)
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), dbProbeTimeout)
+	err := s.db.Pool.Ping(ctx)
+	cancel()
+	s.dbProbeAt = time.Now()
+	s.dbProbeOK = err == nil
+	if err != nil {
+		s.log.Warn().Err(err).Msg("database liveness probe failed")
+		http.Error(w, "database unavailable", http.StatusServiceUnavailable)
 		return false
 	}
 	return true

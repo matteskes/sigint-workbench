@@ -1557,7 +1557,9 @@ General contract:
 - JSON everywhere (`Content-Type: application/json`), camelCase keys
   (§12.7).
 - **DB down ⇒ `503`** on every `/api/*` route (gateway stays up;
-  `/health` still answers).
+  `/health` still answers). The check is a cached short-TTL liveness
+  probe, so a database that dies after startup answers `503` too —
+  not the handlers' query errors as `500`.
 - DB-backed handlers run with a **5 s** request timeout; expiry
   surfaces as `500`.
 - CORS: origins from the `ALLOWED_ORIGINS` env (comma-separated;
