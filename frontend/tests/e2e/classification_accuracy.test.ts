@@ -114,16 +114,12 @@ test.describe('Classification relay (7.1)', () => {
   test.skip(!servicesUp, 'No services running — skipping classification relay test');
   test.skip(pipelineFlooding, 'live RF pipeline floods the hub (~1600 ev/s) - injection tests need a quiet stack');
 
-  test.fixme(
-    '7.1.1 — noise-only frames produce no high-confidence classifications',
-    async () => {
-      // This scenario tests the *classifier*: noise IQ → no confident
-      // class.  Injecting events with a confidence value we chose would
-      // assert on our own input, not on DSP behaviour.  Needs iq-ingest
-      // frame injection (`make dev` + UDP frames); covered by
-      // internal/classify unit tests and `make smoke-onnx`.
-    }
-  );
+  // 7.1.1 is resolved at the Go layer: noise-only frames cannot reach the
+  // classifier at all (peak-detector SNR gate — TestPeakDetectorSnrGate),
+  // and TestNoiseSpectrumNoHighConfidenceClass pins the classify layer
+  // beneath it (internal/classify/rules_test.go). Injecting events with a
+  // confidence value we chose would assert on our own input, not DSP
+  // behaviour (§7.2).
 
   test('7.1.2 — CW event relays and renders with correct parameters', async ({
     page,

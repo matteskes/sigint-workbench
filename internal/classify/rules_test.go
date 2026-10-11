@@ -6,7 +6,12 @@
 // "aviation wideband FM" (docs/UI-BUGCHECK.md B4).
 package classify
 
-import "testing"
+import (
+	"math/rand"
+	"testing"
+
+	"sigint-workbench/internal/dsp"
+)
 
 // A voice-channel-width airband peak classifies AM / aviation at
 // moderate confidence (121.500 MHz is the international air
@@ -64,5 +69,52 @@ func TestRulesNeighboringBandsUnchanged(t *testing.T) {
 	res = rc.Classify(156_800_000, 25_000, nil)
 	if res.Modulation != "FM" || res.SubType != "WFM" || res.Source != "marine" {
 		t.Fatalf("marine: got %+v", res)
+	}
+}
+
+// 7.1.1 (e2e fixme resolution): noise-only frames must produce no
+// high-confidence classification. Immunity is layered: the peak
+// detector's SNR gate (cmd/signal-processor TestPeakDetectorSnrGate)
+// drops pure noise before the classifier ever runs; this test pins the
+// feature/classify layer beneath it — a white-noise spectrum yields a
+// near-floor SNR, and the bandwidth-conditioned rules never promote it
+// to a high-confidence label (the B4 regression: airband noise peaks
+// were confidently labeled WFM at 0.85).
+func TestNoiseSpectrumNoHighConfidenceClass(t *testing.T) {
+	rng := rand.New(rand.NewSource(7)) // deterministic fixture
+	spec := &dsp.FFTResult{
+		SampleRate:  256_000,
+		BinSpacing:  1000,
+		PowerDB:     make([]float64, 256),
+		Frequencies: make([]float64, 256),
+	}
+	for i := range spec.PowerDB {
+		// White noise: bins scattered over a ~6 dB spread around -87.
+		spec.PowerDB[i] = -90 + rng.Float64()*6
+		spec.Frequencies[i] = float64(i) * 1000
+	}
+
+	// Feature layer: noise has no carrier — SNR must sit far below the
+	// detector's MinSNRDB gate (10 dB in TestPeakDetectorSnrGate).
+	f := ExtractFeatures(spec, 121_500_000)
+	if f == nil {
+		t.Fatal("ExtractFeatures returned nil for a non-empty spectrum")
+	}
+	if f.SNRdB >= 6 {
+		t.Fatalf("noise SNR = %.1f dB, want well under the 10 dB gate", f.SNRdB)
+	}
+
+	// Classify layer: even if such a spectrum reached the rules, the
+	// airband AM rule may confirm a voice-channel shape at moderate
+	// confidence only — never the old high-confidence WFM mislabel.
+	rc := NewRuleClassifier()
+	res := rc.Classify(121_500_000, f.BandwidthHz, spec)
+	if res.Confidence > 0.6 {
+		t.Fatalf("noise classified at %v confidence (%s/%s), want ≤ 0.6",
+			res.Confidence, res.Modulation, res.SubType)
+	}
+	if res.Modulation == "Unknown" && res.Confidence != 0.3 {
+		t.Errorf("unknown classification carried confidence %v, want the 0.3 default",
+			res.Confidence)
 	}
 }

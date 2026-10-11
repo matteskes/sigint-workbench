@@ -1097,15 +1097,16 @@ the recorder up, and `gateway_502_handling` alone with the recorder
 stopped — its negative path is unreachable while the recorder answers.
 Deep-link row-click tests inject a signal through the hub when the
 table is empty and the pipeline is quiet (`ensureSignalRow`), so they
-are no longer data-dependent on live RF.  Expected CI skips: the four
-`test.fixme` entries (§7.2) and 5.1.4 (no SDR attached).  6.1.1 runs
+are no longer data-dependent on live RF.  Expected CI skip: 5.1.4 only
+(no SDR attached) — the four former `test.fixme` entries are resolved
+by named Go coverage (§7.2).  6.1.1 runs
 against the checked-in Arizona tile fixture —
 `tiles/data/v3.mbtiles` (git-lfs, z0–9, B3-patched metadata), fetched
 by the e2e job's LFS pull — served through the compose stanza's
 explicit `--mbtiles /data/v3.mbtiles` argument: without it the image
 falls into demo mode and tries to download sample tiles into the
 read-only mount (the historical crash loop).  6.1.2/6.1.3 do not need
-tile data and run regardless.  Roughly 76 of 81 tests execute, versus
+tile data and run regardless.  Roughly 76 of 77 tests execute, versus
 54 on an RF-active bench where the 15 injection tests flood-gate and
 the recorder is deliberately up.
 
@@ -1145,19 +1146,26 @@ itself: 101 ⇒ recorder up, 502 ⇒ down.
   with `gotoSynced()`, collectors resolve only after their own socket
   reports `open`, and `ensureSignalRow()` waits before publishing.
 
-### 7.2 What the suite verifies vs. what it fixmes
+### 7.2 What the suite verifies vs. what the Go suites own
 
-| Suite | Verifies | fixme (needs real pipeline) |
+The four `test.fixme` blocks are gone: each gap now has a named Go
+owner, recorded in the e2e comment at the former fixme site.
+
+| Suite | Verifies | Go-owned gaps (former fixmes) |
 | --- | --- | --- |
 | 4.1 full_pipeline | ingest → broadcast → store → table row (new/update/removed) | — |
-| 4.2 recording | `/api/recordings` contract: 200 array, relative `filePath`, metadata | 4.2.1, 4.2.4 (recorder Go suite) |
-| 5.1 settings | settings round-trip with restore; SDR retune + restore | 5.1.3 TTL (signal-processor Go suite) |
-| 7.1 / 8.1 classification | relayed payload fields intact (`freqHz` schema, §6.5 class enum, modulation) + row rendering | 7.1.1 noise floor (classify Go tests, `make smoke-onnx`) |
+| 4.2 recording | `/api/recordings` contract: 200 array, relative `filePath`, metadata | 4.2.1 → `TestRecorderOpensClosesAndPersists` + `TestSessionRoundTrip`; 4.2.4 → `TestRecorderDiscardsEmptySession` (internal/record) |
+| 5.1 settings | settings round-trip with restore; SDR retune + restore | 5.1.3 TTL → `TestSweepEmitsRemoved` + `TestSDRSilenceDeactivates` (cmd/signal-processor) |
+| 7.1 / 8.1 classification | relayed payload fields intact (`freqHz` schema, §6.5 class enum, modulation) + row rendering | 7.1.1 noise floor → `TestPeakDetectorSnrGate` + `TestNoiseSpectrumNoHighConfidenceClass` (classify), `make smoke-onnx` |
 | 3.1 / 3.2 / 3.3 gateway | clean 1000 close pass-through (B17), 502 JSON body (§13), 3-client fan-out (§14.3) | — |
 
 The suite never asserts classifier output on values the test itself
 injected; classification accuracy belongs to `internal/classify` tests
-and the ONNX smoke fixture.
+and the ONNX smoke fixture.  The iq-ingest frame-injection variants
+(4.2.1/5.1.3 end-to-end through UDP) stay future work for the
+TEST_DATABASE_URL integration suite — CI deliberately runs no UDP
+injector (a simulated capture would re-trigger `pipelineFlooding` and
+disable the 7.1 injection tests).
 
 ### 7.3 Mechanics
 

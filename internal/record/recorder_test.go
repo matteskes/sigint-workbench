@@ -207,6 +207,53 @@ func TestRecorderOpensClosesAndPersists(t *testing.T) {
 	}
 }
 
+// 4.2.4 (e2e fixme resolution): sessions that produce no (usable) audio
+// must leave no file behind — no phantom recordings (§10.2, §10.3 B18).
+// Two deterministic discard paths are pinned here, because the e2e
+// suite cannot observe recorder behaviour over broadcast-only hub
+// ingest:
+//   - a zero-sample frame opens the session and errors on Feed, so it
+//     is discarded before ObserveFrame returns (recorder.go:104);
+//   - a session that already carries audio is discarded wholesale when
+//     a later frame is undecodable — partial files go with it.
+//
+// (The finalize-empty branch in Session.finalize — rows whose file
+// carries no data bytes — sits between demod decimation boundaries and
+// has no robust input trigger; it is exercised indirectly by every
+// discard assertion here via Session.abandon.)
+func TestRecorderDiscardsEmptySession(t *testing.T) {
+	dir := t.TempDir()
+	rec := NewRecorder(Config{Dir: dir, CloseSilence: 50 * time.Millisecond}, nil)
+	tracked := []db.Signal{testSignal()}
+
+	// Zero-sample frame: opened in band, discarded immediately.
+	rec.ObserveFrame(testFrame(146_500_000, 0), tracked)
+	if got := rec.OpenSessions(); got != 0 {
+		t.Fatalf("open sessions after empty frame = %d, want 0 (discarded)", got)
+	}
+	if n := rec.CloseIdle(time.Now().Add(200 * time.Millisecond)); n != 0 {
+		t.Fatalf("finalized = %d, want 0 — there was nothing left to finalize", n)
+	}
+
+	// Audio-carrying session hit by a bad frame: discarded wholesale.
+	rec.ObserveFrame(testFrame(146_500_000, 1024), tracked)
+	if got := rec.OpenSessions(); got != 1 {
+		t.Fatalf("open sessions = %d, want 1 (real frame)", got)
+	}
+	rec.ObserveFrame(testFrame(146_500_000, 0), tracked)
+	if got := rec.OpenSessions(); got != 0 {
+		t.Fatalf("open sessions after bad frame = %d, want 0 (discarded)", got)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read dir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("phantom files after discarding sessions: %v", entries)
+	}
+}
+
 func TestRecorderConcurrentCap(t *testing.T) {
 	dir := t.TempDir()
 	rec := NewRecorder(Config{Dir: dir, MaxConcurrent: 1}, nil)

@@ -268,9 +268,9 @@ jobs:
         working-directory: frontend
         run: npx playwright install --with-deps chromium
 
-      # Phase 1: full suite, recorder up.  Expected skips: the four
-      # test.fixme entries (need iq-ingest frame injection / recorder Go
-      # coverage) and 5.1.4 (no SDR attached).  6.1.1 runs against the
+      # Phase 1: full suite, recorder up.  Expected skip: 5.1.4 only
+      # (no SDR attached) — the former test.fixme entries are resolved
+      # by named Go coverage (E2E-TEST-SUITE §7.2).  6.1.1 runs against the
       # checked-in Arizona tile fixture (tiles/data/v3.mbtiles, LFS —
       # fetched in the LFS assets step above).  See
       # E2E-TEST-SUITE.md §7.

@@ -110,17 +110,14 @@ test.describe('Settings API — 5.1–5.2 (from E2E-TEST-SUITE.md)', () => {
 		}
 	});
 
-	test.fixme(
-		'5.1.3 — signal TTL expiry (processor-side, needs iq-ingest frames)',
-		async () => {
-			// TTL expiry happens in the signal-processor/DB layer.  The
-			// hub's ingest endpoint is broadcast-only (§2.2), so an
-			// injected event never enters TTL management — a UI-level test
-			// here would be theatre.  Covered by the signal-processor Go
-			// tests; the iq-ingest frame-injection variant belongs in the
-			// API integration suite (TEST_DATABASE_URL).
-		}
-	);
+	// 5.1.3 is owned by the signal-processor Go suite: TTL expiry happens
+	// in the processor/DB layer and the hub's ingest endpoint is
+	// broadcast-only (§2.2), so an injected event never enters TTL
+	// management — a UI-level test would be theatre.
+	// TestSweepEmitsRemoved pins signal.removed after TTL expiry and
+	// TestSDRSilenceDeactivates pins the SDR-silence variant
+	// (cmd/signal-processor/main_test.go); the iq-ingest frame-injection
+	// variant belongs in the API integration suite (TEST_DATABASE_URL).
 
 	test('5.1.4 — SDR retune propagates to the capture service', async ({
 		page,

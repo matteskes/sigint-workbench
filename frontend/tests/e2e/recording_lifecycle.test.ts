@@ -47,15 +47,14 @@ const servicesUp = await servicesReady();
 test.describe('Recording REST contract — 4.2 (from E2E-TEST-SUITE.md)', () => {
   test.skip(!servicesUp, 'No services running — skipping recording contract test');
 
-  test.fixme('4.2.1 — recording session creation and file serving', async () => {
-    // Needs the real pipeline: a live signal must reach the recorder to
-    // open a session (signal-processor → recorder, §10.3).  Hub ingest
-    // is broadcast-only, so UI-level injection cannot create one — the
-    // original suite posted events and then waited 10 s for a recording
-    // that could never appear.  Covered by internal/record Go tests;
-    // the iq-ingest frame-injection variant belongs in the API
-    // integration suite (TEST_DATABASE_URL).
-  });
+  // 4.2.1 is owned by the recorder Go suite: a live signal must reach the
+  // recorder to open a session (signal-processor → recorder, §10.3), and
+  // hub ingest is broadcast-only, so UI-level injection cannot create one —
+  // the original suite posted events and then waited 10 s for a recording
+  // that could never appear. TestRecorderOpensClosesAndPersists +
+  // TestSessionRoundTrip cover session creation and file serving
+  // (internal/record/recorder_test.go); the iq-ingest frame-injection
+  // variant belongs in the API integration suite (TEST_DATABASE_URL).
 
   test('4.2.2 — served file paths are relative, never absolute', async () => {
     const { status, body } = await recordings();
@@ -95,9 +94,9 @@ test.describe('Recording REST contract — 4.2 (from E2E-TEST-SUITE.md)', () => 
     }
   });
 
-  test.fixme('4.2.4 — empty recording cleanup (no phantom files)', async () => {
-    // Needs the real pipeline: whether a short-lived signal produces a
-    // recording is recorder behaviour (§10.3, B18), not observable via
-    // broadcast-only ingest.  Covered by the recorder Go suite.
-  });
+  // 4.2.4 (no phantom files) is owned by the recorder Go suite: whether a
+  // short-lived signal produces a recording is recorder behaviour (§10.3,
+  // B18), not observable via broadcast-only ingest.
+  // TestRecorderDiscardsEmptySession pins both discard paths
+  // (internal/record/recorder_test.go).
 });
