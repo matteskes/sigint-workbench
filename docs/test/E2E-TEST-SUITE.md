@@ -537,7 +537,7 @@ make smoke-onnx             # scripts/smoke-test.sh
 make e2e-api                # tests/e2e/api
 go test ./tests/e2e/resilience/... ./tests/e2e/airgap/... -v -count=1
 
-# E2E: frontend Playwright (WebKit).  Starts the Vite dev server
+# E2E: frontend Playwright (Chromium).  Starts the Vite dev server
 # itself; Go services are probed and the gated suites skip when down.
 make e2e                    # frontend/tests/e2e
 
@@ -567,7 +567,7 @@ tests/e2e/                            # Go suites (live stack; skip when down)
 │   └── device_unplug_test.go         # Test R7
 └── airgap/                           # §4.11 — Tests A1-A8
 
-frontend/tests/e2e/                   # Playwright (WebKit; live stack)
+frontend/tests/e2e/                   # Playwright (Chromium; live stack)
 ├── canvas_dpr.test.ts                # Test 2.1
 ├── keyboard_contract.test.ts         # Test 2.2
 ├── deep_link.test.ts                 # Test 2.3
@@ -628,10 +628,10 @@ e2e:
     - name: Run E2E air-gap tests
       run: go test ./tests/e2e/airgap/... -v -count=1
 
-    - name: Run E2E frontend tests (Playwright, WebKit)
+    - name: Run E2E frontend tests (Playwright, Chromium)
       run: |
         cd frontend
-        npx playwright install webkit
+        npx playwright install chromium
         npx playwright test
 ```
 
@@ -695,7 +695,7 @@ Tests map to SPEC sections as follows:
    suite (§4.10.10); the gateway applies no rate limiting today.
 
 Closed from this list: **Playwright MCP integration** — the automated
-WebKit Playwright suite supersedes ad-hoc MCP UI validation (§7,
+Chromium Playwright suite supersedes ad-hoc MCP UI validation (§7,
 tooling note); **R3 baseline** — `assertR3StackBaseline` pre-flight
 (fd limit + socket buffers) now guards both R3 tests (§4.10.5);
 **hub client cap** — `WS_HUB_MAX_CLIENTS` is enforced at the hub's
@@ -1022,19 +1022,35 @@ starving legitimate traffic (H3: availability in a classified environment).
 
 ## 7. UI E2E Suite Implementation Notes
 
-Status of the Playwright suite in `frontend/tests/e2e/` (WebKit,
+Status of the Playwright suite in `frontend/tests/e2e/` (Chromium,
 `npx playwright test`).  The Vite dev server on :5173 is started
 automatically by `playwright.config.ts`; the Go services are probed with
 `servicesReady()` and gated suites skip with a clear reason when the
 stack is down.
 
+**Engine incident (2026-10-10, first GitHub Actions `e2e-ui` run):**
+the project was labeled "webkit" but its `use` block spread
+`devices['Desktop WebKit']` — a name that exists in no Playwright
+device registry (the real entry is "Desktop Safari"). The spread was
+a silent no-op, `browserName` fell back to Playwright's default
+engine Chromium, and bench runs never noticed because the
+chromium-headless-shell binary happened to sit in the local browser
+cache. CI installs exactly what the config declares, so all 60
+browser launches failed there while the pure-`request` tests passed.
+The project is now named "chromium" with an explicit
+`browserName: 'chromium'`. All prior validation passes therefore ran
+Chromium; no global deviceScaleFactor is set, and the B9 canvas-DPR
+coverage forces DPR 2 in `canvas_dpr.test.ts` itself.
+
 **Tooling consistency (follow-up #3, closed):** the ad-hoc browser
 validation sweeps previously done through Playwright MCP (WebKit) —
 the UI-BUGCHECK §2/§15 re-verifications — are superseded by this
-automated suite: it drives the same WebKit engine headlessly via
+automated suite: it drives the Chromium engine headlessly via
 `npx playwright test`, so manual MCP sessions are no longer needed
 for UI validation. The keyboard contract (§15) and deep-link/canvas
-checks that MCP surfaced (B6–B11) are pinned by 2.1–2.4.
+checks that MCP surfaced (B6–B11) are pinned by 2.1–2.4.  (The MCP
+sweeps themselves ran WebKit; the suite that replaced them runs
+Chromium — see the engine incident note above.)
 
 **Live validation (2026-10-10, macOS dev bench, full stack):** the
 gated suites ran against a live stack for the first time. Two gate

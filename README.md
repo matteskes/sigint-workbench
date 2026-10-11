@@ -261,7 +261,7 @@ is at [E2E-TEST-SUITE.md](docs/test/E2E-TEST-SUITE.md, Section 4.2).
 cd frontend && npm run dev
 
 # Run all P1/P2 e2e tests:
-make e2e              # headless (WebKit)
+make e2e              # headless (Chromium)
 make e2e-ui           # interactive UI reporter
 
 # Single test file:

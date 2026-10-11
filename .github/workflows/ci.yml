@@ -238,9 +238,13 @@ jobs:
       - name: Wait for stack health (after resilience restarts)
         run: ./scripts/ci-wait-stack.sh
 
-      - name: Install WebKit for Playwright
+      # Must match the single project in frontend/playwright.config.ts.
+      # That project is Chromium; its old "webkit" name was a phantom
+      # devices['Desktop WebKit'] spread and it silently ran Chromium
+      # all along (2026-10-10 incident, first e2e-ui run).
+      - name: Install Chromium for Playwright
         working-directory: frontend
-        run: npx playwright install --with-deps webkit
+        run: npx playwright install --with-deps chromium
 
       # Phase 1: full suite, recorder up.  Expected skips: the four
       # test.fixme entries (need iq-ingest frame injection / recorder Go

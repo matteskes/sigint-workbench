@@ -1,4 +1,4 @@
-import { defineConfig, devices } from '@playwright/test';
+import { defineConfig } from '@playwright/test';
 
 /**
  * Playwright configuration for SIGINT Workbench e2e frontend tests.
@@ -8,9 +8,18 @@ import { defineConfig, devices } from '@playwright/test';
  * tests that need it gate themselves via `servicesReady()` in
  * `tests/e2e/gateway_helpers.ts` and skip with a clear reason.
  *
- * WebKit is the single project on purpose: it runs at devicePixelRatio 2
- * on macOS dev machines, which is what the canvas DPR regression (B9)
- * needs to stay observable.
+ * Chromium is the single project, pinned with an explicit browserName.
+ *
+ * History: the project used to be named "webkit" and spread
+ * devices['Desktop WebKit'] — a name that exists in no Playwright
+ * device registry (the real entry is "Desktop Safari"), so the spread
+ * was a silent no-op and browserName fell back to Playwright's
+ * default engine, Chromium. The first GitHub Actions run of e2e-ui
+ * (2026-10-10) exposed this: CI installed only webkit, so all 60
+ * browser launches failed on a missing chromium_headless_shell. No
+ * global deviceScaleFactor is set — every prior validation pass ran
+ * at DPR 1, and the canvas DPR regression (B9) forces
+ * deviceScaleFactor: 2 itself in canvas_dpr.test.ts.
  */
 export default defineConfig({
 	testDir: './tests/e2e',
@@ -31,8 +40,8 @@ export default defineConfig({
 	reporter: [['list'], ['html', { open: 'never' }]],
 	projects: [
 		{
-			name: 'webkit',
-			use: { ...devices['Desktop WebKit'], viewport: { width: 1280, height: 800 } },
+			name: 'chromium',
+			use: { browserName: 'chromium', viewport: { width: 1280, height: 800 } },
 		},
 	],
 });
